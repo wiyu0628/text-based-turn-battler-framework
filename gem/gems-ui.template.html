@@ -191,12 +191,12 @@ if (typeof structuredClone !== 'function') window.structuredClone = function (va
 
   // ── 數值輸入 ─────────────────────────────────────────────
   var STAT_FIELDS = [
-    ['hp', '生命', 1, 1], ['sp', 'SP', 1, 0], ['atk', '攻擊', 1, 0], ['def', '防禦', 1, 0],
+    ['hp', '生命', 1, 1], ['sp', 'SP', 1, 0], ['atk', '攻擊', 1, 0], ['int', '智力（法術）', 1, 0], ['def', '防禦', 1, 0],
     ['spd', '速度', 1, 1], ['cri', '暴擊率（0～1）', 0.01, 0], ['skillCastRate', '技能施放率（0～1）', 0.05, 0]
   ];
   var DEFAULTS = {
-    hero: { hp: 3000, sp: 240, atk: 150, def: 50, spd: 100, cri: 0.1, skillCastRate: 0.35, attackSp: 2 },
-    foe: { count: 1, hp: 3000, sp: 200, atk: 90, def: 50, spd: 90, cri: 0.05, attackSp: 2 }
+    hero: { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 100, cri: 0.1, skillCastRate: 0.35, attackSp: 2 },
+    foe: { count: 1, hp: 3000, sp: 200, atk: 90, int: 90, def: 50, spd: 90, cri: 0.05, attackSp: 2 }
   };
 
   function statInputs(containerId, prefix, defaults, skip) {

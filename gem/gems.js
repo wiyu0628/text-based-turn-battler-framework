@@ -21,6 +21,13 @@
  * 衝突的錯誤（GemLinkError）一律同時帶 gemId 與 conflictsWith，UI 請把雙方都標出來，
  * 不要只標 gemId：被指出哪一顆是固定的（依 id 字母順序），但不代表另一顆沒有責任。
  *
+ * ── 物理與法術 ───────────────────────────────────────────────────
+ * 標籤有 'spell' 的主動寶石是法術，其餘是物理（攻擊）。差別直接寫在寶石的動作上，編譯器原樣帶走：
+ *   法術  stat: 'int'（吃智力）、uncritable: true（不可暴擊）、uncounterable: true（不可反擊）；一樣被防禦（def）減傷
+ *   物理  不寫任何額外欄位：吃 atk、可暴擊
+ * 治癒術的回復量讀智力。使用法術的單位一定要有 int（沒有會直接報錯）。沒有魔防：物理與法術都吃防禦。
+ * 新增法術寶石時，記得這三個欄位一起寫。爆擊強化連到法術沒有效果（法術本來就不擲爆擊）。
+ *
  * ── 傷害加成：加算（inc）與乘算（more）是兩個獨立的 op ─────────────
  * 玩家看到的是兩種不同的措辭，資料裡也是兩個不同的 op，不要混用：
  *
@@ -82,7 +89,7 @@
  *                                         value 必須大於 -1（-1 代表消耗歸零）。
  *   { op: 'scope', from, to }             把「原本」targetType 等於 from 的傷害段改成 to。
  *                                         兩顆寶石把同一段改成不同的 to 會衝突。
- *   { op: 'actionFlag', flag, value }     在原本的每個 DAMAGE 段上設定旗標（目前只用 ignoreDefense）。
+ *   { op: 'actionFlag', flag, value }     在原本的每個 DAMAGE 段上設定旗標（目前只用 ignoreDefense，值是 0～1 的比例）。
  *                                         同一個旗標被兩顆寶石設成不同的值會衝突。
  *   { op: 'appendAction', action, text? } 在動作串尾端追加一段框架 action，格式照框架原樣；
  *                                         text 是給玩家看的說明（編譯器不會送進框架）。
@@ -168,6 +175,8 @@ const ACTIVE_GEMS = {
         type: 'DAMAGE',
         targetType: 'ENEMY_SINGLE',
         power: 1.5,
+        stat: 'int',
+        uncritable: true,
         text: { action: '{caster} 詠唱魔法飛彈，' }
       }
     ]
@@ -200,6 +209,7 @@ const ACTIVE_GEMS = {
         type: 'HEAL',
         targetType: 'ALLY_SINGLE',
         power: 1.3,
+        stat: 'int',
         text: { action: '{caster} 施放治癒術，' }
       }
     ]
@@ -259,15 +269,16 @@ const SUPPORT_GEMS = {
     ]
   },
 
-  // 穿甲：無視防禦（框架只有布林，沒有比例）。對高防禦目標的收益遠大於對低防禦目標。
+  // 穿甲：無視一半的防禦（ignoreDefense: 0.5 = 目標的防禦 × 0.5 再進公式）。
+  // 對高防禦目標的收益遠大於對低防禦目標；比例與減傷數值都是佔位，用 gems-balance.js 調整。
   pierce: {
     id: 'pierce',
     name: '穿甲',
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['pierce'],
     effects: [
-      { op: 'actionFlag', flag: 'ignoreDefense', value: true },
-      { op: 'more', value: -0.15 }
+      { op: 'actionFlag', flag: 'ignoreDefense', value: 0.5 },
+      { op: 'more', value: -0.10 }
     ]
   },
 
@@ -372,8 +383,8 @@ const SUPPORT_GEMS = {
 
   // 爆擊強化：使用時先替自己加上爆擊率 +15%，只持續這次施放的行動槽（duration 1 = 行動槽結束就消失），
   // 所以這次施放的每一擊都吃得到，之後的普攻與其他技能不受影響。
-  // 提示文字排在技能那一行之前：「{caster}的爆擊率提升了。」
-  // 蓄力時，加成與提示都發生在釋放的那一槽（本體的第一個動作），不是掛標記的那一槽。
+  // 沒有提示文字（text 留空）：BUFF 動作仍會產生一行訊息為空字串的戰報（BUFF_APPLY），顯示端要過濾空訊息。
+  // 蓄力時，加成發生在釋放的那一槽（本體的第一個動作），不是掛標記的那一槽。
   critup: {
     id: 'critup',
     name: '爆擊強化',
@@ -386,7 +397,7 @@ const SUPPORT_GEMS = {
         action: {
           type: 'BUFF',
           targetType: 'SELF',
-          text: { action: '{caster}的爆擊率提升了。', buff: '' },
+          text: { action: '', buff: '' },
           buffs: [
             {
               id: 'critup',

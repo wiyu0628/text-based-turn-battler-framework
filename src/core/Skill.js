@@ -186,7 +186,7 @@ function finishCastReport(report) {
 
 class Skill {
   constructor({ id, name, actions = [], tier = 'standard', counterStyle = 'summary',
-    uncounterable = false, counterChanceMultiplier = 1, tags }) {
+    uncounterable = false, counterChanceMultiplier = 1, uncritable = false, tags }) {
     // 打錯字若安靜地退回 summary，就只會看到「反擊怎麼沒照我寫的演出」，
     // 而那跟「這場剛好沒反擊」在戰報上長得一樣。
     if (!['summary', 'detailed'].includes(counterStyle)) {
@@ -194,6 +194,9 @@ class Skill {
     }
     if (typeof uncounterable !== 'boolean') {
       throw new Error(`Skill "${id}" uncounterable must be a boolean.`);
+    }
+    if (typeof uncritable !== 'boolean') {
+      throw new Error(`Skill "${id}" uncritable must be a boolean.`);
     }
     if (!Number.isFinite(counterChanceMultiplier) ||
         counterChanceMultiplier < 0 || counterChanceMultiplier > 1) {
@@ -213,9 +216,10 @@ class Skill {
       if (action.damageMultiplier !== undefined && (action.type !== 'DAMAGE' || !Number.isFinite(action.damageMultiplier) || action.damageMultiplier < 0)) {
         throw new Error('damageMultiplier requires a DAMAGE action and a finite nonnegative value');
       }
-      if (action.ignoreDefense !== undefined &&
-          (action.type !== 'DAMAGE' || typeof action.ignoreDefense !== 'boolean')) {
-        throw new Error('ignoreDefense requires a DAMAGE action and a boolean');
+      // ignoreDefense 可以是布林，或 0～1 的比例（1.0.57，防禦 × (1 - 比例)）。
+      if (action.ignoreDefense !== undefined && (action.type !== 'DAMAGE' || !(typeof action.ignoreDefense === 'boolean' ||
+          (typeof action.ignoreDefense === 'number' && Number.isFinite(action.ignoreDefense) && action.ignoreDefense >= 0 && action.ignoreDefense <= 1)))) {
+        throw new Error('ignoreDefense requires a DAMAGE action and a boolean or a number in [0, 1]');
       }
       if (action.partDamageMultiplier !== undefined &&
           (action.type !== 'DAMAGE' || !Number.isFinite(action.partDamageMultiplier) || action.partDamageMultiplier < 0)) {
@@ -224,6 +228,10 @@ class Skill {
       if (action.uncounterable !== undefined &&
           (action.type !== 'DAMAGE' || typeof action.uncounterable !== 'boolean')) {
         throw new Error('uncounterable requires a DAMAGE action and a boolean');
+      }
+      if (action.uncritable !== undefined &&
+          (action.type !== 'DAMAGE' || typeof action.uncritable !== 'boolean')) {
+        throw new Error('uncritable requires a DAMAGE action and a boolean');
       }
       // 段落標籤只給傷害段：BUFF 段的標籤寫在各筆 buff 設定上，由 DOT 自己帶著走。
       if (action.hitOrder !== undefined && (action.type !== 'DAMAGE' || !['target', 'wave'].includes(action.hitOrder) ||
@@ -244,6 +252,8 @@ class Skill {
     this.uncounterable = uncounterable;
     // 每一擊的被反擊機率倍率；1 維持原率，0 仍保留判定語意但不會成功。
     this.counterChanceMultiplier = counterChanceMultiplier;
+    // 整招不會爆擊（例如法術），見 docs/MECHANICS.md。單一傷害段也可以各自寫 uncritable。
+    this.uncritable = uncritable;
     // 自由標籤，框架不解讀，見 docs/TAGS.md。
     this.tags = normalizeTags(tags, `Skill "${id}"`);
     this.actions = actions; // 多段動作陣列
@@ -506,11 +516,13 @@ class Skill {
           return true;
         }
 
-        const isCrit = Formulas.isCritical(caster);
+        // uncritable 在擲骰之前就排除（與 uncounterable 同一套做法）：不是把爆擊率壓低，
+        // 所以 Buff 把 cri 加到 100% 也蓋不掉；沒用到的技能照常擲骰，亂數序列不變。
+        const isCrit = (this.uncritable || action.uncritable === true) ? false : Formulas.isCritical(caster);
         // 傷害預設依賴 atk；action.stat 可讓法術等技能改用 int 或其他能力。
         // Formulas 會在欄位不存在時直接拋錯，避免拼錯後悄悄打成最低傷害。
         let damage = Formulas.calculateDamage(caster, target, action.power || 1, action.stat || 'atk',
-          { ignoreDefense: action.ignoreDefense === true });
+          { ignoreDefense: action.ignoreDefense ?? false });
         
         // 如果是普攻或指定連擊，後續打擊傷害遞減 (預設改為 40% 懲罰，避免敏捷過強)
         if ((isNormalAttack || action.combo) && i > 0) {

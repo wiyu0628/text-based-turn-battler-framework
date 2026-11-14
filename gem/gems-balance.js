@@ -39,7 +39,7 @@ const { compileLoadout, GemLinkError } = require('./gemCompiler');
 // ── 假設（可以直接改）────────────────────────────────────────
 
 const CONFIG = {
-  hero: { hp: 6000, sp: 240, atk: 150, def: 50, spd: 100, cri: 0.1, skillCastRate: 1 },
+  hero: { hp: 6000, sp: 240, atk: 150, int: 150, def: 50, spd: 100, cri: 0.1, skillCastRate: 1 },
   foe: { hp: 1e7, sp: 200, atk: 90, def: 50, spd: 100, cri: 0 },   // 血量極大：量的是輸出，不是擊殺時間
   attackSpCost: 2,   // 雙方普攻每擊扣的 SP（框架預設是 1；初始 SP 也已經是舊預設的 2 倍）
   scenarios: [

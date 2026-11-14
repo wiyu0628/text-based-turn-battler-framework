@@ -34,7 +34,7 @@ const claw = new Skill({ id: 'claw', name: '利爪', actions: [{ type: 'DAMAGE' 
 
 const hero = new Entity({
   id: 'hero', name: '勇者', team: 'A',
-  stats: { hp: 2000, sp: 120, atk: 150, def: 50, spd: 120, cri: 0.2 },
+  stats: { hp: 2000, sp: 120, atk: 150, int: 150, def: 50, spd: 120, cri: 0.2 }, // int：法術吃智力
   normalAttackSpCost: 2, // 普攻每擊扣 2 SP（框架預設是 1）
   normalAttack: slash,
   skills: loadout.skills, // 寶石編譯出的技能；每個行動槽預設 35% 機率從這裡抽一招（stats.skillCastRate）
@@ -42,7 +42,7 @@ const hero = new Entity({
 });
 const boss = new Entity({
   id: 'boss', name: '魔王', team: 'B',
-  stats: { hp: 2100, sp: 120, atk: 130, def: 80, spd: 90, cri: 0.1 },
+  stats: { hp: 2100, sp: 120, atk: 130, int: 130, def: 80, spd: 90, cri: 0.1 },
   normalAttackSpCost: 2,
   normalAttack: claw,
   dialogues: { opening: '區區人類。', death: '不可能……' }

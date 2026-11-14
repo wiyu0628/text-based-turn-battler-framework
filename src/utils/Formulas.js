@@ -163,13 +163,20 @@ class Formulas {
   }
 
   // 傷害公式 (使用漸進式減傷)
+  // ignoreDefense（1.0.58）：true 無視全部防禦，0～1 的數字是無視那一比例——防禦先乘上 (1 - 比例) 再進公式。
+  //   0.4 就是「用 60% 的防禦計算」，仍走原本漸進式的減傷曲線，所以高防禦目標不會被補償過頭。
   static calculateDamage(attacker, defender, skillPower = 1, statKey = 'atk', { ignoreDefense = false } = {}) {
     const scale = statsOf(attacker)[statKey];
     if (typeof scale !== 'number') {
       throw new Error(`Damage formula references unknown attacker stat "${statKey}".`);
     }
     // 確保防禦不小於 0 (如果未來有破甲負防禦機制，可以修改這裡)
-    const def = ignoreDefense ? 0 : Math.max(0, statsOf(defender).def || 0);
+    const pierce = ignoreDefense === true ? 1 : (ignoreDefense === false ? 0 : ignoreDefense);
+    if (!Number.isFinite(pierce) || pierce < 0 || pierce > 1) {
+      throw new Error('ignoreDefense must be a boolean or a number in [0, 1].');
+    }
+    // 沒用到時 pierce 是 0，乘 1 不改變數值，傷害與亂數序列都和以前一樣。
+    const def = Math.max(0, statsOf(defender).def || 0) * (1 - pierce);
     
     // 防禦常數 (當 def 等於這個常數時，減傷 50%)
     const EHP_C = 300; 

@@ -39,6 +39,12 @@ body parts and `BEFORE_DAMAGE` mitigation still run normally. The default is
 false. Direct formula callers can pass `{ ignoreDefense: true }` as the fifth
 argument to `Formulas.calculateDamage`.
 
+Since 1.0.58 `ignoreDefense` may also be a share in [0, 1]: the defense is
+multiplied by `1 - share` before it enters the formula, so `0.4` computes the
+hit as if the defender had 60% of its defense and still follows the diminishing
+`300 / (def + 300)` curve (it is not "40% of the damage ignores defense").
+`true` equals 1 and `false` equals 0.
+
 A passive may declare `{ id: 'pressure', enemySkillCastMultiplier: 0.75 }`.
 `BattleEngine.getSkillCastChance(actor)` multiplies the effective `skillCastRate` by
 living enemies' modifiers. Multipliers must be finite numbers in [0, 1] and

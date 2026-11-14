@@ -23,7 +23,7 @@ function battle(entries, seed, { sp = 99999, castRate = 1, maxTurns = 30, resolv
   const hero = new Entity({
     id: 'hero', name: '勇者', team: 'A', normalAttack: plain('slash'),
     skills: [...loadout.skills, ...extraSkills], passives: loadout.passives,
-    stats: { hp: heroHp, sp, atk: 150, def: 50, spd: 120, cri: 0, skillCastRate: castRate }
+    stats: { hp: heroHp, sp, atk: 150, int: 150, def: 50, spd: 120, cri: 0, skillCastRate: castRate }
   });
   const foe = new Entity({ id: 'boss', name: '魔王', team: 'B', normalAttack: plain('claw'), stats: { hp: 999999, sp: 0, atk: 1, def: 0, spd: 1 } });
   const engine = new BattleEngine([hero], [foe], {
@@ -138,7 +138,7 @@ function withSeed(seed, run) {
 function fakeCaster(skills, { opening = null, silenced = () => false } = {}) {
   const caster = new Entity({
     id: 'c', name: '勇者', team: 'A', normalAttack: plain('slash'), skills,
-    stats: { hp: 1000, sp: 99999, atk: 100, def: 0, spd: 100 }
+    stats: { hp: 1000, sp: 99999, atk: 100, int: 150, def: 0, spd: 100 }
   });
   caster.openingSkill = opening;
   caster.silencedBy = skill => (silenced(skill) ? { id: 'silence' } : null);

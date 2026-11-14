@@ -12,7 +12,7 @@ const logger = () => ({ logs: [], addLog(entry) { this.logs.push(entry); } });
 
 const makeHero = (skills, passives = [], stats = {}) => new Entity({
   id: 'hero', name: '勇者', team: 'A', normalAttack: plain, skills, passives,
-  stats: { hp: 3000, maxHp: 4000, sp: 200, atk: 150, def: 50, spd: 120, cri: 0, skillCastRate: 1, ...stats }
+  stats: { hp: 3000, maxHp: 4000, sp: 200, atk: 150, int: 150, def: 50, spd: 120, cri: 0, skillCastRate: 1, ...stats }
 });
 const makeFoe = (id, stats = {}) => new Entity({
   id, name: id, team: 'B', normalAttack: plain,
@@ -352,13 +352,13 @@ test('順序無關：scope 衝突（把同一段改成不同對象）不論順�
 
 test('順序無關：同一個旗標被設成不同值才衝突；設成相同值不衝突', () => {
   const flag = (id, value) => mkGem(id, [{ op: 'actionFlag', flag: 'ignoreDefense', value }]);
-  const gems = { ...SUPPORT_GEMS, pierceOn: flag('pierceOn', true), pierceOff: flag('pierceOff', false) };
+  const gems = { ...SUPPORT_GEMS, pierceOn: flag('pierceOn', 0.5), pierceOff: flag('pierceOff', false) };
   const options = { supportGems: gems };
   assert.equal(new Set(permutationsOf(['pierceOn', 'pierceOff']).map(l => signature('magicmissile', l, options))).size, 1);
   assert.throws(() => compileSkill('magicmissile', ['pierceOff', 'pierceOn'], options), error =>
     new Set([error.gemId, error.conflictsWith]).size === 2 && /ignoreDefense/.test(error.reason));
   for (const links of permutationsOf(['pierceOn', 'pierce'])) {
-    assert.equal(compileSkill('magicmissile', links, options).skill.actions[0].ignoreDefense, true);
+    assert.equal(compileSkill('magicmissile', links, options).skill.actions[0].ignoreDefense, 0.5);
   }
 });
 
@@ -377,10 +377,10 @@ test('追加的傷害段：吃到加算與乘算的數值加成，但不受 scop
   const gems = { ...SUPPORT_GEMS, extra };
   for (const links of permutationsOf(['extra', 'heavy', 'pierce'])) {
     const { skill } = compileWith(links, gems);
-    assert.equal(skill.actions[0].ignoreDefense, true);        // 原本的傷害段吃到穿甲
+    assert.equal(skill.actions[0].ignoreDefense, 0.5);         // 原本的傷害段吃到穿甲
     assert.equal(skill.actions[1].ignoreDefense, undefined);   // 追加的不吃旗標
-    assert.equal(skill.actions[0].power, 1.6575);              // 原本的傷害段：1.5 × 強力 1.3 × 穿甲 0.85
-    assert.equal(skill.actions[1].power, 0.5525);              // 追加的：0.5 × 1.3 × 0.85
+    assert.equal(skill.actions[0].power, 1.755);               // 原本的傷害段：1.5 × 強力 1.3 × 穿甲 0.9
+    assert.equal(skill.actions[1].power, 0.585);               // 追加的：0.5 × 1.3 × 0.9
   }
   assert.equal(compileWith(['extra', 'wide'], gems).skill.actions[1].targetType, 'ENEMY_SINGLE'); // 擴散改不到它
 });
@@ -419,7 +419,7 @@ test('說明：每一顆正式寶石都能產生說明，且文字由數值自�
     assert.ok(lines.every(line => line.text && !line.text.includes('undefined')), gem.id);
   }
   assert.ok(describeSupport(SUPPORT_GEMS.wide).lines.some(line => line.text === '攻擊對象由單一敵人改為全體敵人'));
-  assert.ok(describeSupport(SUPPORT_GEMS.pierce).lines.some(line => line.text === '無視目標防禦'));
+  assert.ok(describeSupport(SUPPORT_GEMS.pierce).lines.some(line => line.text === '無視目標 50% 的防禦'));
   assert.ok(describeSupport(SUPPORT_GEMS.leech).lines.some(line => line.text === '造成實際傷害的 20% 回復自身生命'));
 });
 
@@ -449,8 +449,8 @@ test('穿甲：對高防禦目標的傷害明顯高於一般施放', () => {
   };
   const normal = average([]);
   const pierce = average(['pierce']);
-  // def 300 時減傷 50%：穿甲的 ×0.85 仍然約是一般的 1.7 倍。
-  assert.ok(pierce > normal * 1.5, `pierce=${pierce} normal=${normal}`);
+  // 防禦 300 時減傷 50%；穿甲把防禦砍半 → 乘數 0.667，再乘寶石的 0.9，約是一般的 1.2 倍。
+  assert.ok(pierce > normal * 1.15 && pierce < normal * 1.25, `pierce=${pierce} normal=${normal}`);
 });
 
 test('感電：打中的目標掛上易傷，之後承受的攻擊傷害變成 1.15 倍', () => {
@@ -508,7 +508,7 @@ const fight = (skill, passives, seed, foeCount = 1) => {
   const hero = makeHero([skill], passives, { hp: 2000, maxHp: 2000 });
   const foes = Array.from({ length: foeCount }, (_, i) => new Entity({
     id: `foe${i}`, name: `魔物${i}`, team: 'B', normalAttack: plain,
-    stats: { hp: 1500, sp: 60, atk: 130, def: 80, spd: 90, cri: 0.1 }
+    stats: { hp: 1500, sp: 60, atk: 130, int: 150, def: 80, spd: 90, cri: 0.1 }
   }));
   return new BattleEngine([hero], foes, { rng: createSeededRandom(seed) }).start();
 };
@@ -577,7 +577,7 @@ test('整場戰鬥：汲取被動掛在 Entity 上，真的會在戰鬥中回血
     const loadout = compileLoadout([{ active: 'whirlwind', supports: ['leech'] }]);
     const hero = new Entity({
       id: 'hero', name: '勇者', team: 'A',
-      stats: { hp: 3000, sp: 200, atk: 200, def: 50, spd: 120, cri: 0.1, skillCastRate: 1 },
+      stats: { hp: 3000, sp: 200, atk: 200, int: 150, def: 50, spd: 120, cri: 0.1, skillCastRate: 1 },
       normalAttack: plain, skills: loadout.skills, passives: loadout.passives
     });
     const foe = new Entity({
@@ -724,7 +724,7 @@ test('佈局：整場戰鬥第一個行動槽必定是這個技能', () => {
     ]);
     const hero = new Entity({
       id: 'hero', name: '勇者', team: 'A', normalAttack: plain, skills: loadout.skills, passives: loadout.passives,
-      stats: { hp: 3000, sp: 100, atk: 150, def: 50, spd: 120, cri: 0, skillCastRate: 0 } // 平常完全不放技能
+      stats: { hp: 3000, sp: 100, atk: 150, int: 150, def: 50, spd: 120, cri: 0, skillCastRate: 0 } // 平常完全不放技能
     });
     const foe = makeFoe('dummy', { hp: 50000, spd: 1 });
     const engine = new BattleEngine([hero], [foe], { rng: createSeededRandom(seed) });
@@ -790,7 +790,7 @@ test('撒手鐧：整場戰鬥中，HP 降到一半以下後馬上多出一個�
   const loadout = compileLoadout([{ active: 'whirlwind', supports: ['trump'] }]);
   const hero = new Entity({
     id: 'hero', name: '勇者', team: 'A', normalAttack: plain, skills: loadout.skills, passives: loadout.passives,
-    stats: { hp: 1000, sp: 200, atk: 300, def: 50, spd: 60, cri: 0, skillCastRate: 0 }
+    stats: { hp: 1000, sp: 200, atk: 300, int: 150, def: 50, spd: 60, cri: 0, skillCastRate: 0 }
   });
   const foe = new Entity({
     id: 'foe', name: '魔物', team: 'B', normalAttack: plain,
@@ -819,7 +819,7 @@ test('佈局與撒手鐧可以同時存在：各自合併成一個被動', () =>
 const chargeBattle = (loadout, { seed = 1, maxTurns = 20, heroStats = {}, foeStats = {}, heroBuffs = [], options = {} } = {}) => {
   const hero = new Entity({
     id: 'hero', name: '勇者', team: 'A', normalAttack: plain, skills: loadout.skills, passives: loadout.passives, buffs: heroBuffs,
-    stats: { hp: 900000, sp: 400, atk: 200, def: 50, spd: 60 + seed % 120, cri: 0, skillCastRate: 0.6, ...heroStats }
+    stats: { hp: 900000, sp: 400, atk: 200, int: 150, def: 50, spd: 60 + seed % 120, cri: 0, skillCastRate: 0.6, ...heroStats }
   });
   const foe = new Entity({
     id: 'foe', name: '木樁', team: 'B', normalAttack: plain,
@@ -1054,7 +1054,7 @@ test('施放條件：整場戰鬥，技能只在條件成立時被抽到，其�
     const record = { trigger: 'AFTER_ACTION', action(self, a) { if (a.actor === self && a.skill.id.startsWith('magicmissile')) heroHpAtCast.push(self.stats.hp / self.stats.maxHp); } };
     const hero = new Entity({
       id: 'hero', name: '勇者', team: 'A', normalAttack: plain, skills: loadout.skills, passives: [...loadout.passives, record],
-      stats: { hp: 6000, sp: 1000, atk: 150, def: 50, spd: 100, cri: 0, skillCastRate: 1 }
+      stats: { hp: 6000, sp: 1000, atk: 150, int: 150, def: 50, spd: 100, cri: 0, skillCastRate: 1 }
     });
     const foes = Array.from({ length: foeCount }, (_, i) => new Entity({
       id: `foe${i}`, name: `魔物${i}`, team: 'B', normalAttack: plain, stats: { hp: 20000, sp: 100, atk: 330, def: 50, spd: 80, cri: 0 }
@@ -1224,7 +1224,7 @@ test('機率附加：整場戰鬥中被動確實掛在 Entity 上並產生戰報
   const loadout = compileLoadout([{ active: 'multi', supports: ['sureHit'] }], { activeGems: multiActive, supportGems: procGems });
   const hero = new Entity({
     id: 'hero', name: '勇者', team: 'A', normalAttack: plain, skills: loadout.skills, passives: loadout.passives,
-    stats: { hp: 9000, sp: 100, atk: 150, def: 50, spd: 100, cri: 0, skillCastRate: 1 }
+    stats: { hp: 9000, sp: 100, atk: 150, int: 150, def: 50, spd: 100, cri: 0, skillCastRate: 1 }
   });
   const foe = makeFoe('foe', { hp: 9e8, spd: 50 });
   const engine = new BattleEngine([hero], [foe], { rng: createSeededRandom(4), maxTurns: 6 });
@@ -1239,7 +1239,7 @@ const openingBattle = (active, supports, { foes = 1, seed = 3, maxTurns = 3, her
   const loadout = compileLoadout([{ active, supports }]);
   const hero = new Entity({
     id: 'hero', name: '勇者', team: 'A', normalAttack: plain, skills: loadout.skills, passives: loadout.passives,
-    stats: { hp: 99999, sp: 400, atk: 150, def: 50, spd: 200, cri: 0, skillCastRate: 0, ...heroStats }   // 平常完全不放技能，只有佈局那一次
+    stats: { hp: 99999, sp: 400, atk: 150, int: 150, def: 50, spd: 200, cri: 0, skillCastRate: 0, ...heroStats }   // 平常完全不放技能，只有佈局那一次
   });
   const enemies = Array.from({ length: foes }, (_, i) => makeFoe(`foe${i}`, { hp: 1e9, spd: 1 }));
   const engine = new BattleEngine([hero], enemies, { rng: createSeededRandom(seed), maxTurns, skillSelectionResolver: loadout.resolver });
@@ -1288,7 +1288,7 @@ test('撒手鐧：額外行動前印出「拚死一搏，獲得額外的行動�
   const loadout = compileLoadout([{ active: 'whirlwind', supports: ['trump'] }]);
   const hero = new Entity({
     id: 'hero', name: '勇者', team: 'A', normalAttack: plain, skills: loadout.skills, passives: loadout.passives,
-    stats: { hp: 1000, sp: 200, atk: 300, def: 50, spd: 60, cri: 0, skillCastRate: 0 }
+    stats: { hp: 1000, sp: 200, atk: 300, int: 150, def: 50, spd: 60, cri: 0, skillCastRate: 0 }
   });
   const foe = new Entity({ id: 'foe', name: '魔物', team: 'B', normalAttack: plain, stats: { hp: 1e8, sp: 100, atk: 130, def: 50, spd: 200, cri: 0 } });
   const engine = new BattleEngine([hero], [foe], { rng: createSeededRandom(5), maxTurns: 12 });

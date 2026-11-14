@@ -239,6 +239,9 @@ function describeEffect(effect) {
     case 'scope':
       return { kind: 'scope', text: `攻擊對象由${TARGET_NAMES[effect.from] ?? effect.from}改為${TARGET_NAMES[effect.to] ?? effect.to}` };
     case 'actionFlag':
+      if (effect.flag === 'ignoreDefense' && typeof effect.value === 'number') {
+        return { kind: 'flag', text: `無視目標 ${Math.round(effect.value * 100)}% 的防禦` };
+      }
       return { kind: 'flag', text: effect.value === true ? (FLAG_TEXT[effect.flag] ?? `啟用 ${effect.flag}`) : `${effect.flag} = ${effect.value}` };
     case 'appendAction':
       return { kind: 'effect', text: effect.text ?? '追加一段效果' };

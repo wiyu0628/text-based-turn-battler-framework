@@ -95,7 +95,7 @@ new Entity({ id, name, team, stats, normalAttack, skills, passives, ... })
 ## Skill
 
 ```js
-new Skill({ id, name, actions: [...], tier, tags, uncounterable, counterChanceMultiplier, counterStyle })
+new Skill({ id, name, actions: [...], tier, tags, uncounterable, counterChanceMultiplier, counterStyle, uncritable })
 ```
 
 | 參數 | 預設 | 說明 |
@@ -107,6 +107,7 @@ new Skill({ id, name, actions: [...], tier, tags, uncounterable, counterChanceMu
 | `uncounterable` | `false` | 整招不會被反擊 |
 | `counterChanceMultiplier` | `1` | 每一擊被反擊的機率倍率（0～1） |
 | `counterStyle` | `'summary'` | 當作 `counterSkill` 時的戰報呈現：`'summary'` 或 `'detailed'` |
+| `uncritable` | `false` | 整招不會爆擊（1.0.57）：不擲爆擊骰，爆擊率再高也沒用 |
 
 ### 施放結果（`execute` 的回傳值，1.0.47）
 
@@ -146,7 +147,7 @@ for (const unit of report.landed) unit.addBuff(stun, engine); // 只掛在真的
 
 | `type` | 專屬欄位 | 日誌 |
 | --- | --- | --- |
-| `DAMAGE` | `power`（1）、`stat`（`'atk'`）、`hits`（1）、`combo`（依速度差決定段數）、`damageDecay`（連擊遞減 0.4）、`accuracy`（1）、`hitOrder`（`'target'` / `'wave'`，見 README）、`damageMultiplier`、`ignoreDefense`、`ignoreInvincible`、`ignoreShield`、`uncounterable`、`partDamageMultiplier`、`tags` | `DAMAGE` / `BLOCK` / `MISS` / `COUNTER` |
+| `DAMAGE` | `power`（1）、`stat`（`'atk'`）、`hits`（1）、`combo`（依速度差決定段數）、`damageDecay`（連擊遞減 0.4）、`accuracy`（1）、`hitOrder`（`'target'` / `'wave'`，見 README）、`damageMultiplier`、`ignoreDefense`（布林或 0～1 的比例，1.0.58）、`ignoreInvincible`、`ignoreShield`、`uncounterable`、`uncritable`、`partDamageMultiplier`、`tags` | `DAMAGE` / `BLOCK` / `MISS` / `COUNTER` |
 | `HEAL` | `power`（1）、`stat`（`'atk'`，或權重表 `{ atk: 0.5, int: 1 }`）。讀施放者的原始能力值 | `HEAL` |
 | `BUFF` | `buffs: [Buff 設定, ...]`（**陣列**） | `BUFF_APPLY` |
 | `RESTORE_SP` | `amount` | `SP_RECOVER` |

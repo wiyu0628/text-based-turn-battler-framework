@@ -289,7 +289,7 @@ function fight(supports, seed, { active = 'magicmissile', heroStats = {}, foe = 
   const loadout = compileLoadout([{ active, supports }]);
   const hero = new Entity({
     id: 'hero', name: '勇者', team: 'A', normalAttack: plainSkill('slash'), skills: loadout.skills, passives: loadout.passives,
-    stats: { hp: 9000, sp: 900, atk: 150, def: 50, spd: 120, cri: 0, skillCastRate: 1, ...heroStats }
+    stats: { hp: 9000, sp: 900, atk: 150, int: 150, def: 50, spd: 120, cri: 0, skillCastRate: 1, ...heroStats }
   });
   const boss = new Entity({
     id: 'boss', name: '魔王', team: 'B', normalAttack: plainSkill('claw'),
@@ -322,12 +322,13 @@ test('戰報：每次施放各出現一次加成行，不會多出', () => {
   assert.equal(notices, casts);
 });
 
+// 以下量的是爆擊，所以都用旋風斬：魔法飛彈是法術，不會爆擊（見下方「法術不會爆擊」）。
 test('效果：基礎暴擊率 0 的角色，施放時每擊暴擊率約 15%；沒連結時完全不暴擊', () => {
   const withGem = [];
   const without = [];
   for (let seed = 1; seed <= 150; seed++) {
-    withGem.push(...heroHits(fight(['critup'], seed).logs));
-    without.push(...heroHits(fight([], seed).logs));
+    withGem.push(...heroHits(fight(['critup'], seed, { active: 'whirlwind' }).logs));
+    without.push(...heroHits(fight([], seed, { active: 'whirlwind' }).logs));
   }
   assert.ok(withGem.length > 1500, `樣本太少：${withGem.length}`);
   const rate = critRate(withGem);
@@ -337,7 +338,7 @@ test('效果：基礎暴擊率 0 的角色，施放時每擊暴擊率約 15%；�
 
 test('效果：加成疊在原本的暴擊率上（基礎 20% → 施放時約 35%）', () => {
   const hits = [];
-  for (let seed = 1; seed <= 150; seed++) hits.push(...heroHits(fight(['critup'], seed, { heroStats: { cri: 0.2 } }).logs));
+  for (let seed = 1; seed <= 150; seed++) hits.push(...heroHits(fight(['critup'], seed, { active: 'whirlwind', heroStats: { cri: 0.2 } }).logs));
   const rate = critRate(hits);
   assert.ok(rate > 0.32 && rate < 0.38, `暴擊率 ${rate}`);
 });
@@ -345,7 +346,7 @@ test('效果：加成疊在原本的暴擊率上（基礎 20% → 施放時約 3
 test('效果：只持續這次施放，普攻與其他行動不受影響（施放率 50%）', () => {
   const stray = [];
   for (let seed = 1; seed <= 100; seed++) {
-    stray.push(...heroHits(fight(['critup'], seed, { heroStats: { skillCastRate: 0.5 }, foe: { hp: 100000 }, maxTurns: 10 }).logs)
+    stray.push(...heroHits(fight(['critup'], seed, { active: 'whirlwind', heroStats: { skillCastRate: 0.5 }, foe: { hp: 100000 }, maxTurns: 10 }).logs)
       .filter(log => !/critup/.test(log.skillId || '')));
   }
   assert.ok(stray.length > 300, `普攻樣本太少：${stray.length}`);
@@ -355,7 +356,7 @@ test('效果：只持續這次施放，普攻與其他行動不受影響（施�
 test('效果：每個行動槽結束後，爆擊強化已經從身上消失', () => {
   const loadout = compileLoadout([{ active: 'magicmissile', supports: ['critup'] }]);
   const hero = new Entity({ id: 'hero', name: '勇者', team: 'A', normalAttack: plainSkill('slash'), skills: loadout.skills,
-    stats: { hp: 9000, sp: 900, atk: 150, def: 50, spd: 120, cri: 0, skillCastRate: 1 } });
+    stats: { hp: 9000, sp: 900, atk: 150, int: 150, def: 50, spd: 120, cri: 0, skillCastRate: 1 } });
   const boss = new Entity({ id: 'boss', name: '魔王', team: 'B', normalAttack: plainSkill('claw'), stats: { hp: 3000, sp: 0, atk: 1, def: 0, spd: 1 } });
   let leftover = 0;
   let ticks = 0;
@@ -411,7 +412,7 @@ test('戰鬥：套用暴擊加成的角色，每一擊都暴擊；沒套用的�
     const plain = new Skill({ id: 'plain', name: '普攻', actions: [{ type: 'DAMAGE' }] });
     const hero = new Entity({
       id: 'hero', name: '勇者', team: 'A', normalAttack: plain,
-      stats: applyStatBonuses({ hp: 5000, sp: 0, atk: 100, def: 0, spd: 100, cri: 0 }, statBonuses)
+      stats: applyStatBonuses({ hp: 5000, sp: 0, atk: 100, int: 150, def: 0, spd: 100, cri: 0 }, statBonuses)
     });
     const foe = new Entity({ id: 'foe', name: '敵人', team: 'B', normalAttack: plain, stats: { hp: 3000, sp: 0, atk: 1, def: 0, spd: 1 } });
     const result = new BattleEngine([hero], [foe], { rng: createSeededRandom(7) }).start();
