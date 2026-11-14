@@ -3488,8 +3488,8 @@ const SUPPORT_GEMS = {
 
   // 爆擊強化：使用時先替自己加上爆擊率 +15%，只持續這次施放的行動槽（duration 1 = 行動槽結束就消失），
   // 所以這次施放的每一擊都吃得到，之後的普攻與其他技能不受影響。
-  // 提示文字排在技能那一行之前：「{caster}的爆擊率提升了。」
-  // 蓄力時，加成與提示都發生在釋放的那一槽（本體的第一個動作），不是掛標記的那一槽。
+  // 沒有提示文字（text 留空）：BUFF 動作仍會產生一行訊息為空字串的戰報（BUFF_APPLY），顯示端要過濾空訊息。
+  // 蓄力時，加成發生在釋放的那一槽（本體的第一個動作），不是掛標記的那一槽。
   critup: {
     id: 'critup',
     name: '爆擊強化',
@@ -3502,7 +3502,7 @@ const SUPPORT_GEMS = {
         action: {
           type: 'BUFF',
           targetType: 'SELF',
-          text: { action: '{caster}的爆擊率提升了。', buff: '' },
+          text: { action: '', buff: '' },
           buffs: [
             {
               id: 'critup',

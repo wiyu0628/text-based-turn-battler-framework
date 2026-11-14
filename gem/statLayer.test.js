@@ -298,23 +298,26 @@ function fight(supports, seed, { active = 'magicmissile', heroStats = {}, foe = 
   const engine = new BattleEngine([hero], [boss], { rng: createSeededRandom(seed), skillSelectionResolver: loadout.resolver, ...(maxTurns ? { maxTurns } : {}) });
   return { hero, logs: engine.start().logs };
 }
+// 爆擊強化沒有提示文字：BUFF 動作仍留一行訊息為空的 BUFF_APPLY，測試靠它定位「掛上加成」的時間點。
+const critupLine = log => log.type === 'BUFF_APPLY' && log.message === '' && /critup/.test(log.skillId || '');
 const heroHits = logs => logs.filter(log => log.actorId === 'hero' && typeof log.isCrit === 'boolean');
 const critRate = hits => hits.filter(log => log.isCrit).length / hits.length;
 
-test('戰報：「{caster}的爆擊率提升了。」排在技能那一行的前一條', () => {
+test('戰報：爆擊強化沒有提示文字，只留一行空訊息的 BUFF_APPLY，排在技能那一行的前一條', () => {
   const { logs } = fight(['critup'], 1, { foe: { hp: 600 } });
-  const index = logs.findIndex(log => log.message === '勇者的爆擊率提升了。');
-  assert.ok(index >= 0, '找不到提示文字');
+  const index = logs.findIndex(log => critupLine(log));
+  assert.ok(index >= 0, '找不到加成那一行');
+  assert.ok(!logs.some(log => /爆擊率提升/.test(log.message || '')), '不該再有提示文字');
   assert.equal(logs[index].type, 'BUFF_APPLY');
   assert.equal(logs[index + 1].type, 'DAMAGE');
   assert.match(logs[index + 1].message, /詠唱魔法飛彈/);
   assert.equal(logs[index + 1].skillId, 'magicmissile+critup');
 });
 
-test('戰報：每次施放各出現一次提示，提示不會多印', () => {
+test('戰報：每次施放各出現一次加成行，不會多出', () => {
   const { logs } = fight(['critup'], 2, { foe: { hp: 100000 }, maxTurns: 6 });
   const casts = logs.filter(log => log.type === 'DAMAGE' && log.skillId === 'magicmissile+critup').length;
-  const notices = logs.filter(log => log.message === '勇者的爆擊率提升了。').length;
+  const notices = logs.filter(log => critupLine(log)).length;
   assert.ok(casts > 0);
   assert.equal(notices, casts);
 });
@@ -363,19 +366,19 @@ test('效果：每個行動槽結束後，爆擊強化已經從身上消失', ()
   assert.equal(leftover, 0);
 });
 
-test('搭配蓄力：掛標記那一槽沒有加成與提示，釋放那一槽才有，且提示仍在技能那一行之前', () => {
+test('搭配蓄力：掛標記那一槽沒有加成，釋放那一槽才有，且加成行仍在技能那一行之前', () => {
   const { logs } = fight(['charge', 'critup'], 3);
   const charge = logs.findIndex(log => /開始蓄力/.test(log.message));
-  const notice = logs.findIndex(log => log.message === '勇者的爆擊率提升了。');
-  assert.ok(charge >= 0 && notice > charge, '提示應該出現在蓄力之後的釋放槽');
+  const notice = logs.findIndex(log => critupLine(log));
+  assert.ok(charge >= 0 && notice > charge, '加成應該出現在蓄力之後的釋放槽');
   assert.equal(logs[notice + 1].type, 'DAMAGE');
   assert.equal(logs.slice(charge, notice).filter(log => log.type === 'DAMAGE').length, 0, '蓄力那一槽不該有傷害');
 });
 
-test('搭配佈局：開頭「第一動，」接在技能那一行，不會接到爆擊提示上', () => {
+test('搭配佈局：開頭「第一動，」接在技能那一行，不會接到爆擊強化的加成行上', () => {
   const { logs } = fight(['layout', 'critup'], 4);
-  const notice = logs.findIndex(log => log.message === '勇者的爆擊率提升了。');
-  assert.ok(notice >= 0, '提示文字被改壞了');
+  const notice = logs.findIndex(log => critupLine(log));
+  assert.ok(notice >= 0, '找不到加成那一行');
   assert.equal(logs[notice + 1].type, 'DAMAGE');
   assert.match(logs[notice + 1].message, /^勇者的第一動，詠唱魔法飛彈/);
   assert.ok(!logs.some(log => /第一動，的/.test(log.message || '')));
@@ -391,7 +394,7 @@ test('搭配撒手鐧：插隊行動槽結束時加成也會消失，不會讓�
     const at = logs.findIndex(log => /拚死一搏/.test(log.message || ''));
     if (at >= 0) {
       triggered++;
-      assert.equal(logs[at + 1].message, '勇者的爆擊率提升了。', '插隊那一槽也要先印提示');
+      assert.equal(critupLine(logs[at + 1]), true, '插隊那一槽也要先掛上加成');
       assert.equal(logs[at + 2].type, 'DAMAGE');
     }
     stray.push(...heroHits(logs).filter(log => !/critup/.test(log.skillId || '')));
