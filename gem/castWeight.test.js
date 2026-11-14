@@ -1,6 +1,6 @@
 'use strict';
 
-// 施放權重的測試。執行：node --test gems/castWeight.test.js
+// 施放權重的測試。執行：node --test gem/castWeight.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');

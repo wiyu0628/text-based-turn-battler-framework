@@ -1,6 +1,6 @@
 'use strict';
 
-// 數值加成層的測試。執行：node --test gems/statLayer.test.js
+// 數值加成層的測試。執行：node --test gem/statLayer.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');

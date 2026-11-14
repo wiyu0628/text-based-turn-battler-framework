@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>寶石戰鬥測試版</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7; --panel: #ffffff; --text: #1d2430; --muted: #667085; --line: #d9dde5;
+    --accent: #3b5bdb; --accent-text: #ffffff; --danger: #c92a2a; --ok: #2b8a3e;
+    --inc: #1971c2; --more: #e8590c; --cost: #7048e8; --scope: #0c8599; --flag: #5c940d;
+    --condition: #c2255c; --proc: #d9480f; --effect: #495057; --group: #868e96;
+    --log-damage: #c92a2a; --log-heal: #2b8a3e; --log-buff: #1971c2; --log-turn: #3b5bdb;
+    --shadow: rgba(0, 0, 0, .35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --panel: #1d2128; --text: #e6e9ef; --muted: #9aa3b2; --line: #333a46;
+      --accent: #748ffc; --accent-text: #10131a; --danger: #ff8787; --ok: #69db7c;
+      --inc: #74c0fc; --more: #ffa94d; --cost: #b197fc; --scope: #66d9e8; --flag: #a9e34b;
+      --condition: #faa2c1; --proc: #ff922b; --effect: #ced4da; --group: #adb5bd;
+      --log-damage: #ff8787; --log-heal: #69db7c; --log-buff: #74c0fc; --log-turn: #91a7ff;
+      --shadow: rgba(0, 0, 0, .6);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text); line-height: 1.5;
+    font: 15px/1.5 system-ui, -apple-system, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    padding: 12px 12px 40px; max-width: 760px; margin: 0 auto;
+  }
+  body.locked { overflow: hidden; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  .note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .tabs { display: flex; gap: 6px; margin: 10px 0; }
+  .tab { flex: 1; padding: 9px 0; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; font: inherit; cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 10px; }
+  @media (min-width: 560px) { .grid { grid-template-columns: repeat(4, 1fr); } }
+  label.field { display: flex; flex-direction: column; font-size: 12.5px; color: var(--muted); gap: 3px; }
+  input, select {
+    width: 100%; padding: 8px; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; min-height: 38px;
+  }
+  .slot { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+  .slot h3 { font-size: 14px; margin: 0 0 8px; }
+  .supports { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 6px; }
+  @media (min-width: 560px) { .supports { grid-template-columns: repeat(3, 1fr); } }
+  .preview { margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .preview .ok { color: var(--ok); }
+  .preview .err { color: var(--danger); }
+  .preview ul { margin: 4px 0 0; padding-left: 18px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  button.primary {
+    background: var(--accent); color: var(--accent-text); border: 0; border-radius: 8px; padding: 11px 18px;
+    font: inherit; font-weight: 600; cursor: pointer; min-height: 44px;
+  }
+  button.secondary {
+    background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px;
+    font: inherit; cursor: pointer; min-height: 40px;
+  }
+  #error { color: var(--danger); font-size: 14px; white-space: pre-wrap; }
+
+  /* 寶石圖鑑 */
+  .gem { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+  .gem h3 { font-size: 15px; margin: 0 0 4px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .gem .id { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .pill { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; font-weight: 600; }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; margin: 2px 0 4px; }
+  .chip { font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; color: var(--muted); }
+  .lines { list-style: none; margin: 4px 0 0; padding: 0; }
+  .lines li { border-left: 3px solid var(--effect); padding: 1px 0 1px 8px; margin: 3px 0; font-size: 14px; }
+  .lines li small { color: var(--muted); font-size: 11.5px; margin-right: 6px; }
+  .k-inc { border-color: var(--inc) !important; } .k-more { border-color: var(--more) !important; }
+  .k-cost { border-color: var(--cost) !important; } .k-scope { border-color: var(--scope) !important; }
+  .k-flag { border-color: var(--flag) !important; } .k-condition { border-color: var(--condition) !important; }
+  .k-proc { border-color: var(--proc) !important; } .k-effect { border-color: var(--effect) !important; }
+  .k-group { border-color: var(--group) !important; }
+  .links { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .rules { font-size: 14px; } .rules li { margin: 4px 0; }
+
+  /* 戰報彈出視窗 */
+  .overlay {
+    position: fixed; inset: 0; background: var(--shadow); display: flex; align-items: center; justify-content: center;
+    padding: 16px; z-index: 10;
+  }
+  .overlay[hidden] { display: none; }
+  .modal {
+    background: var(--panel); color: var(--text); border-radius: 12px; width: 100%; max-width: 640px; max-height: 86vh;
+    display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0, 0, 0, .35); overflow: hidden;
+  }
+  .modal header { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+  .modal header h2 { margin: 0; }
+  .modal .close { background: none; border: 0; color: var(--muted); font-size: 24px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  #summary { font-size: 13px; color: var(--muted); }
+  #summary b { color: var(--text); }
+  #log { overflow-y: auto; padding: 8px 14px 14px; font-size: 14px; }
+  #log p { margin: 3px 0; }
+  #log .turn { margin-top: 12px; font-weight: 700; color: var(--log-turn); border-top: 1px dashed var(--line); padding-top: 6px; }
+  #log .t-DAMAGE { color: var(--log-damage); }
+  #log .t-HEAL { color: var(--log-heal); }
+  #log .t-BUFF_APPLY { color: var(--log-buff); }
+  #log .t-BATTLE_START, #log .t-BATTLE_END { font-weight: 700; }
+  .modal footer { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<h1>寶石戰鬥測試版</h1>
+<p class="note">測試用的簡易介面，很可能不會用於後續版本。選好寶石與數值就能直接開戰；點戰報視窗外面即可關閉。</p>
+
+<div class="tabs" role="tablist">
+  <button class="tab" role="tab" id="tab-battle" aria-selected="true">配置與戰鬥</button>
+  <button class="tab" role="tab" id="tab-codex" aria-selected="false">寶石圖鑑</button>
+</div>
+
+<main id="view-battle">
+  <section class="card"><h2>我方</h2><div class="grid" id="hero-stats"></div></section>
+
+  <section class="card">
+    <h2>技能（最多 3 個）</h2>
+    <p class="note">每個技能 1 顆主動寶石＋最多 <span id="max-supports"></span> 顆輔助寶石，輔助寶石沒有順序。主動寶石選「（不使用）」就是空著。</p>
+    <div id="slots"></div>
+  </section>
+
+  <section class="card">
+    <h2>敵人</h2>
+    <div class="grid" id="foe-stats"></div>
+    <p class="note" style="margin-top:8px">敵人只會普通攻擊。</p>
+  </section>
+
+  <section class="card">
+    <h2>戰鬥設定</h2>
+    <div class="grid">
+      <label class="field">回合上限<input type="number" id="max-turns" value="30" min="1" max="300" step="1"></label>
+      <label class="field">隨機種子（留空＝隨機）<input type="number" id="seed" placeholder="例如 123" step="1"></label>
+    </div>
+    <div class="row"><button class="primary" id="fight">開始戰鬥</button><span id="error" role="alert"></span></div>
+  </section>
+</main>
+
+<main id="view-codex" hidden></main>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="battle-title">
+    <header>
+      <div><h2 id="battle-title">戰報</h2><div id="summary"></div></div>
+      <button class="close" id="close" aria-label="關閉">×</button>
+    </header>
+    <div id="log"></div>
+    <footer><button class="secondary" id="again">再戰一次</button><button class="secondary" id="close2">關閉</button></footer>
+  </div>
+</div>
+
+<script>
+// 舊版瀏覽器／內嵌網頁檢視可能沒有 structuredClone；寶石資料本來就是純 JSON，這個替代版夠用。
+if (typeof structuredClone !== 'function') window.structuredClone = function (value) { return JSON.parse(JSON.stringify(value)); };
+/*__BUNDLE__*/
+</script>
+<script>
+(function () {
+  'use strict';
+  var G = window.GemLab;
+  var ACTIVE = G.ACTIVE_GEMS, SUPPORT = G.SUPPORT_GEMS, MAX = G.MAX_SUPPORTS;
+
+  // ── 小工具 ───────────────────────────────────────────────
+  function h(tag, attrs) {
+    var el = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (key) {
+      if (key === 'class') el.className = attrs[key];
+      else if (key === 'text') el.textContent = attrs[key];
+      else el.setAttribute(key, attrs[key]);
+    });
+    for (var i = 2; i < arguments.length; i++) {
+      var child = arguments[i];
+      if (child == null) continue;
+      el.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+    }
+    return el;
+  }
+  var $ = function (id) { return document.getElementById(id); };
+
+  var TYPE = { DAMAGE: '傷害', HEAL: '治療', BUFF: '增益／減益' };
+  var TARGET = { ENEMY_SINGLE: '敵方單體', ENEMY_ALL: '敵方全體', ALLY_SINGLE: '我方單體', ALLY_ALL: '我方全體', SELF: '自己' };
+  var KIND = { inc: '加算', more: '乘算', cost: 'SP', scope: '範圍', flag: '效果', condition: '條件', proc: '機率', effect: '效果', group: '互斥' };
+
+  $('max-supports').textContent = MAX;
+
+  // ── 數值輸入 ─────────────────────────────────────────────
+  var STAT_FIELDS = [
+    ['hp', '生命', 1, 1], ['sp', 'SP', 1, 0], ['atk', '攻擊', 1, 0], ['def', '防禦', 1, 0],
+    ['spd', '速度', 1, 1], ['cri', '暴擊率（0～1）', 0.01, 0], ['skillCastRate', '技能施放率（0～1）', 0.05, 0]
+  ];
+  var DEFAULTS = {
+    hero: { hp: 3000, sp: 240, atk: 150, def: 50, spd: 100, cri: 0.1, skillCastRate: 0.35, attackSp: 2 },
+    foe: { count: 1, hp: 3000, sp: 200, atk: 90, def: 50, spd: 90, cri: 0.05, attackSp: 2 }
+  };
+
+  function statInputs(containerId, prefix, defaults, skip) {
+    var box = $(containerId);
+    STAT_FIELDS.forEach(function (f) {
+      if (skip && skip.indexOf(f[0]) >= 0) return;
+      box.appendChild(h('label', { class: 'field', text: f[1] },
+        h('input', { type: 'number', id: prefix + '-' + f[0], value: String(defaults[f[0]]), step: String(f[2]), min: String(f[3]) })));
+    });
+    box.appendChild(h('label', { class: 'field', text: '普攻 SP 消耗（每擊）' },
+      h('input', { type: 'number', id: prefix + '-attackSp', value: String(defaults.attackSp), step: '1', min: '0' })));
+    if (prefix === 'foe') {
+      box.appendChild(h('label', { class: 'field', text: '敵人數量（1～5）' },
+        h('input', { type: 'number', id: 'foe-count', value: String(defaults.count), step: '1', min: '1', max: '5' })));
+    }
+  }
+  statInputs('hero-stats', 'hero', DEFAULTS.hero);
+  statInputs('foe-stats', 'foe', DEFAULTS.foe, ['skillCastRate']);
+
+  function readAttackSp(prefix, label, problems) {
+    var value = Number($(prefix + '-attackSp').value);
+    if ($(prefix + '-attackSp').value === '' || !isFinite(value) || value < 0) problems.push(label + ' 普攻 SP 消耗需要是不小於 0 的數字');
+    return value;
+  }
+
+  function readStats(prefix, skip) {
+    var stats = {}, problems = [];
+    STAT_FIELDS.forEach(function (f) {
+      if (skip && skip.indexOf(f[0]) >= 0) return;
+      var raw = $(prefix + '-' + f[0]).value, value = Number(raw);
+      if (raw === '' || !isFinite(value)) problems.push(f[1] + ' 需要是數字');
+      else if (value < f[3]) problems.push(f[1] + ' 不能小於 ' + f[3]);
+      else if ((f[0] === 'cri' || f[0] === 'skillCastRate') && value > 1) problems.push(f[1] + ' 不能大於 1');
+      stats[f[0]] = value;
+    });
+    return { stats: stats, problems: problems };
+  }
+
+  // ── 技能欄位 ─────────────────────────────────────────────
+  var SLOT_COUNT = 3;
+  var slots = [];
+
+  function option(value, text) { return h('option', { value: value, text: text }); }
+
+  function buildSlot(index) {
+    var activeSelect = h('select', { 'aria-label': '主動寶石 ' + (index + 1) }, option('', '（不使用）'));
+    Object.keys(ACTIVE).forEach(function (id) { activeSelect.appendChild(option(id, ACTIVE[id].name)); });
+    var supportSelects = [], supportBox = h('div', { class: 'supports' });
+    for (var i = 0; i < MAX; i++) {
+      var select = h('select', { 'aria-label': '輔助寶石 ' + (i + 1) }, option('', '（輔助寶石 ' + (i + 1) + '）'));
+      Object.keys(SUPPORT).forEach(function (id) { select.appendChild(option(id, SUPPORT[id].name)); });
+      supportSelects.push(select);
+      supportBox.appendChild(select);
+    }
+    var preview = h('div', { class: 'preview' });
+    var card = h('div', { class: 'slot' }, h('h3', { text: '技能 ' + (index + 1) }), activeSelect, supportBox, preview);
+    var slot = { active: activeSelect, supports: supportSelects, box: supportBox, preview: preview };
+    [activeSelect].concat(supportSelects).forEach(function (el) { el.addEventListener('change', refreshPreviews); });
+    $('slots').appendChild(card);
+    return slot;
+  }
+  for (var s = 0; s < SLOT_COUNT; s++) slots.push(buildSlot(s));
+
+  function slotValue(slot) {
+    return { active: slot.active.value, supports: slot.supports.map(function (el) { return el.value; }).filter(Boolean) };
+  }
+
+  function refreshPreviews() {
+    slots.forEach(function (slot) {
+      var value = slotValue(slot);
+      slot.box.hidden = !value.active;
+      slot.preview.textContent = '';
+      if (!value.active) return;
+      try {
+        var result = G.compileSkill(value.active, value.supports);
+        var extra = [];
+        if (result.conditions && Object.keys(result.conditions).length) extra.push('有施放條件');
+        if (result.release) extra.push('蓄力（下一個行動槽釋放）');
+        slot.preview.appendChild(h('div', { class: 'ok', text:
+          '可用：SP ' + result.spCost + '・傷害倍率 ×' + result.damageFactor + (extra.length ? '・' + extra.join('、') : '') }));
+        if (value.supports.length) {
+          var ul = h('ul');
+          value.supports.forEach(function (id) {
+            G.describeSupport(SUPPORT[id]).lines.forEach(function (line) {
+              ul.appendChild(h('li', { text: SUPPORT[id].name + '：［' + KIND[line.kind] + '］' + line.text }));
+            });
+          });
+          slot.preview.appendChild(ul);
+        }
+      } catch (error) {
+        slot.preview.appendChild(h('div', { class: 'err', text: error.message }));
+      }
+    });
+  }
+  refreshPreviews();
+
+  // ── 戰鬥 ─────────────────────────────────────────────────
+  var slash = new G.Skill({ id: 'slash', name: '斬擊', actions: [{ type: 'DAMAGE' }] });
+  var claw = new G.Skill({ id: 'claw', name: '利爪', actions: [{ type: 'DAMAGE' }] });
+
+  function setError(text) { $('error').textContent = text || ''; }
+
+  function collect() {
+    var problems = [];
+    var hero = readStats('hero');
+    var foe = readStats('foe', ['skillCastRate']);
+    problems = problems.concat(hero.problems.map(function (p) { return '我方 ' + p; }), foe.problems.map(function (p) { return '敵人 ' + p; }));
+    var heroAttackSp = readAttackSp('hero', '我方', problems), foeAttackSp = readAttackSp('foe', '敵人', problems);
+    var count = Number($('foe-count').value);
+    if (!isFinite(count) || count < 1 || count > 5 || Math.floor(count) !== count) problems.push('敵人數量需要是 1～5 的整數');
+    var turns = Number($('max-turns').value);
+    if (!isFinite(turns) || turns < 1 || Math.floor(turns) !== turns) problems.push('回合上限需要是正整數');
+    var seedRaw = $('seed').value.trim();
+    if (seedRaw !== '' && !isFinite(Number(seedRaw))) problems.push('隨機種子需要是數字');
+    if (problems.length) throw new Error(problems.join('\n'));
+    return { hero: hero.stats, foe: foe.stats, heroAttackSp: heroAttackSp, foeAttackSp: foeAttackSp, count: count, turns: turns, seed: seedRaw === '' ? Math.floor(Math.random() * 1e9) : Number(seedRaw) };
+  }
+
+  function runBattle() {
+    setError('');
+    var config;
+    try { config = collect(); } catch (error) { setError(error.message); return false; }
+    var loadout;
+    try {
+      loadout = G.compileLoadout(slots.map(slotValue).filter(function (v) { return v.active; }));
+    } catch (error) {
+      setError('寶石連結有問題：' + error.message);
+      return false;
+    }
+    var hero = new G.Entity({ id: 'hero', name: '我方', team: 'A', normalAttack: slash, normalAttackSpCost: config.heroAttackSp,
+      skills: loadout.skills, passives: loadout.passives, stats: config.hero });
+    var foes = [];
+    for (var i = 0; i < config.count; i++) {
+      foes.push(new G.Entity({ id: 'foe' + i, name: config.count > 1 ? '敵人' + (i + 1) : '敵人', team: 'B', normalAttack: claw, normalAttackSpCost: config.foeAttackSp, stats: Object.assign({}, config.foe) }));
+    }
+    var result;
+    try {
+      result = new G.BattleEngine([hero], foes, {
+        maxTurns: config.turns, rng: G.createSeededRandom(config.seed), skillSelectionResolver: loadout.resolver
+      }).start();
+    } catch (error) {
+      setError('戰鬥中發生錯誤：' + error.message);
+      return false;
+    }
+    showReport(result, config);
+    return true;
+  }
+
+  function showReport(result, config) {
+    var winner = { TEAM_A: '我方獲勝', TEAM_B: '敵方獲勝', DRAW: '平手（達到回合上限）' }[result.winner] || String(result.winner);
+    var summary = $('summary');
+    summary.textContent = '';
+    summary.appendChild(h('div', {}, h('b', { text: winner }), '・種子 ' + config.seed));
+    var units = result.finalTeamA.concat(result.finalTeamB).map(function (unit) {
+      return unit.name + ' 生命 ' + unit.stats.hp + '/' + unit.stats.maxHp + '・SP ' + unit.stats.sp + '/' + unit.stats.maxSp + (unit.isAlive ? '' : '（倒下）');
+    });
+    summary.appendChild(h('div', { text: units.join('　') }));
+
+    var log = $('log');
+    log.textContent = '';
+    result.logs.forEach(function (entry) {
+      if (!entry.message) return;   // 隱藏用的觸發 Buff 會產生空訊息，不顯示
+      log.appendChild(h('p', { class: entry.type === 'TURN_START' ? 'turn' : 't-' + entry.type, text: entry.message }));
+    });
+    openModal();
+    log.scrollTop = 0;
+  }
+
+  // ── 彈出視窗：點外面或按 Esc 關閉 ───────────────────────────
+  var overlay = $('overlay'), pressedOnOverlay = false;
+  function openModal() { overlay.hidden = false; document.body.classList.add('locked'); }
+  function closeModal() { overlay.hidden = true; document.body.classList.remove('locked'); }
+  overlay.addEventListener('pointerdown', function (event) { pressedOnOverlay = event.target === overlay; });
+  overlay.addEventListener('click', function (event) {
+    // 按下與放開都在視窗外才關閉，避免在戰報裡拖曳選字、放開時剛好在外面而誤關。
+    if (event.target === overlay && pressedOnOverlay) closeModal();
+    pressedOnOverlay = false;
+  });
+  document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && !overlay.hidden) closeModal(); });
+  $('close').addEventListener('click', closeModal);
+  $('close2').addEventListener('click', closeModal);
+  $('fight').addEventListener('click', runBattle);
+  $('again').addEventListener('click', function () {
+    // 再戰一次：種子留空時換一個新的；有填種子則結果相同。
+    runBattle();
+  });
+
+  // ── 寶石圖鑑 ─────────────────────────────────────────────
+  function buildCodex() {
+    var view = $('view-codex');
+    view.textContent = '';
+
+    var rules = h('ul', { class: 'rules' },
+      h('li', { text: '每個技能 1 顆主動寶石＋最多 ' + MAX + ' 顆輔助寶石；輔助寶石沒有順序，同一組結果一定相同。' }),
+      h('li', { text: '加算（inc）先全部相加，乘算（more）逐顆相乘：最終傷害 = (1 + Σ加算) × Π(1 + 乘算)。SP 消耗也是逐顆相乘。' }),
+      h('li', { text: '同一個互斥組只能連結一顆；條件不符的寶石會被拒絕，並指出是哪一顆、為什麼。' }),
+      h('li', { text: '佈局、撒手鐧是「角色層級」效果；多個技能連結同一種時，觸發時隨機挑一個當下可用的。' }),
+      h('li', { text: '蓄力需要引擎的 skillSelectionResolver（這個介面已經幫你接好）。' }));
+    view.appendChild(h('section', { class: 'card' }, h('h2', { text: '規則' }), rules));
+
+    var activeCard = h('section', { class: 'card' }, h('h2', { text: '主動寶石' }));
+    Object.keys(ACTIVE).forEach(function (id) {
+      var gem = ACTIVE[id];
+      var chips = h('div', { class: 'chips' }, h('span', { class: 'chip', text: 'SP ' + gem.spCost }));
+      (gem.tags || []).forEach(function (tag) { chips.appendChild(h('span', { class: 'chip', text: tag })); });
+      if (gem.uncounterable) chips.appendChild(h('span', { class: 'chip', text: '不可反擊' }));
+      var ul = h('ul', { class: 'lines' });
+      gem.actions.forEach(function (action) {
+        ul.appendChild(h('li', { class: 'k-effect', text:
+          (TYPE[action.type] || action.type) + '・' + (TARGET[action.targetType] || action.targetType || '預設目標') + (action.power ? '・威力 ' + action.power : '') }));
+      });
+      activeCard.appendChild(h('div', { class: 'gem' }, h('h3', {}, gem.name, h('span', { class: 'id', text: id })), chips, ul));
+    });
+    view.appendChild(activeCard);
+
+    var supportCard = h('section', { class: 'card' }, h('h2', { text: '輔助寶石' }));
+    Object.keys(SUPPORT).forEach(function (id) {
+      var gem = SUPPORT[id], info = G.describeSupport(gem);
+      var title = h('h3', {}, gem.name, h('span', { class: 'id', text: id }));
+      info.badges.forEach(function (badge) {
+        title.appendChild(h('span', { class: 'pill k-' + (badge === '加算' ? 'inc' : 'more'), style: 'color:var(--' + (badge === '加算' ? 'inc' : 'more') + ')', text: badge }));
+      });
+      var ul = h('ul', { class: 'lines' });
+      info.lines.forEach(function (line) {
+        ul.appendChild(h('li', { class: 'k-' + line.kind }, h('small', { text: KIND[line.kind] }), line.text));
+      });
+      // 能連結哪些主動寶石：直接實際編譯一次，原因就是編譯器給的訊息。
+      var ok = [], no = [];
+      Object.keys(ACTIVE).forEach(function (activeId) {
+        try { G.compileSkill(activeId, [id]); ok.push(ACTIVE[activeId].name); }
+        catch (error) { no.push(ACTIVE[activeId].name + '（' + error.message.replace(/^寶石「[^」]*」無法連結：/, '') + '）'); }
+      });
+      var links = h('div', { class: 'links', text: '可連結：' + (ok.join('、') || '無') + (no.length ? '　不可：' + no.join('；') : '') });
+      supportCard.appendChild(h('div', { class: 'gem' }, title, ul, links));
+    });
+    view.appendChild(supportCard);
+  }
+  buildCodex();
+
+  // ── 分頁 ─────────────────────────────────────────────────
+  function selectTab(name) {
+    var battle = name === 'battle';
+    $('view-battle').hidden = !battle;
+    $('view-codex').hidden = battle;
+    $('tab-battle').setAttribute('aria-selected', String(battle));
+    $('tab-codex').setAttribute('aria-selected', String(!battle));
+  }
+  $('tab-battle').addEventListener('click', function () { selectTab('battle'); });
+  $('tab-codex').addEventListener('click', function () { selectTab('codex'); });
+})();
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 // 寶石版快速開始：與 quickstart.js 完全相同，只有「new Skill 的部分」改成由寶石編譯。
-// 執行：node gems/gems-quickstart.js                     （預設：魔法飛彈 連結 強力 + 感電）
-//       node gems/gems-quickstart.js wide lean           （自訂輔助寶石，預設主動寶石是魔法飛彈）
-//       node gems/gems-quickstart.js whirlwind leech     （第一個參數若是主動寶石 id，就改用它）
+// 執行：node gem/gems-quickstart.js                     （預設：魔法飛彈 連結 強力 + 感電）
+//       node gem/gems-quickstart.js wide lean           （自訂輔助寶石，預設主動寶石是魔法飛彈）
+//       node gem/gems-quickstart.js whirlwind leech     （第一個參數若是主動寶石 id，就改用它）
 const { Entity, Skill, BattleEngine } = require('../src'); // 你的專案裡寫 require('text-based-turn-battler-framework')
 const { compileLoadout, GemLinkError } = require('./gemCompiler');
 const { ACTIVE_GEMS, SUPPORT_GEMS, MAX_SUPPORTS } = require('./gems');
@@ -23,7 +23,7 @@ function compileOrExit() {
     if (!(error instanceof GemLinkError) || require.main !== module) throw error;
     const list = gems => Object.entries(gems).map(([id, gem]) => `${id}（${gem.name}）`).join('、');
     console.error(error.message);
-    console.error(`用法：node gems/gems-quickstart.js [主動寶石] [輔助寶石…]（最多 ${MAX_SUPPORTS} 顆）`);
+    console.error(`用法：node gem/gems-quickstart.js [主動寶石] [輔助寶石…]（最多 ${MAX_SUPPORTS} 顆）`);
     console.error(`主動寶石：${list(ACTIVE_GEMS)}`);
     console.error(`輔助寶石：${list(SUPPORT_GEMS)}`);
     process.exit(1);
