@@ -13,6 +13,7 @@
  *                 { id: 'eq7', slot, origin: 'drop'|'craft',
  *                   base:    [{ stat, op: 'flat', value }]          基礎數值
  *                   affixes: [{ scope: 'wearer', stat, op, value, source? }      影響穿戴者（與加成層同格式）
+ *                            { scope: 'effect', kind, value, source? }           穿戴者全體的非屬性效果：physDmg／spellDmg／reduction（見 affixTable.js）
  *                            { scope: 'gems', kind, value, source? }],           影響這件裝備上的寶石（kind 之後設計）
  *                   castWeight: 100,                                             施放權重（10～999），裝備擲出來的結果
  *                   links:   [{ active, supports: [] }] }                        鑲在這件裝備上的寶石連結
@@ -37,12 +38,13 @@
 
 const { ACTIVE_GEMS, SUPPORT_GEMS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBonuses } = require('./statLayer');
+const { EFFECT_KINDS, sumEffectAffixes } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
 
 const SAVE_VERSION = 1;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
-const AFFIX_SCOPES = ['wearer', 'gems'];
+const AFFIX_SCOPES = ['wearer', 'gems', 'effect'];
 const PROGRESS_KEYS = ['defeatedBosses', 'unlockedRegions', 'unlockedMonsters'];
 const MIN_DIFFICULTY = 1;
 const MAX_DIFFICULTY = 15;
@@ -177,7 +179,11 @@ function validateEquipmentItem(item, where, nextId) {
       if (!isObject(affix)) { problems.push(`${at}不是物件`); return; }
       if (!AFFIX_SCOPES.includes(affix.scope)) { problems.push(`${at}的 scope「${affix.scope}」不是 ${AFFIX_SCOPES.join('、')} 之一`); return; }
       if (affix.scope === 'wearer') problems.push(...validateBonuses([affix]).map(problem => `${at}：${problem}`));
-      else {
+      else if (affix.scope === 'effect') {
+        if (!EFFECT_KINDS.includes(affix.kind)) problems.push(`${at}的 kind「${affix.kind}」不是 ${EFFECT_KINDS.join('、')} 之一`);
+        if (!(Number.isFinite(affix.value) && affix.value >= 0)) problems.push(`${at}的 value 必須是不小於 0 的有限數字`);
+        if (affix.source !== undefined && typeof affix.source !== 'string') problems.push(`${at}的 source 必須是字串`);
+      } else {
         if (typeof affix.kind !== 'string' || !affix.kind) problems.push(`${at}的 kind 必須是非空字串`);
         if (!Number.isFinite(affix.value)) problems.push(`${at}的 value 必須是有限數字`);
         if (affix.source !== undefined && typeof affix.source !== 'string') problems.push(`${at}的 source 必須是字串`);
@@ -479,6 +485,22 @@ function equippedBonuses(save) {
 }
 
 /**
+ * 穿戴中的裝備提供的非屬性效果總和：{ physDmg, spellDmg, reduction }（scope 為 effect 的詞綴；減傷已夾在上限）。
+ * 傳給 compileLoadout 的 options.equipment；或直接用 compileEquipped。
+ */
+function equippedEffects(save) {
+  return sumEffectAffixes(equippedItems(save).flatMap(item => item.affixes));
+}
+
+/**
+ * 一步編譯穿戴中的裝備：寶石連結 + 物理／法術傷害提高 + 減傷。回傳 compileLoadout 的結果。
+ * 屬性加成仍要自己用 equippedBonuses 套到角色基礎屬性上。
+ */
+function compileEquipped(save, options = {}) {
+  return compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save) });
+}
+
+/**
  * 穿戴中的裝備上所有寶石連結（依部位順序），格式與 compileLoadout 的輸入相同。
  * 每組連結會帶上它所在裝備的 castWeight 當 weight。
  */
@@ -545,6 +567,6 @@ module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, MIGRATIONS, SaveError,
   createEmptySave, validateSave, migrateSave, exportSave, importSave,
   addGems, removeGems, addEngraving, removeEngraving, addEquipment, removeEquipment, setLinks, equip, unequip,
-  setDifficulty, addProgress, equippedBonuses, equippedLinks,
+  setDifficulty, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };

@@ -510,11 +510,12 @@ const makeSkill = (config, conditions) => Object.keys(conditions).length ? new C
  * @throws {Error} 寶石資料本身有誤時（見 validateGemData）
  */
 function compileSkill(activeId, supportIds = [], {
-  activeGems = ACTIVE_GEMS, supportGems = SUPPORT_GEMS, groups = GROUPS, maxSupports = MAX_SUPPORTS
+  activeGems = ACTIVE_GEMS, supportGems = SUPPORT_GEMS, groups = GROUPS, maxSupports = MAX_SUPPORTS, equipment = null
 } = {}) {
   if (!Number.isInteger(maxSupports) || maxSupports < 0) {
     throw new Error(`maxSupports 必須是不小於 0 的整數，收到 ${maxSupports}`);
   }
+  const equip = checkEquipment(equipment);
   assertValidGemData(supportGems, groups);
   const active = activeGems[activeId];
   if (!active) throw new GemLinkError(activeId, '找不到這顆主動寶石');
@@ -654,7 +655,7 @@ function compileSkill(activeId, supportIds = [], {
   // 緊接在後的原本第一個動作必須重新挑目標：框架預設沿用上一個動作的目標，不處理的話傷害會打到自己。
   const actions = [...draft.prepended, ...draft.actions, ...draft.appended].map(action => {
     const next = withStatEffects(expandText(action));
-    if (next.type === 'DAMAGE') next.power = round4((next.power ?? 1) * factor);
+    if (next.type === 'DAMAGE') next.power = round4((next.power ?? 1) * damageFactorOf(next, incSum, moreProduct, equip));
     return next;
   });
   if (draft.prepended.length && draft.actions.length) {
@@ -696,6 +697,48 @@ function compileSkill(activeId, supportIds = [], {
   skill.gemSlotBuffIds = slotBuffIds(actions);
   const passives = [...draft.reactions.map(reaction => buildPassive(id, reaction)), ...draft.procs.map(proc => buildProcPassive(id, proc))];
   return { skill, release: null, charge: null, passives, grants: draft.grants, conditions, spCost, damageFactor: round4(factor), links: ids };
+}
+
+// ── 裝備的非屬性效果 ────────────────────────────────────────
+
+/**
+ * 檢查 options.equipment：{ physDmg?, spellDmg?, reduction? }，都是不小於 0 的有限數字（reduction 還要小於 1）。
+ * 沒給就是全部 0。回傳補齊的物件。
+ */
+function checkEquipment(equipment) {
+  const result = { physDmg: 0, spellDmg: 0, reduction: 0 };
+  if (equipment === null || equipment === undefined) return result;
+  if (typeof equipment !== 'object' || Array.isArray(equipment)) throw new Error('options.equipment 必須是物件');
+  for (const key of Object.keys(equipment)) {
+    if (!(key in result)) throw new Error(`options.equipment 沒有「${key}」這個欄位（只有 physDmg、spellDmg、reduction）`);
+    const value = equipment[key];
+    if (!(typeof value === 'number' && Number.isFinite(value) && value >= 0)) throw new Error(`options.equipment.${key} 必須是不小於 0 的有限數字（收到 ${value}）`);
+    result[key] = value;
+  }
+  if (result.reduction >= 1) throw new Error(`options.equipment.reduction 必須小於 1（收到 ${result.reduction}）`);
+  return result;
+}
+
+/**
+ * 一段傷害動作的最終倍率。裝備的物理／法術傷害提高跟寶石的 inc 同在加算區：(1 + Σinc + 裝備) × Π(1 + more)。
+ * 依動作的 stat 判斷：int 是法術；atk 或沒寫是物理；其他屬性（例如拿 def 當傷害來源）不吃這兩種加成。
+ */
+function damageFactorOf(action, incSum, moreProduct, equip) {
+  const stat = action.stat ?? 'atk';
+  const bonus = stat === 'int' ? equip.spellDmg : stat === 'atk' ? equip.physDmg : 0;
+  return (1 + incSum + bonus) * moreProduct;
+}
+
+/** 常駐減傷：開戰時掛一個永久的 damageTaken Buff（只減普通攻擊類傷害，不含持續傷害，與框架的預設一致）。 */
+function buildReductionPassive(reduction) {
+  return {
+    id: 'gem_equipment_reduction',
+    trigger: 'BATTLE_START',
+    action(self) {
+      self.addBuff({ id: 'gem_equipment_reduction', name: '裝備減傷', type: 'STAT', polarity: 'positive', duration: Infinity,
+        effect: () => {}, damageTaken: { multiplier: 1 - reduction } });
+    }
+  };
 }
 
 // ── 蓄力的釋放與檢查 ────────────────────────────────────────
@@ -826,7 +869,8 @@ function buildWeightGuardPassive() {
  * 被動物件帶有戰鬥狀態，所以「每場戰鬥」都要重新呼叫一次，不要在多場戰鬥之間共用。
  * @param {{ active: string, supports?: string[], weight?: number }[]} gems 每個元素是一顆主動寶石與它連結的輔助寶石，
  *   以及選填的施放權重 weight（MIN_WEIGHT～MAX_WEIGHT 的整數，預設 DEFAULT_WEIGHT；見 gems.js 的「施放權重」）
- * @param {object} [options] 同 compileSkill 的 options
+ * @param {object} [options] 同 compileSkill 的 options；另有 equipment: { physDmg, spellDmg, reduction }（裝備的非屬性效果，見 affixTable.js）
+ *   physDmg／spellDmg 進每段傷害的加算區；reduction 變成開戰時掛上的常駐減傷 Buff（passives 裡多一個 gem_equipment_reduction）
  * @returns {{ skills: Skill[], passives: object[], resolver: Function, weights: object, releaseSkills: Skill[], compiled: object[] }}
  *   resolver       給 BattleEngine 的 skillSelectionResolver：蓄力的釋放（先問）加上依權重選招。
  *                  配置裡有蓄力或權重不全相等時一定要傳（沒傳都會在開場報錯，免得蓄力不釋放、權重靜默失效）；
@@ -851,6 +895,7 @@ function compileLoadout(gems, options = {}) {
     seen.add(result.skill.id);
     compiled.push(result);
   }
+  const equip = checkEquipment(options.equipment);
   const hasCharge = compiled.some(result => result.charge);
   const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
   return {
@@ -858,6 +903,7 @@ function compileLoadout(gems, options = {}) {
     passives: [
       ...compiled.flatMap(result => result.passives),
       ...buildGrantPassives(compiled),
+      ...(equip.reduction > 0 ? [buildReductionPassive(equip.reduction)] : []),
       ...(hasCharge ? [buildChargeGuardPassive()] : []),
       ...(hasUnequalWeights ? [buildWeightGuardPassive()] : [])
     ],
