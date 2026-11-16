@@ -19,12 +19,26 @@
  *   physDmg   物理傷害提高（只影響寶石技能，進加算區，與寶石的 inc 同區），scope 'effect'
  *   spellDmg  法術傷害提高（同上；判斷依據是傷害動作的 stat：int 為法術，atk 或沒寫為物理）
  *   reduction 減傷率（開戰時掛常駐的 damageTaken Buff，各件相加、上限 REDUCTION_CAP），scope 'effect'
+ *   ailmentDmg 異常傷害增加（裂傷、殘刃等持續傷害；自己一個加算區，與物理／法術傷害提高分開），scope 'effect'。
+ *             目前只出現在製作詞綴（craftTable.js 的 CRAFT_AFFIXES），刻印沒有這一行。
  *   接線：saveLayer.equippedEffects(save) 取總和 → compileLoadout(links, { equipment }) 或 saveLayer.compileEquipped(save)
+ *
+ * ── 刻印合成（rollCombine）──────────────────────────────────────
+ *   一律投入 COMBINE_INPUTS（3）顆、同一階，產出 1 顆高一階的刻印；不會失敗；最高階（5）不能合成。
+ *   三顆同種 → 同種、高一階，**不擲骰**（要指定種類就走這條）。
+ *   只要不是三顆都同種（例如 2 猛攻 + 1 奧術）→ 從高一階的所有種類裡**平均**抽 1 種（含投入的種類）。
+ *   平均抽的理由：①不同種合成定位是「把用不到的刻印換成高一階」，要指定種類已經有同種合成；
+ *   ②依投入加權會讓丟進去的「不要的種類」更容易回來，也和同種合成的界線變模糊；
+ *   ③排除投入種類會讓「投入越多種、可抽的反而越少」，而且 2 猛攻 + 1 奧術永遠拿不到猛攻，不直覺。
+ *   抽取池預設是 ENGRAVING_TYPES 全部；之後有部位專用或限定階級的刻印時，由呼叫端傳 pool。
+ *   合成本身不擲數值：刻印沒有個體差異，數值是刻到裝備上時才擲（ROLL_MIN～1 × 上限）。
  */
 
 const TIER_SCALE = { 1: 0.20, 2: 0.35, 3: 0.55, 4: 0.78, 5: 1.0 };
 const ROLL_MIN = 0.7;          // 擲值下限（占該階上限的比例）
 const REDUCTION_CAP = 0.5;     // 減傷率合計上限
+const COMBINE_INPUTS = 3;      // 合成一次投入的刻印數
+const MAX_TIER = Math.max(...Object.keys(TIER_SCALE).map(Number));
 
 const line = (kind, extra) => ({ kind, ...extra });
 const stat = (statKey, op, max) => line('stat', { stat: statKey, op, max });
@@ -42,7 +56,7 @@ const ENGRAVING_TYPES = {
 };
 const ENGRAVINGS_PER_ITEM = 2;
 const LINES_PER_ENGRAVING = 3;      // 每種刻印固定的詞綴行數；刻印時落選 1 行、取 2 行
-const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction'];
+const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg'];
 
 // 裝備基底（固定值，第 5 階滿骰）。階級用同一個 TIER_SCALE；擲值同 ROLL_MIN。
 const BASE_BY_SLOT = {
@@ -98,12 +112,34 @@ function rollBase(slot, tier, rng = Math.random) {
   return defs.map(entry => ({ stat: entry.stat, op: entry.op, value: round(entry.stat, entry.op, rolled(entry.max, tier, rng)) }));
 }
 
-/** 加總詞綴裡所有 scope 'effect' 的 physDmg／spellDmg／reduction（減傷夾在上限）。 */
+/** 加總詞綴裡所有 scope 'effect' 的 physDmg／spellDmg／reduction／ailmentDmg（減傷夾在上限）。 */
 function sumEffectAffixes(affixes) {
-  const total = { physDmg: 0, spellDmg: 0, reduction: 0 };
+  const total = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0 };
   for (const affix of affixes) if (affix.scope === 'effect' && affix.kind in total) total[affix.kind] += affix.value;
   total.reduction = Math.min(total.reduction, REDUCTION_CAP);
   return total;
 }
 
-module.exports = { TIER_SCALE, ROLL_MIN, REDUCTION_CAP, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, EFFECT_KINDS, ENGRAVING_TYPES, BASE_BY_SLOT, rollEngraving, rollBase, sumEffectAffixes };
+/**
+ * 決定合成結果（純函式，不碰存檔；扣刻印、加刻印由 saveLayer.combineEngravings 做）。
+ * @param {string[]} types 剛好 COMBINE_INPUTS 個 ENGRAVING_TYPES 的鍵，可重複
+ * @param {number} tier 投入刻印的階級（三顆同階），1～4
+ * @param {() => number} [rng] 預設 Math.random；只有不同種合成會呼叫一次，r 對應 pool[floor(r × 長度)]（超過範圍夾到最後一個）
+ * @param {string[]} [pool] 不同種合成的抽取池，預設 ENGRAVING_TYPES 的所有鍵（表裡的順序）
+ * @returns {{ type: string, tier: number, mode: 'same'|'mixed' }}
+ */
+function rollCombine(types, tier, rng = Math.random, pool = Object.keys(ENGRAVING_TYPES)) {
+  checkTier(tier);
+  if (tier >= MAX_TIER) throw new Error(`第 ${MAX_TIER} 階已經是最高階，不能合成`);
+  if (!Array.isArray(types) || types.length !== COMBINE_INPUTS) {
+    throw new Error(`合成必須剛好投入 ${COMBINE_INPUTS} 顆刻印（收到 ${Array.isArray(types) ? types.length : types}）`);
+  }
+  for (const type of types) if (!ENGRAVING_TYPES[type]) throw new Error(`找不到刻印種類「${type}」`);
+  if (types.every(type => type === types[0])) return { type: types[0], tier: tier + 1, mode: 'same' };
+  if (!Array.isArray(pool) || pool.length === 0) throw new Error('合成的抽取池不能是空的');
+  for (const type of pool) if (!ENGRAVING_TYPES[type]) throw new Error(`抽取池裡有不存在的刻印種類「${type}」`);
+  const index = Math.min(pool.length - 1, Math.max(0, Math.floor(rng() * pool.length)));
+  return { type: pool[index], tier: tier + 1, mode: 'mixed' };
+}
+
+module.exports = { TIER_SCALE, ROLL_MIN, REDUCTION_CAP, COMBINE_INPUTS, MAX_TIER, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, EFFECT_KINDS, ENGRAVING_TYPES, BASE_BY_SLOT, rollEngraving, rollBase, rollCombine, sumEffectAffixes };

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 技能串接寶石資料 v10（3 顆主動寶石 + 12 顆輔助寶石 + 互斥組 + 連結上限）
+ * 技能串接寶石資料 v12（5 顆主動寶石 + 12 顆輔助寶石 + 互斥組 + 連結上限）
  *
  * 純資料、不含函式，可直接 JSON 序列化。
  * 這份檔案只定義「寶石是什麼」；怎麼編譯成 Skill 見 gemCompiler.js。
@@ -140,6 +140,21 @@
  *        沒有引擎可看（例如單獨呼叫 skill.canCast(entity, null)）時，敵人數量的條件視為成立。
  * 另外，寶石可以寫 removeTags: [...]，把主動寶石原本的標籤移除（例如聚焦把 aoe 拿掉）。
  *
+ * ── 異常效果（ailments，寫在主動寶石的 DAMAGE 動作上）──────────────────
+ * action.ailments: [{ kind, basis, power, duration }]：這一段每一次**命中**（造成傷害、目標還活著），對該目標附加一層異常。
+ *   kind      AILMENTS 的鍵（例如 bleed 裂傷）
+ *   basis     每次發作的傷害怎麼算，命中當下結算、之後固定不變；都不暴擊、沒有 ±10% 浮動、不多擲骰：
+ *               'stat'  施放者的有效能力值（同這一段的 stat，預設 atk；含疲勞與 Buff）× power。
+ *                       **不吃**寶石 inc／more、裝備物理／法術傷害提高，也**不看目標防禦**。（裂傷）
+ *               'hit'   這一擊造成的傷害（戰報上那個數字，已含暴擊、浮動、防禦、寶石與裝備加成）× power。（殘刃）
+ *   power     倍率（0.2 = 20%）。編譯時乘上裝備的異常傷害增加：power × (1 + ailmentDmg)（異常自己的加算區，
+ *             與寶石 inc／more、物理／法術傷害提高分開；兩種 basis 都吃，所以殘刃同時吃命中加成與異常加成）。
+ *   duration  持續幾個行動槽。發作在**目標自己的行動槽開始時**（框架的 DOT），槽結束時倒數，所以 3 = 發作 3 次。
+ * 每一層是獨立的 Buff：重複命中就疊加，持續時間各自計算（框架不加 stackPolicy 時同 id 的 Buff 會並存）。
+ * 持續傷害不吃目標的 damageTaken（例如裝備減傷），會被護盾吸收（框架預設）。
+ * 這是被動（施放者身上的 AFTER_DAMAGE_DEALT），要靠 compileLoadout 給的 passives 掛到 Entity 上，沒傳就不會生效。
+ * 異常種類登錄在 AILMENTS（名稱、標籤）；新增一種異常只要在那裡加一行，寶石用 kind 引用。
+ *
  * ── 文字 ──────────────────────────────────────────────────────────
  * action.text 的字串可以使用 {caster} {target} {value} {skill}，
  * 由編譯層展開成框架要的函式（框架本身不會替字串做替換）。
@@ -161,6 +176,12 @@ const GROUPS = {
     name: '消耗取捨',
     desc: '用傷害換消耗（或反過來）的寶石。同時連結會兩邊的好處都拿到，所以同組只能連結一顆。'
   }
+};
+
+// 異常效果登錄表（見檔頭「異常效果」）。目前都是持續傷害（DOT），每次命中獨立疊一層。
+const AILMENTS = {
+  bleed:     { id: 'bleed',     name: '裂傷', tags: ['bleed'] },
+  lingering: { id: 'lingering', name: '殘刃', tags: ['lingering'] }
 };
 
 const ACTIVE_GEMS = {
@@ -194,6 +215,42 @@ const ACTIVE_GEMS = {
         targetType: 'ENEMY_ALL',
         power: 0.9,
         text: { action: '{caster} 揮出旋風斬，' }
+      }
+    ]
+  },
+
+  // 撕裂：物理單體，命中時附加可疊加的裂傷。
+  rend: {
+    id: 'rend',
+    name: '撕裂',
+    tags: ['attack'],
+    spCost: 10,
+    uncounterable: false,
+    actions: [
+      {
+        type: 'DAMAGE',
+        targetType: 'ENEMY_SINGLE',
+        power: 1.2,
+        ailments: [{ kind: 'bleed', basis: 'stat', power: 0.2, duration: 3 }],
+        text: { action: '{caster} 使出撕裂，' }
+      }
+    ]
+  },
+
+  // 追刃：物理單體，命中時附加殘刃（下一個行動槽開始時，再受到一次這一擊的傷害）。
+  pursuit: {
+    id: 'pursuit',
+    name: '追刃',
+    tags: ['attack'],
+    spCost: 15,
+    uncounterable: false,
+    actions: [
+      {
+        type: 'DAMAGE',
+        targetType: 'ENEMY_SINGLE',
+        power: 0.9,
+        ailments: [{ kind: 'lingering', basis: 'hit', power: 1, duration: 1 }],
+        text: { action: '{caster} 使出追刃，' }
       }
     ]
   },
@@ -416,4 +473,4 @@ const SUPPORT_GEMS = {
   }
 };
 
-module.exports = { ACTIVE_GEMS, SUPPORT_GEMS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };
+module.exports = { ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };

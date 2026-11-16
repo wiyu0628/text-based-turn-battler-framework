@@ -13,9 +13,10 @@
  *                 { id: 'eq7', slot, origin: 'drop'|'craft',
  *                   base:    [{ stat, op: 'flat', value }]          基礎數值
  *                   affixes: [{ scope: 'wearer', stat, op, value, source? }      影響穿戴者（與加成層同格式）
- *                            { scope: 'effect', kind, value, source? }           穿戴者全體的非屬性效果：physDmg／spellDmg／reduction（見 affixTable.js）
+ *                            { scope: 'effect', kind, value, source? }           穿戴者全體的非屬性效果：physDmg／spellDmg／reduction／ailmentDmg（見 affixTable.js）
  *                            { scope: 'gems', kind, value, source? }],           影響這件裝備上的寶石（kind 之後設計）
  *                   castWeight: 100,                                             施放權重（10～999），裝備擲出來的結果
+ *                   quality?: 'common'                                           製作裝備的品質（craftTable.QUALITIES 的 id；掉落裝備沒有）
  *                   links:   [{ active, supports: [] }] }                        鑲在這件裝備上的寶石連結
  *               每件裝備一組連結（1 顆主動 + 3 顆輔助），槽數沒有個體差異，所以不存在裝備裡，
  *               而是由 SLOT_RULES 決定。之後主動寶石能放進輔助槽時，只要改 SLOT_RULES（與編譯器），存檔格式不變。
@@ -38,12 +39,17 @@
 
 const { ACTIVE_GEMS, SUPPORT_GEMS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBonuses } = require('./statLayer');
-const { EFFECT_KINDS, sumEffectAffixes } = require('./affixTable');
+const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, sumEffectAffixes, rollCombine, rollEngraving } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
+const { QUALITIES, CRAFT_AFFIX_SLOTS, rollCraft } = require('./craftTable');
 
 const SAVE_VERSION = 1;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
+// 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
+const ENGRAVABLE_ORIGINS = ['craft'];
+const ENGRAVING_SOURCE = /^engraving:([A-Za-z][A-Za-z0-9_]*@[1-5])$/;
+const LINES_PER_ITEM_ENGRAVING = LINES_PER_ENGRAVING - 1;   // 每個刻印刻上去生效的行數（3 取 2）
 const AFFIX_SCOPES = ['wearer', 'gems', 'effect'];
 const PROGRESS_KEYS = ['defeatedBosses', 'unlockedRegions', 'unlockedMonsters'];
 const MIN_DIFFICULTY = 1;
@@ -189,6 +195,19 @@ function validateEquipmentItem(item, where, nextId) {
         if (affix.source !== undefined && typeof affix.source !== 'string') problems.push(`${at}的 source 必須是字串`);
       }
     });
+  }
+
+  if (Array.isArray(item.affixes)) {
+    const lines = item.affixes.filter(affix => isObject(affix) && typeof affix.source === 'string' && ENGRAVING_SOURCE.test(affix.source)).length;
+    if (lines > ENGRAVINGS_PER_ITEM * LINES_PER_ITEM_ENGRAVING) problems.push(`${where}最多只能有 ${ENGRAVINGS_PER_ITEM} 個刻印（${ENGRAVINGS_PER_ITEM * LINES_PER_ITEM_ENGRAVING} 行刻印詞綴），現在有 ${lines} 行`);
+    if (lines && !ENGRAVABLE_ORIGINS.includes(item.origin)) problems.push(`${where}的 origin「${item.origin}」不能有刻印詞綴`);
+    const craftLines = item.affixes.filter(affix => isObject(affix) && typeof affix.source === 'string' && affix.source.startsWith('craft:')).length;
+    if (craftLines > CRAFT_AFFIX_SLOTS) problems.push(`${where}最多只能有 ${CRAFT_AFFIX_SLOTS} 條製作詞綴，現在有 ${craftLines} 條`);
+    if (craftLines && item.origin !== 'craft') problems.push(`${where}的 origin「${item.origin}」不能有製作詞綴`);
+  }
+
+  if (item.quality !== undefined && !QUALITIES.some(quality => quality.id === item.quality)) {
+    problems.push(`${where}的 quality「${item.quality}」不是 ${QUALITIES.map(quality => quality.id).join('、')} 之一`);
   }
 
   if (!(Number.isInteger(item.castWeight) && item.castWeight >= MIN_WEIGHT && item.castWeight <= MAX_WEIGHT)) {
@@ -386,6 +405,113 @@ function removeEngraving(save, type, tier, count = 1) {
 }
 
 /**
+ * 合成刻印：從背包扣掉 3 顆同階刻印，加入 1 顆高一階的刻印（規則見 affixTable.js 的 rollCombine）。
+ * 背包不夠、種類不存在、階級是最高階都丟 SaveError，原存檔不變。回傳 { save, type, tier, mode }。
+ * @param {string[]} types 剛好 3 個刻印種類，可重複（['fury', 'fury', 'fury'] 是同種合成）
+ * @param {number} tier 投入的階級（三顆同階）
+ * @param {() => number} [rng] 只有不同種合成會用到
+ * @param {{ pool?: string[] }} [options] 不同種合成的抽取池（預設全部種類）
+ */
+function combineEngravings(save, types, tier, rng = Math.random, { pool } = {}) {
+  if (!Array.isArray(types)) throw new SaveError('合成的刻印必須是陣列');
+  const keys = types.map(type => stackKey(type, tier));
+  let result;
+  try {
+    result = rollCombine(types, tier, rng, pool);
+  } catch (error) {
+    throw new SaveError(error.message);
+  }
+  const need = {};
+  for (const key of keys) need[key] = (need[key] ?? 0) + 1;
+  return mutate(save, draft => {
+    for (const [key, count] of Object.entries(need)) takeFromStack(draft.engravings, key, count, `刻印「${key}」`);
+    addToStack(draft.engravings, stackKey(result.type, result.tier), 1);
+    return result;
+  });
+}
+
+/**
+ * 把一場的掉落（dropTable.rollDrops 的結果）放進背包：刻印與輔助寶石。
+ * 傳說裝備（drops.legendary）還沒有資料，這裡**不處理**，由呼叫端之後接傳說表。
+ * 內容不合法（未知寶石、刻印格式錯誤）丟 SaveError，原存檔不變。
+ */
+function grantDrops(save, drops) {
+  if (!isObject(drops)) throw new SaveError('掉落必須是物件');
+  const { engravings = [], supportGems = [] } = drops;
+  if (!Array.isArray(engravings) || !Array.isArray(supportGems)) throw new SaveError('掉落的 engravings 與 supportGems 必須是陣列');
+  const keys = engravings.map(entry => stackKey(entry?.type, entry?.tier));
+  supportGems.forEach(requireGem);
+  return mutate(save, draft => {
+    for (const key of keys) addToStack(draft.engravings, key, 1);
+    for (const gemId of supportGems) addToStack(draft.gems, gemId, 1);
+  });
+}
+
+/**
+ * 製作裝備：從背包扣掉 10 個刻印（種類與階級可混），產生一件 origin 'craft' 的裝備（規則見 craftTable.js）。
+ * 回傳 { save, id, quality }。背包不夠、刻印不存在、部位不對都丟 SaveError，原存檔不變。
+ * 裝備帶 1 條製作詞綴（craftTable.CRAFT_AFFIXES），之後還能另外刻 2 個刻印。
+ * @param {string} slot weapon／helmet／armor／boots
+ * @param {{ type: string, tier: number }[]} engravings 剛好 10 個
+ * @param {() => number} [rng]
+ */
+function craftEquipment(save, slot, engravings, rng = Math.random) {
+  if (!SLOTS.includes(slot)) throw new SaveError(`部位「${slot}」不是 ${SLOTS.join('、')} 之一`);
+  if (!Array.isArray(engravings)) throw new SaveError('製作的刻印必須是陣列');
+  const keys = engravings.map(entry => stackKey(entry?.type, entry?.tier));
+  let crafted;
+  try {
+    crafted = rollCraft(slot, engravings, rng);
+  } catch (error) {
+    throw new SaveError(error.message);
+  }
+  const need = {};
+  for (const key of keys) need[key] = (need[key] ?? 0) + 1;
+  return mutate(save, draft => {
+    for (const [key, count] of Object.entries(need)) takeFromStack(draft.engravings, key, count, `刻印「${key}」`);
+    const id = `eq${draft.meta.nextId++}`;
+    draft.equipment.push({ id, slot, origin: 'craft', base: crafted.base, affixes: crafted.affixes, castWeight: crafted.castWeight, quality: crafted.quality, links: [] });
+    return { id, quality: crafted.quality };
+  });
+}
+
+/**
+ * 一件裝備上已刻的刻印（「種類@階級」，依刻上去的順序）。由詞綴的 source（engraving:種類@階級）推得，
+ * 每個刻印固定 2 行，所以不用另外存欄位。
+ */
+function itemEngravings(item) {
+  const keys = (item?.affixes ?? []).map(affix => ENGRAVING_SOURCE.exec(affix?.source ?? '')?.[1]).filter(Boolean);
+  const result = [];
+  for (let i = 0; i < keys.length; i += LINES_PER_ITEM_ENGRAVING) result.push(keys[i]);
+  return result;
+}
+
+/**
+ * 把背包裡的 1 個刻印刻到現有裝備上：扣 1 個刻印，擲出 2 行詞綴（3 取 2，數值隨機，見 affixTable.rollEngraving）加到裝備的 affixes 後面。
+ * 每件最多 ENGRAVINGS_PER_ITEM（2）個，可以是同一種；**已刻的不能覆蓋**（清除重刻尚未決定）。
+ * 只有 ENGRAVABLE_ORIGINS（製作裝備）能刻；穿戴中、鑲著寶石的裝備也能刻。
+ * 回傳 { save, affixes（這次新增的行）}；失敗丟 SaveError，原存檔不變。
+ */
+function engraveEquipment(save, id, type, tier, rng = Math.random) {
+  const key = stackKey(type, tier);
+  return mutate(save, draft => {
+    const item = findItem(draft, id);
+    if (!ENGRAVABLE_ORIGINS.includes(item.origin)) throw new SaveError(`裝備「${id}」是${item.origin === 'drop' ? '掉落的傳說裝備' : `「${item.origin}」裝備`}，不能刻刻印`);
+    const current = itemEngravings(item);
+    if (current.length >= ENGRAVINGS_PER_ITEM) throw new SaveError(`裝備「${id}」已經有 ${ENGRAVINGS_PER_ITEM} 個刻印（${current.join('、')}），不能再刻`);
+    takeFromStack(draft.engravings, key, 1, `刻印「${key}」`);
+    let lines;
+    try {
+      lines = rollEngraving(type, tier, rng);
+    } catch (error) {
+      throw new SaveError(error.message);
+    }
+    item.affixes.push(...lines);
+    return { affixes: structuredClone(lines) };
+  });
+}
+
+/**
  * 新增一件裝備並配發 id。新裝備不帶寶石（links 必須是空的）：寶石要用 setLinks 從背包鑲上去，
  * 才不會憑空多出寶石。回傳 { save, id }。
  * @param {object} item { slot, origin, base, affixes, castWeight? }（不要自己寫 id；castWeight 沒寫就是 DEFAULT_WEIGHT）
@@ -485,7 +611,7 @@ function equippedBonuses(save) {
 }
 
 /**
- * 穿戴中的裝備提供的非屬性效果總和：{ physDmg, spellDmg, reduction }（scope 為 effect 的詞綴；減傷已夾在上限）。
+ * 穿戴中的裝備提供的非屬性效果總和：{ physDmg, spellDmg, reduction, ailmentDmg }（scope 為 effect 的詞綴；減傷已夾在上限）。
  * 傳給 compileLoadout 的 options.equipment；或直接用 compileEquipped。
  */
 function equippedEffects(save) {
@@ -564,9 +690,9 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 }
 
 module.exports = {
-  SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, MIGRATIONS, SaveError,
+  SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, MIGRATIONS, SaveError,
   createEmptySave, validateSave, migrateSave, exportSave, importSave,
-  addGems, removeGems, addEngraving, removeEngraving, addEquipment, removeEquipment, setLinks, equip, unequip,
+  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, engraveEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip,
   setDifficulty, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };

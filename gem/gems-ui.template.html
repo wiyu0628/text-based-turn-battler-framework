@@ -407,6 +407,11 @@ if (typeof structuredClone !== 'function') window.structuredClone = function (va
       gem.actions.forEach(function (action) {
         ul.appendChild(h('li', { class: 'k-effect', text:
           (TYPE[action.type] || action.type) + '・' + (TARGET[action.targetType] || action.targetType || '預設目標') + (action.power ? '・威力 ' + action.power : '') }));
+        (action.ailments || []).forEach(function (ailment) {
+          var info = (G.AILMENTS || {})[ailment.kind] || { name: ailment.kind };
+          var basis = ailment.basis === 'hit' ? '這一擊傷害的 ' : (action.stat === 'int' ? '智力的 ' : '攻擊力的 ');
+          ul.appendChild(h('li', { class: 'k-proc', text: '命中時附加「' + info.name + '」：目標行動槽開始時受到' + basis + Math.round(ailment.power * 100) + '%，持續 ' + ailment.duration + ' 槽（可疊加，各層分別計時）' }));
+        });
       });
       activeCard.appendChild(h('div', { class: 'gem' }, h('h3', {}, gem.name, h('span', { class: 'id', text: id })), chips, ul));
     });

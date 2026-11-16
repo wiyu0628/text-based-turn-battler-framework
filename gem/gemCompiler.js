@@ -7,7 +7,7 @@
  * 你的專案裡把下面的 require 換成 require('text-based-turn-battler-framework')。
  */
 const { Skill, Buff, random } = require('../src');
-const { ACTIVE_GEMS, SUPPORT_GEMS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
+const { ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBuffBonuses, statModifier } = require('./statLayer');
 
 class GemLinkError extends Error {
@@ -329,6 +329,54 @@ function buildProcPassive(skillId, proc) {
   };
 }
 
+// ── 異常效果（裂傷等持續傷害）──────────────────────────────
+
+const AILMENT_BASES = new Set(['stat', 'hit']);
+
+// 檢查動作上的 ailments（見 gems.js 檔頭「異常效果」）；資料有誤直接丟錯。
+function checkAilments(action, where) {
+  if (action.ailments === undefined) return;
+  if (action.type !== 'DAMAGE') throw new Error(`${where}：ailments 只能寫在 DAMAGE 動作上`);
+  if (!Array.isArray(action.ailments) || !action.ailments.length) throw new Error(`${where}：ailments 必須是非空陣列`);
+  for (const ailment of action.ailments) {
+    if (!Object.hasOwn(AILMENTS, ailment?.kind)) throw new Error(`${where}：找不到異常效果「${ailment?.kind}」（見 gems.js 的 AILMENTS）`);
+    if (!AILMENT_BASES.has(ailment.basis)) throw new Error(`${where}：異常效果的 basis 必須是 'stat' 或 'hit'（收到「${ailment.basis}」）`);
+    if (!(Number.isFinite(ailment.power) && ailment.power > 0)) throw new Error(`${where}：異常效果的 power 必須是大於 0 的有限數字`);
+    if (!(Number.isInteger(ailment.duration) && ailment.duration >= 1)) throw new Error(`${where}：異常效果的 duration 必須是 1 以上的整數`);
+  }
+}
+
+// 命中當下結算的每次發作傷害（不暴擊、不浮動）：
+//   stat  施放者有效能力值 × power（不吃寶石與裝備的傷害加成、不看防禦）
+//   hit   這一擊的傷害（戰報數字，hit.damage）× power
+function ailmentDamage(caster, hit, ailment) {
+  const base = ailment.basis === 'hit' ? hit.damage : caster.getEffectiveStats()[hit.action.stat ?? 'atk'];
+  return Math.max(1, Math.floor(base * ailment.power));
+}
+
+// 每次命中（AFTER_DAMAGE_DEALT：造成傷害且目標還活著）對目標疊一層異常；讀的是這一擊所屬動作上的 gemAilments。
+function buildAilmentPassive(skillId) {
+  return {
+    gemSkillId: skillId,
+    trigger: 'AFTER_DAMAGE_DEALT',
+    enabled: (self, hit) => self.isAlive && hit.skill?.id === skillId && Array.isArray(hit.action?.gemAilments),
+    action(self, hit, logger, engine) {
+      const target = hit.target;
+      if (!target?.isAlive) return;
+      for (const ailment of hit.action.gemAilments) {
+        const def = AILMENTS[ailment.kind];
+        const value = ailmentDamage(self, hit, ailment);
+        // 不加 stackPolicy：同 id 的 Buff 並存，每層各自倒數（重複獲得可疊加、持續時間分別計算）。
+        const buff = target.addBuff({ id: `gem_ailment:${ailment.kind}`, name: def.name, type: 'DOT', duration: ailment.duration, value,
+          polarity: 'negative', dispellable: true, tags: [...(def.tags ?? [])] }, engine);
+        if (buff === false) continue;
+        logger.addLog({ type: 'BUFF_APPLY', actorId: self.id, skillId, isNormalAttack: false, targetId: target.id, value,
+          message: `${target.name} 陷入「${def.name}」！` });
+      }
+    }
+  };
+}
+
 // ── 角色層級的被動（佈局、撒手鐧）──────────────────────────
 
 // 從候選裡隨機挑一個；只有一個時不擲骰（不多吃亂數）。
@@ -519,6 +567,7 @@ function compileSkill(activeId, supportIds = [], {
   assertValidGemData(supportGems, groups);
   const active = activeGems[activeId];
   if (!active) throw new GemLinkError(activeId, '找不到這顆主動寶石');
+  active.actions.forEach((action, index) => checkAilments(action, `主動寶石「${activeId}」第 ${index + 1} 段`));
   if (active.id !== activeId) throw new Error(`主動寶石「${activeId}」的 id（${active.id}）與登錄的鍵不一致；技能 id 是用鍵組出來的，改 id 時鍵要一起改`);
   // 數量上限先檢查，指出「第一顆放不下」的那一顆（照傳入順序）。這是整組的錯，只有這則提示會看順序。
   if (supportIds.length > maxSupports) {
@@ -655,7 +704,15 @@ function compileSkill(activeId, supportIds = [], {
   // 緊接在後的原本第一個動作必須重新挑目標：框架預設沿用上一個動作的目標，不處理的話傷害會打到自己。
   const actions = [...draft.prepended, ...draft.actions, ...draft.appended].map(action => {
     const next = withStatEffects(expandText(action));
-    if (next.type === 'DAMAGE') next.power = round4((next.power ?? 1) * damageFactorOf(next, incSum, moreProduct, equip));
+    if (next.type === 'DAMAGE') {
+      next.power = round4((next.power ?? 1) * damageFactorOf(next, incSum, moreProduct, equip));
+      // 資料欄位 ailments 不送進框架，改放 gemAilments 給被動讀。倍率不乘命中的傷害加成，
+      // 只乘裝備的異常傷害增加（自己一個加算區）；basis 'hit' 讀的命中傷害本身已含命中的加成（使用者決定兩者都吃）。
+      if (next.ailments) {
+        next.gemAilments = next.ailments.map(ailment => ({ ...ailment, power: round4(ailment.power * (1 + equip.ailmentDmg)) }));
+        delete next.ailments;
+      }
+    }
     return next;
   });
   if (draft.prepended.length && draft.actions.length) {
@@ -685,7 +742,8 @@ function compileSkill(activeId, supportIds = [], {
     const skill = makeSkill({ id, name: active.name, tags: [...tags], actions: [shellAction] }, conditions);
     return {
       skill, release, charge: { markerId, release },
-      passives: [...draft.reactions.map(reaction => buildPassive(releaseId, reaction)), ...draft.procs.map(proc => buildProcPassive(releaseId, proc))],
+      passives: [...draft.reactions.map(reaction => buildPassive(releaseId, reaction)), ...draft.procs.map(proc => buildProcPassive(releaseId, proc)),
+        ...(actions.some(action => action.gemAilments) ? [buildAilmentPassive(releaseId)] : [])],
       grants: draft.grants, conditions, spCost, damageFactor: round4(factor), links: ids
     };
   }
@@ -695,22 +753,23 @@ function compileSkill(activeId, supportIds = [], {
   // 前置動作（例如爆擊強化的提示）排在技能那一行之前；佈局的開頭文字要接在技能那一行，不能接在前置動作上。
   skill.gemLeadIndex = draft.prepended.length;
   skill.gemSlotBuffIds = slotBuffIds(actions);
-  const passives = [...draft.reactions.map(reaction => buildPassive(id, reaction)), ...draft.procs.map(proc => buildProcPassive(id, proc))];
+  const passives = [...draft.reactions.map(reaction => buildPassive(id, reaction)), ...draft.procs.map(proc => buildProcPassive(id, proc)),
+    ...(actions.some(action => action.gemAilments) ? [buildAilmentPassive(id)] : [])];
   return { skill, release: null, charge: null, passives, grants: draft.grants, conditions, spCost, damageFactor: round4(factor), links: ids };
 }
 
 // ── 裝備的非屬性效果 ────────────────────────────────────────
 
 /**
- * 檢查 options.equipment：{ physDmg?, spellDmg?, reduction? }，都是不小於 0 的有限數字（reduction 還要小於 1）。
+ * 檢查 options.equipment：{ physDmg?, spellDmg?, reduction?, ailmentDmg? }，都是不小於 0 的有限數字（reduction 還要小於 1）。
  * 沒給就是全部 0。回傳補齊的物件。
  */
 function checkEquipment(equipment) {
-  const result = { physDmg: 0, spellDmg: 0, reduction: 0 };
+  const result = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0 };
   if (equipment === null || equipment === undefined) return result;
   if (typeof equipment !== 'object' || Array.isArray(equipment)) throw new Error('options.equipment 必須是物件');
   for (const key of Object.keys(equipment)) {
-    if (!(key in result)) throw new Error(`options.equipment 沒有「${key}」這個欄位（只有 physDmg、spellDmg、reduction）`);
+    if (!(key in result)) throw new Error(`options.equipment 沒有「${key}」這個欄位（只有 physDmg、spellDmg、reduction、ailmentDmg）`);
     const value = equipment[key];
     if (!(typeof value === 'number' && Number.isFinite(value) && value >= 0)) throw new Error(`options.equipment.${key} 必須是不小於 0 的有限數字（收到 ${value}）`);
     result[key] = value;
@@ -869,7 +928,8 @@ function buildWeightGuardPassive() {
  * 被動物件帶有戰鬥狀態，所以「每場戰鬥」都要重新呼叫一次，不要在多場戰鬥之間共用。
  * @param {{ active: string, supports?: string[], weight?: number }[]} gems 每個元素是一顆主動寶石與它連結的輔助寶石，
  *   以及選填的施放權重 weight（MIN_WEIGHT～MAX_WEIGHT 的整數，預設 DEFAULT_WEIGHT；見 gems.js 的「施放權重」）
- * @param {object} [options] 同 compileSkill 的 options；另有 equipment: { physDmg, spellDmg, reduction }（裝備的非屬性效果，見 affixTable.js）
+ * @param {object} [options] 同 compileSkill 的 options；另有 equipment: { physDmg, spellDmg, reduction, ailmentDmg }（裝備的非屬性效果，見 affixTable.js）
+ *   ailmentDmg 乘在每個異常效果的倍率上：power × (1 + ailmentDmg)（異常自己的加算區）
  *   physDmg／spellDmg 進每段傷害的加算區；reduction 變成開戰時掛上的常駐減傷 Buff（passives 裡多一個 gem_equipment_reduction）
  * @returns {{ skills: Skill[], passives: object[], resolver: Function, weights: object, releaseSkills: Skill[], compiled: object[] }}
  *   resolver       給 BattleEngine 的 skillSelectionResolver：蓄力的釋放（先問）加上依權重選招。

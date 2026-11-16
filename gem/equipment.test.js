@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { Entity, Skill, BattleEngine, Formulas } = require('../src');
+const { Entity, Skill, BattleEngine, Formulas, createSeededRandom } = require('../src');
 const { compileLoadout, compileSkill } = require('./gemCompiler');
 const save = require('./saveLayer');
 const { rollEngraving, rollBase } = require('./affixTable');
@@ -54,8 +54,8 @@ function battle(t, reduction) {
   const hero = new Entity({ id: 'h', name: 'h', team: 'A', normalAttack: strike('na'), skills: loadout.skills, passives: loadout.passives,
     stats: { hp: 100000, maxHp: 100000, sp: 100, atk: 10, spd: 100 } });
   const foe = new Entity({ id: 'f', name: 'f', team: 'B', normalAttack: strike('fa'),
-    stats: { hp: 1e9, maxHp: 1e9, sp: 100, atk: 10, spd: 1 } });
-  const engine = new BattleEngine([hero], [foe], { maxTurns: 6, skillSelectionResolver: loadout.resolver });
+    stats: { hp: 1e9, maxHp: 1e9, sp: 100, atk: 10, spd: 100 } });
+  const engine = new BattleEngine([hero], [foe], { maxTurns: 6, rng: createSeededRandom(7), skillSelectionResolver: loadout.resolver });
   engine.start();
   return { hero, loadout, foeHits: engine.logger.logs.filter(l => l.type === 'DAMAGE' && l.actorId === 'f').length };
 }
@@ -110,7 +110,7 @@ test('equippedEffects sums equipped items only, with reduction capped', () => {
   assert.ok(Math.abs(fx.physDmg - 0.24) < 1e-9);          // 12% × 2
   assert.ok(Math.abs(fx.reduction - 0.115) < 1e-9);       // 5% + 6.5%
   assert.equal(fx.spellDmg, 0);
-  assert.deepEqual(save.equippedEffects(fresh()), { physDmg: 0, spellDmg: 0, reduction: 0 });
+  assert.deepEqual(save.equippedEffects(fresh()), { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0 });
 });
 
 test('compileEquipped wires links, damage bonus and reduction in one step', () => {
