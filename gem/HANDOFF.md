@@ -16,7 +16,7 @@ node gem/gems-quickstart.js | tail -2
 node gem/gems-ui-build.js
 ```
 
-**預期**：`npm test` 590 項全過；`gem/` 內 `castWeight.test.js` 22、`gems.test.js` 94、`ailment.test.js` 13、`statLayer.test.js` 42、`spell.test.js` 12、`saveLayer.test.js` 47、`affixTable.test.js` 12、`equipment.test.js` 12、`combine.test.js` 8、`dropTable.test.js` 8、`craft.test.js` 12、`engrave.test.js` 6；`tests/uncritable.test.js` 8、`tests/ignoreDefenseRatio.test.js` 5；UI 打包成功（15 個模組）。
+**預期**：`npm test` 605 項全過；`gem/` 內 `castWeight.test.js` 22、`gems.test.js` 94、`ailment.test.js` 14、`spRegen.test.js` 3、`statLayer.test.js` 42、`spell.test.js` 12、`saveLayer.test.js` 47、`affixTable.test.js` 12、`equipment.test.js` 12、`combine.test.js` 8、`dropTable.test.js` 9、`legendary.test.js` 9、`craft.test.js` 13、`engrave.test.js` 6；`tests/uncritable.test.js` 8、`tests/ignoreDefenseRatio.test.js` 5；UI 打包成功（15 個模組）。
 
 **如果結果不同，先判斷是哪一種情況：**
 
@@ -49,8 +49,9 @@ node gem/gems-ui-build.js
 | `affixTable.js` | **刻印詞綴表**（第 3-D 節）：7 種刻印、階級縮放、裝備基底、擲值函式 `rollEngraving`／`rollBase`、合成結果 `rollCombine`（3-D-7）、`sumEffectAffixes`；純資料＋函式，不依賴框架 |
 | `dropTable.js` | **掉落表**（3-D-8）：各難度刻印階級權重 `TIER_WEIGHTS`、刻印數量、輔助寶石與傳說裝備機率；`dropRates(難度)`、`rollDrops(難度, rng)`。存檔層 `grantDrops(save, drops)` 把刻印與寶石放進背包 |
 | `craftTable.js` | **裝備製作表**（3-D-9）：10 個刻印 → 基底（刻印偏向 × 階級 × 品質 × 部位倍率）與施放權重；`rollCraft`、`rawBase`、`rollQuality`。存檔層 `craftEquipment(save, slot, engravings, rng)` |
+| `legendaryTable.js` | **傳說裝備表**（3-F）：`LEGENDARIES`（目前只有報喪法杖）、`rollLegendary`、`pickLegendary`、`mechanicsOf`。存檔層 `addLegendary`、`grantDrops(save, drops, { difficulty, rng })`、`equippedAttackStat` |
 | `affix-budget.js` | 預算驗證腳本：`node gem/affix-budget.js`（舊版固定基底）或 `--craft`（基底改用製作，配置見 `CRAFT_MIX`）（repo 根目錄；約 2 分鐘；隨機取行，種子固定所以可重現）。用真正的編譯器接線跑「滿裝 vs 空手」涵蓋倍率；每套配置隨機抽 30 組裝備，約 1.5 分鐘 |
-| `gems.test.js`、`statLayer.test.js`、`castWeight.test.js`、`spell.test.js`、`saveLayer.test.js`、`affixTable.test.js`、`equipment.test.js`、`combine.test.js`、`dropTable.test.js`、`craft.test.js`、`engrave.test.js`、`ailment.test.js` | 94／42／22／12／47／12／12／8／8／12／6／13 項測試 |
+| `gems.test.js`、`statLayer.test.js`、`castWeight.test.js`、`spell.test.js`、`saveLayer.test.js`、`affixTable.test.js`、`equipment.test.js`、`combine.test.js`、`dropTable.test.js`、`craft.test.js`、`engrave.test.js`、`ailment.test.js`、`legendary.test.js`、`spRegen.test.js` | 94／42／22／12／47／12／12／8／9／13／6／14／9／3 項測試 |
 | `gems-quickstart.js` | `node gem/gems-quickstart.js [主動寶石] [輔助寶石…]`（會印出空訊息的 BUFF_APPLY 行，使用者說不用處理） |
 | `gems-balance.js` | 平衡模擬腳本（選項：`--battles --turns --cast --sp --attack-sp --active --exclude-active --exclude-support --lock --max-supports --top --csv`） |
 | `gems-ui.template.html`、`gems-ui-build.js` | 產生 `gems-ui.html`（單一檔案，瀏覽器直接開）。寶石或編譯器改了就重新 `node gem/gems-ui-build.js` |
@@ -236,6 +237,28 @@ node gem/gems-ui-build.js
    - 存檔驗證：製作詞綴最多 1 條、只有製作裝備能有。
    - **粗估價值**（空手勇者、只連主動寶石、`skillCastRate` 0.35，hp 與 atk 同比例放大的怪）：異常 +85% 讓涵蓋倍率 撕裂 ×1.085、追刃 ×1.11；同樣 +85% 的物理傷害提高是 ×1.15、×1.23。換算一條製作詞綴約等於 1 條刻印的物理傷害提高。製作詞綴是**在 ×5 預算之外多出來的**，異常 build 滿裝約多 8～11%；`affix-budget.js --craft` 的物理／法術 build 不受影響（平均 ×4.94～5.16）。
 
+### F. 第七版新增（命中與閃避、傳說裝備、普攻屬性）
+
+1. **命中與閃避公式（框架現有，已確認）**：命中率 = 技能 accuracy（預設 1）+ `hit`/100 − `eva`/(`eva`+100)，夾在 10%～100%。
+   - 命中只能抵銷閃避（上限 100%）；目前雙方閃避都是 0，命中詞綴要等怪物有閃避才有用。閃避 20 ≈ 16.7% 打空，約等於有效生命 ×1.2。
+   - 框架已支援 `hit`、`eva` 屬性；要做成詞綴只需在 `statLayer.js` 的 `STAT_DEFS` 加兩行（**還沒加**）。
+2. **傳說裝備（使用者決定，已實作於 `gem/legendaryTable.js`）**：
+   - 只從掉落取得，**目前只有武器**；存檔是 `origin: 'drop'` ＋ `legendaryId`。**不能刻刻印、沒有製作詞綴**。
+   - 數值：每件有上限（第 5 階滿骰），掉落時乘**該難度已開放的最高階**的縮放（`dropTable.openTier`：1～2→1、3～6→2、7～9→3、10～12→4、13～15→5；3% 預覽不算），再擲 0.7～1.0。基底與獨有詞綴都這樣擲（獨有詞綴也縮放是我的決定）。施放權重 70～100。
+   - 獨有詞綴兩種格式：屬性（`scope: 'wearer'`）、非屬性效果（`scope: 'effect'`）。
+   - **特殊機制**寫成程式、依 `legendaryId` 在編譯時查表（存檔不存，改表不用遷移）：
+     - `grantSupport`：這件裝備上的主動寶石**額外**具有某輔助寶石，**不佔連結位、不算進 3 顆上限**；玩家已連同一顆就不重複；不相容（條件不符、互斥）時自動不套用（例如治癒術不吃增幅）。技能 id 會包含它（`magicmissile+amp`）。
+     - `castOnEnemyDeath`：敵人倒下時，插隊多一個行動槽釋放這件裝備上的主動寶石一次，**不扣 SP（我的決定）**、被沉默時不放。框架沒有「倒下」的被動事件，改在 `AFTER_ACTION`（每槽結束，含插隊槽）與 `ROUND_START` 檢查新倒下的敵人：行動中打倒的在同槽結束時觸發；被持續傷害在自己行動槽開頭打倒的，要到下一個行動槽結束才觸發（晚一槽）。**最後一個敵人倒下時戰鬥已結束，所以單隻怪的戰鬥永遠不會觸發**。連鎖會再觸發，上限是敵人數量。蓄力的寶石放的是本體。
+   - **報喪法杖 omen**（使用者設計，數值我擬）：普攻吃智力；基底 INT +240；獨有 INT +30%；敵人倒下時釋放一次裝備的主動寶石（戰報「勇者 手中的報喪法杖為 史萊姆2 敲響喪鐘！」）；裝備的主動寶石具有增幅。**還沒做預算驗證**。
+   - `grantDrops` 現在會處理傳說裝備，掉落裡有傳說裝備時**必須傳 `{ difficulty }`**，沒傳報錯（不默默丟掉）。`addLegendary(save, id, difficulty, rng)` 給測試或王的獎勵用。
+3. **普攻屬性（使用者決定）**：武器的 `attackStat`（`'atk'`／`'int'`）決定普攻吃哪個屬性；沒穿武器是 `atk`。製作武器時玩家選（`craftEquipment(..., rng, { attackStat })`，預設 `atk`，其他部位不能寫）；傳說武器每件固定。`compileEquipped` 回傳多一個 `normalAttackStat`，**普攻 Skill 由遊戲自己建立**（傷害段寫 `stat`）。只改屬性：吃智力的普攻**仍可暴擊、可被反擊**（不算法術，我的解讀）。
+
+4. **製作詞綴第二、三種（使用者選，數值我擬，已實作）**：三種平均抽（各 1/3）。
+   - **異常持續時間 `ailmentDuration`**：固定 +1 槽（不縮放、不擲值，但 rng 照樣呼叫一次）；整套合計上限 `AILMENT_DURATION_CAP = 2`（我的決定）；`AILMENTS` 標 `extendable: false` 的不受影響——**殘刃不延長**（我的決定：殘刃是「下一槽再打一次 100%」，延長會讓它重複多次）。裂傷 3 → 最多 5 槽。
+   - **行動回復 SP `spRegen`**：每個**自己的**行動槽結束時（`AFTER_ACTION` 且 actor 是自己；喘息的槽不算）回復；上限 1 點（第 5 階滿骰）× 平均階級縮放 × 0.7～1.0，小數累積到下次；**不寫戰報**（框架 `restoreSp` 只同步疲勞）。
+   - 模擬（滿裝、只改 spRegen）：物理每槽 1 點 ×1.04、2 點 ×1.067、3 點以上約 ×1.08 飽和；**法術沒有影響**（SP 415，本來就用不完）。所以上限從 1.5 降到 1。`affix-budget.js --craft` 物理 build 從 ×4.95～5.16 升到 ×5.12～5.29（因為製作詞綴可能抽到 SP 回復），法術不變。
+5. **命中與閃避：使用者要改 `src/` 的公式並放進刻印**（尚未開始，等使用者給新公式；動 `src/` 要依 AGENTS.md：新公式必須是可選的，沒用到時既有戰鬥一字不差）。
+
 ## 4. 被否決或放棄的方案
 
 **第五版：**
@@ -273,9 +296,9 @@ node gem/gems-ui-build.js
 5. **刻印取得與合成**：掉落表（3-D-8）與裝備製作（3-D-9）已完成，數字佔位；刻印刻到裝備上也已完成（3-D-10）；製作詞綴已有第一條（3-E-5），**之後要加更多種類**；**清除重刻要不要做**；`origin: 'drop'` 之後是否改名為傳說；刻印之間的合成已完成（3-D-7）；各部位專用刻印（目前 7 種刻印對所有部位通用）；存檔裡 `scope: 'gems'` 詞綴的 `kind`；異常狀態傷害／持續時間與命中／閃避詞綴（延後）。**詞綴表與接線已完成，見 3-D。**
 6. **難度 1～15 的縮放公式**：防禦減傷是 `300/(def+300)`，縮放過陡會讓曲線失控，要先算過。
 7. **怪物如何選招與新技能**：框架預設每個行動槽先抽 `skillCastRate`（35%），再從可用技能均等抽。怪物若用法術要有 `int`。
-8. **掉落表要用實際刷取速度驗證**（等合成裝備規則定了再模擬「湊滿一套要幾場」）；**傳說裝備的內容與傳說表**；**王的額外獎勵、存檔最終位置**（目前暫定瀏覽器 localStorage，adapter 可換）。
+8. **掉落表要用實際刷取速度驗證**（等合成裝備規則定了再模擬「湊滿一套要幾場」）；傳說裝備系統已完成（3-F），**之後要加更多傳說裝備（含其他部位）**；**王的額外獎勵、存檔最終位置**（目前暫定瀏覽器 localStorage，adapter 可換）。
 9. **輔助寶石是否也能改權重**，以及**主動寶石放進輔助槽時的編譯行為**（存檔層已留好 `SLOT_RULES`，編譯器端等設計）。
-10. **武器如何決定普攻吃 `atk` 或 `int`**、怪物的物理與法術數值怎麼配（框架已支援，是遊戲層設計）。
+10. 武器決定普攻屬性已完成（3-F-3）；**怪物的物理與法術數值怎麼配**（遊戲層設計）。
 11. **`damageFactor` 不含裝備**：UI 想顯示最終倍率要自己把裝備提高加進加算區；要不要把它併進編譯結果待定。裝備傷害提高目前只影響寶石技能、不影響普攻（普攻與武器如何決定吃 atk／int 屬於第 10 項）。
 12. **平衡數字還沒用真實怪物驗證**：5 倍目標是用「hp 與 atk 同比例放大的怪」量的；實際怪物的 SP、疲勞、技能組成會改變結果。第三階段做完掉落表、第四階段做怪物時要再跑一次 `affix-budget.js`。
 13. **版本與 tag**：`CHANGELOG.md` 有 1.0.57（`uncritable`）與 1.0.58（穿甲比例）兩條，依 `AGENTS.md` 流程 commit 後要各打 tag `v1.0.N`；目前還沒打，也沒補 `examples/`。
@@ -327,5 +350,27 @@ node gem/gems-ui-build.js
 
 1. 完成第 0 節的 clone 與驗證，確認狀態。
 2. 讀 `gem/gems.js` 檔頭註解與 `AGENTS.md`；要碰存檔時再讀 `gem/saveLayer.js` 檔頭。
-3. 向使用者回報驗證結果，確認下一步（依第 3-B-8 節，是第三階段：**刻印 → 裝備 → 掉落表**）。詞綴表、裝備基底與編譯器／戰鬥接線已完成（3-D）；刻印合成（3-D-7）、掉落表（3-D-8）、裝備製作（3-D-9）、刻印刻到裝備（3-D-10）也已完成；接下來是製作詞綴內容、傳說裝備，之後模擬刷取速度（見第 5 節 4、5、8 項）。
+3. 向使用者回報驗證結果，確認下一步（依第 3-B-8 節，是第三階段：**刻印 → 裝備 → 掉落表**）。詞綴表、裝備基底與編譯器／戰鬥接線已完成（3-D）；刻印合成（3-D-7）、掉落表（3-D-8）、裝備製作（3-D-9）、刻印刻到裝備（3-D-10）、傳說裝備與普攻屬性（3-F）也已完成；接下來照下面的「待辦順序」第 3 項開始。
 4. 若使用者想先處理小項目：爆擊強化連到法術要不要禁止（第 5 節 2）、各技能獨立爆擊率（第 5 節 3）、補打 tag（第 5 節 11）。
+
+## 9. 待辦順序（使用者核定的第一版，2026-11-16；「輪」≈ 一次決定＋實作＋交付）
+
+**第三階段：收尾裝備系統**
+1. ✅ 傳說裝備（系統＋報喪法杖）
+2. ✅ 武器決定普攻屬性
+3. ✅ 更多製作詞綴：異常持續時間、行動回復 SP（3-F-4）。**命中／閃避改成「改 `src/` 公式＋放進刻印」**（3-F-5，進行中，等使用者給公式）
+4. **清除重刻**（要不要做、代價）——約 1 輪
+5. **飾品**（提供被動）、**部位專用刻印**——約 3 輪
+6. **刷取速度模擬**，調整掉落與合成——約 1 輪
+
+**第四階段：遊戲內容**
+7. 難度 1～15 縮放公式（先算防禦曲線）——約 2 輪
+8. 地區與怪物（屬性、技能、選招、物法）——約 5 輪
+9. 新怪與舊怪新技能的解鎖——約 2 輪
+10. 王（按鈕、新王解鎖、額外獎勵）——約 3 輪
+
+**第五階段：介面與平衡**
+11. 正式遊戲介面（接存檔：背包、裝備、寶石、刻印、合成、戰鬥）——約 8～12 輪
+12. 整體平衡（真實怪物重跑預算，含撕裂、追刃、報喪法杖）——約 4 輪
+
+**隨時可插入（選做）**：爆擊強化連到法術要不要禁止；各技能獨立爆擊率；UI 最終倍率含裝備；輔助寶石改權重與主動寶石進輔助槽；連擊、觸發類寶石；補打 tag `v1.0.57`／`v1.0.58`（使用者本機）；隊伍玩法的已知限制。

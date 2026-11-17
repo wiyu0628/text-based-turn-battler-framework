@@ -149,7 +149,7 @@
  *               'hit'   這一擊造成的傷害（戰報上那個數字，已含暴擊、浮動、防禦、寶石與裝備加成）× power。（殘刃）
  *   power     倍率（0.2 = 20%）。編譯時乘上裝備的異常傷害增加：power × (1 + ailmentDmg)（異常自己的加算區，
  *             與寶石 inc／more、物理／法術傷害提高分開；兩種 basis 都吃，所以殘刃同時吃命中加成與異常加成）。
- *   duration  持續幾個行動槽。發作在**目標自己的行動槽開始時**（框架的 DOT），槽結束時倒數，所以 3 = 發作 3 次。
+ *   duration  持續幾個行動槽；編譯時加上裝備的異常持續時間（ailmentDuration，AILMENTS 標 extendable: false 的除外）。發作在**目標自己的行動槽開始時**（框架的 DOT），槽結束時倒數，所以 3 = 發作 3 次。
  * 每一層是獨立的 Buff：重複命中就疊加，持續時間各自計算（框架不加 stackPolicy 時同 id 的 Buff 會並存）。
  * 持續傷害不吃目標的 damageTaken（例如裝備減傷），會被護盾吸收（框架預設）。
  * 這是被動（施放者身上的 AFTER_DAMAGE_DEALT），要靠 compileLoadout 給的 passives 掛到 Entity 上，沒傳就不會生效。
@@ -181,7 +181,8 @@ const GROUPS = {
 // 異常效果登錄表（見檔頭「異常效果」）。目前都是持續傷害（DOT），每次命中獨立疊一層。
 const AILMENTS = {
   bleed:     { id: 'bleed',     name: '裂傷', tags: ['bleed'] },
-  lingering: { id: 'lingering', name: '殘刃', tags: ['lingering'] }
+  // extendable: false：不吃「異常持續時間」加成（殘刃是「下一槽再打一次」，延長會讓 100% 傷害重複多次）
+  lingering: { id: 'lingering', name: '殘刃', tags: ['lingering'], extendable: false }
 };
 
 const ACTIVE_GEMS = {

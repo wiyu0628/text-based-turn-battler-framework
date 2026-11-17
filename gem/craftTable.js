@@ -15,7 +15,8 @@
  *     目前只有疾風、精準提高權重（WEIGHT.bonus）。
  *   製作出來的裝備帶 CRAFT_AFFIX_SLOTS（1）條「製作詞綴」，放不適合做成刻印的效果（CRAFT_AFFIXES，依 weight 抽 1 種）。
  *     數值 = 上限 × 投入刻印的平均階級縮放（10 個刻印的 TIER_SCALE 平均）× (ROLL_MIN～1 隨機，與刻印詞綴相同)；品質不影響。
- *     目前只有「異常傷害增加」ailmentDmg（上限 25%，第 5 階、滿骰；整套 4 件期望約 +85%）。source 是 'craft:種類'。
+ *     目前三種（各 1/3）：異常傷害增加 ailmentDmg（上限 25%）、異常持續時間 ailmentDuration（固定 +1 槽，
+ *     不縮放不擲值；整套合計上限 +2；殘刃不受影響）、行動回復 SP spRegen（每個自己的行動槽，上限 1 點；物理每槽 3 點左右就飽和）。source 是 'craft:種類'。
  *   之後仍可另外刻 2 個刻印（詞綴），與掉落裝備相同。
  *
  * ── 預算校準 ──────────────────────────────────────────────────
@@ -32,8 +33,11 @@ const CRAFT_INPUTS = 10;
 const CRAFT_AFFIX_SLOTS = 1;   // 製作詞綴的條數
 
 // 製作詞綴表：kind 是 affixTable 的 EFFECT_KINDS（scope 'effect'）；max 是第 5 階、滿骰的值；weight 是抽中的相對機率。
+// fixed: true 的數值固定為 max（不乘階級縮放、不擲值），但仍照樣呼叫 rng 一次，讓擲取順序不變。
 const CRAFT_AFFIXES = [
-  { kind: 'ailmentDmg', name: '異常傷害增加', max: 0.25, weight: 100 }
+  { kind: 'ailmentDmg',      name: '異常傷害增加', max: 0.25, weight: 100 },
+  { kind: 'ailmentDuration', name: '異常持續時間', max: 1,    weight: 100, fixed: true },
+  { kind: 'spRegen',         name: '行動回復 SP',  max: 1,    weight: 100 }
 ];
 const CRAFT_STATS = ['hp', 'sp', 'atk', 'int', 'def', 'spd'];
 
@@ -106,7 +110,8 @@ function rollCraftAffixes(inputs, rng) {
   for (let i = 0; i < CRAFT_AFFIX_SLOTS; i++) {
     let r = rng() * total;
     const pick = CRAFT_AFFIXES.find(affix => (r -= affix.weight) < 0) ?? CRAFT_AFFIXES.at(-1);
-    const value = pick.max * scale * (ROLL_MIN + (1 - ROLL_MIN) * rng());
+    const rolled = pick.max * scale * (ROLL_MIN + (1 - ROLL_MIN) * rng());
+    const value = pick.fixed ? pick.max : rolled;
     affixes.push({ scope: 'effect', kind: pick.kind, value: Math.round(value * 10000) / 10000, source: `craft:${pick.kind}` });
   }
   return affixes;

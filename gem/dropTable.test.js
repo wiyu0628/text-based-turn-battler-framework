@@ -90,11 +90,21 @@ test('low difficulty never drops above its tier; distributions match the table',
 
 test('grantDrops adds engravings and gems to the bag and leaves the old save untouched', () => {
   const start = save.addEngraving(save.createEmptySave({ now: '2026-01-01T00:00:00Z' }), 'fury', 1, 1);
-  const next = save.grantDrops(start, { engravings: [{ type: 'fury', tier: 1 }, { type: 'vital', tier: 3 }], supportGems: ['amp'], legendary: 1 });
+  const next = save.grantDrops(start, { engravings: [{ type: 'fury', tier: 1 }, { type: 'vital', tier: 3 }], supportGems: ['amp'], legendary: 0 });
   assert.deepEqual(next.engravings, { 'fury@1': 2, 'vital@3': 1 });
   assert.deepEqual(next.gems, { amp: 1 });
   assert.deepEqual(start.engravings, { 'fury@1': 1 });
   assert.throws(() => save.grantDrops(start, { engravings: [], supportGems: ['nope'] }), save.SaveError);
   assert.throws(() => save.grantDrops(start, { engravings: [{ type: 'fury', tier: 9 }] }), save.SaveError);
   assert.throws(() => save.grantDrops(start, null), save.SaveError);
+});
+
+test('grantDrops adds legendary items scaled by difficulty, and refuses legendary drops without a difficulty', () => {
+  const start = save.createEmptySave({ now: '2026-01-01T00:00:00Z' });
+  assert.throws(() => save.grantDrops(start, { engravings: [], supportGems: [], legendary: 1 }), /difficulty/);
+  const next = save.grantDrops(start, { engravings: [], supportGems: [], legendary: 2 }, { difficulty: 15, rng: () => 0.9999999 });
+  assert.equal(next.equipment.length, 2);
+  assert.ok(next.equipment.every(item => item.origin === 'drop' && item.legendaryId === 'omen' && item.links.length === 0));
+  assert.notEqual(next.equipment[0].id, next.equipment[1].id);
+  assert.equal(start.equipment.length, 0);
 });

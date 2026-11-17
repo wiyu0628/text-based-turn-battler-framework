@@ -13,10 +13,12 @@
  *                 { id: 'eq7', slot, origin: 'drop'|'craft',
  *                   base:    [{ stat, op: 'flat', value }]          基礎數值
  *                   affixes: [{ scope: 'wearer', stat, op, value, source? }      影響穿戴者（與加成層同格式）
- *                            { scope: 'effect', kind, value, source? }           穿戴者全體的非屬性效果：physDmg／spellDmg／reduction／ailmentDmg（見 affixTable.js）
+ *                            { scope: 'effect', kind, value, source? }           穿戴者全體的非屬性效果：EFFECT_KINDS（見 affixTable.js）
  *                            { scope: 'gems', kind, value, source? }],           影響這件裝備上的寶石（kind 之後設計）
  *                   castWeight: 100,                                             施放權重（10～999），裝備擲出來的結果
  *                   quality?: 'common'                                           製作裝備的品質（craftTable.QUALITIES 的 id；掉落裝備沒有）
+ *                   legendaryId?: 'omen'                                         傳說裝備的種類（legendaryTable.LEGENDARIES 的鍵；只有掉落裝備）
+ *                   attackStat?: 'int'                                           武器：普攻吃 atk 或 int（沒寫＝atk；只有武器能寫）
  *                   links:   [{ active, supports: [] }] }                        鑲在這件裝備上的寶石連結
  *               每件裝備一組連結（1 顆主動 + 3 顆輔助），槽數沒有個體差異，所以不存在裝備裡，
  *               而是由 SLOT_RULES 決定。之後主動寶石能放進輔助槽時，只要改 SLOT_RULES（與編譯器），存檔格式不變。
@@ -42,6 +44,8 @@ const { validateBonuses } = require('./statLayer');
 const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, sumEffectAffixes, rollCombine, rollEngraving } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
 const { QUALITIES, CRAFT_AFFIX_SLOTS, rollCraft } = require('./craftTable');
+const { LEGENDARIES, rollLegendary, pickLegendary, mechanicsOf } = require('./legendaryTable');
+const ATTACK_STATS = ['atk', 'int'];
 
 const SAVE_VERSION = 1;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
@@ -188,6 +192,7 @@ function validateEquipmentItem(item, where, nextId) {
       else if (affix.scope === 'effect') {
         if (!EFFECT_KINDS.includes(affix.kind)) problems.push(`${at}的 kind「${affix.kind}」不是 ${EFFECT_KINDS.join('、')} 之一`);
         if (!(Number.isFinite(affix.value) && affix.value >= 0)) problems.push(`${at}的 value 必須是不小於 0 的有限數字`);
+        else if (affix.kind === 'ailmentDuration' && !Number.isInteger(affix.value)) problems.push(`${at}的 ailmentDuration 必須是整數（槽）`);
         if (affix.source !== undefined && typeof affix.source !== 'string') problems.push(`${at}的 source 必須是字串`);
       } else {
         if (typeof affix.kind !== 'string' || !affix.kind) problems.push(`${at}的 kind 必須是非空字串`);
@@ -204,6 +209,17 @@ function validateEquipmentItem(item, where, nextId) {
     const craftLines = item.affixes.filter(affix => isObject(affix) && typeof affix.source === 'string' && affix.source.startsWith('craft:')).length;
     if (craftLines > CRAFT_AFFIX_SLOTS) problems.push(`${where}最多只能有 ${CRAFT_AFFIX_SLOTS} 條製作詞綴，現在有 ${craftLines} 條`);
     if (craftLines && item.origin !== 'craft') problems.push(`${where}的 origin「${item.origin}」不能有製作詞綴`);
+  }
+
+  if (item.legendaryId !== undefined) {
+    const def = LEGENDARIES[item.legendaryId];
+    if (!def) problems.push(`${where}的 legendaryId「${item.legendaryId}」不存在`);
+    else if (def.slot !== item.slot) problems.push(`${where}是傳說裝備「${def.name}」，部位必須是 ${def.slot}`);
+    if (item.origin !== 'drop') problems.push(`${where}有 legendaryId，origin 必須是 drop`);
+  }
+  if (item.attackStat !== undefined) {
+    if (item.slot !== 'weapon') problems.push(`${where}不是武器，不能寫 attackStat`);
+    else if (!ATTACK_STATS.includes(item.attackStat)) problems.push(`${where}的 attackStat「${item.attackStat}」不是 ${ATTACK_STATS.join('、')} 之一`);
   }
 
   if (item.quality !== undefined && !QUALITIES.some(quality => quality.id === item.quality)) {
@@ -431,19 +447,41 @@ function combineEngravings(save, types, tier, rng = Math.random, { pool } = {}) 
 }
 
 /**
- * 把一場的掉落（dropTable.rollDrops 的結果）放進背包：刻印與輔助寶石。
- * 傳說裝備（drops.legendary）還沒有資料，這裡**不處理**，由呼叫端之後接傳說表。
- * 內容不合法（未知寶石、刻印格式錯誤）丟 SaveError，原存檔不變。
+ * 把一場的掉落（dropTable.rollDrops 的結果）放進背包：刻印、輔助寶石、傳說裝備。
+ * 傳說裝備（drops.legendary 件）從 legendaryTable 平均抽、依掉落難度縮放，所以有傳說裝備時**一定要傳 difficulty**，
+ * 沒傳會丟錯（不會默默丟掉玩家的掉落）。內容不合法丟 SaveError，原存檔不變。
+ * @param {{ difficulty?: number, rng?: () => number }} [options] rng 只用在傳說裝備（每件：抽種類 1 次，再照 rollLegendary 的順序）
  */
-function grantDrops(save, drops) {
+function grantDrops(save, drops, { difficulty, rng = Math.random } = {}) {
   if (!isObject(drops)) throw new SaveError('掉落必須是物件');
   const { engravings = [], supportGems = [] } = drops;
   if (!Array.isArray(engravings) || !Array.isArray(supportGems)) throw new SaveError('掉落的 engravings 與 supportGems 必須是陣列');
   const keys = engravings.map(entry => stackKey(entry?.type, entry?.tier));
   supportGems.forEach(requireGem);
+  const legendaryCount = drops.legendary ?? 0;
+  if (!(Number.isInteger(legendaryCount) && legendaryCount >= 0)) throw new SaveError('掉落的 legendary 必須是不小於 0 的整數');
+  const legendaries = [];
+  for (let i = 0; i < legendaryCount; i++) {
+    if (difficulty === undefined) throw new SaveError('掉落裡有傳說裝備，grantDrops 必須傳 { difficulty } 才能決定數值');
+    try { legendaries.push(rollLegendary(pickLegendary(rng), difficulty, rng)); } catch (error) { throw new SaveError(error.message); }
+  }
   return mutate(save, draft => {
     for (const key of keys) addToStack(draft.engravings, key, 1);
     for (const gemId of supportGems) addToStack(draft.gems, gemId, 1);
+    for (const item of legendaries) draft.equipment.push({ id: `eq${draft.meta.nextId++}`, ...item, links: [] });
+  });
+}
+
+/**
+ * 加入一件指定的傳說裝備（測試、王的獎勵等用）；數值依 difficulty 縮放。回傳 { save, id }。
+ */
+function addLegendary(save, legendaryId, difficulty, rng = Math.random) {
+  let item;
+  try { item = rollLegendary(legendaryId, difficulty, rng); } catch (error) { throw new SaveError(error.message); }
+  return mutate(save, draft => {
+    const id = `eq${draft.meta.nextId++}`;
+    draft.equipment.push({ id, ...item, links: [] });
+    return { id };
   });
 }
 
@@ -454,9 +492,12 @@ function grantDrops(save, drops) {
  * @param {string} slot weapon／helmet／armor／boots
  * @param {{ type: string, tier: number }[]} engravings 剛好 10 個
  * @param {() => number} [rng]
+ * @param {{ attackStat?: 'atk'|'int' }} [options] 武器的普攻屬性（玩家製作時選，預設 atk）；其他部位不能寫
  */
-function craftEquipment(save, slot, engravings, rng = Math.random) {
+function craftEquipment(save, slot, engravings, rng = Math.random, { attackStat } = {}) {
   if (!SLOTS.includes(slot)) throw new SaveError(`部位「${slot}」不是 ${SLOTS.join('、')} 之一`);
+  if (attackStat !== undefined && slot !== 'weapon') throw new SaveError('只有武器能選普攻屬性（attackStat）');
+  if (attackStat !== undefined && !ATTACK_STATS.includes(attackStat)) throw new SaveError(`普攻屬性必須是 ${ATTACK_STATS.join('、')} 之一`);
   if (!Array.isArray(engravings)) throw new SaveError('製作的刻印必須是陣列');
   const keys = engravings.map(entry => stackKey(entry?.type, entry?.tier));
   let crafted;
@@ -470,7 +511,8 @@ function craftEquipment(save, slot, engravings, rng = Math.random) {
   return mutate(save, draft => {
     for (const [key, count] of Object.entries(need)) takeFromStack(draft.engravings, key, count, `刻印「${key}」`);
     const id = `eq${draft.meta.nextId++}`;
-    draft.equipment.push({ id, slot, origin: 'craft', base: crafted.base, affixes: crafted.affixes, castWeight: crafted.castWeight, quality: crafted.quality, links: [] });
+    draft.equipment.push({ id, slot, origin: 'craft', base: crafted.base, affixes: crafted.affixes, castWeight: crafted.castWeight, quality: crafted.quality,
+      ...(slot === 'weapon' ? { attackStat: attackStat ?? 'atk' } : {}), links: [] });
     return { id, quality: crafted.quality };
   });
 }
@@ -611,7 +653,7 @@ function equippedBonuses(save) {
 }
 
 /**
- * 穿戴中的裝備提供的非屬性效果總和：{ physDmg, spellDmg, reduction, ailmentDmg }（scope 為 effect 的詞綴；減傷已夾在上限）。
+ * 穿戴中的裝備提供的非屬性效果總和：{ physDmg, spellDmg, reduction, ailmentDmg, ailmentDuration, spRegen }（scope 為 effect 的詞綴；減傷已夾在上限）。
  * 傳給 compileLoadout 的 options.equipment；或直接用 compileEquipped。
  */
 function equippedEffects(save) {
@@ -623,7 +665,14 @@ function equippedEffects(save) {
  * 屬性加成仍要自己用 equippedBonuses 套到角色基礎屬性上。
  */
 function compileEquipped(save, options = {}) {
-  return compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save) });
+  return { ...compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save) }), normalAttackStat: equippedAttackStat(save) };
+}
+
+/** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */
+function equippedAttackStat(save) {
+  const weaponId = save.equipped?.weapon;
+  const weapon = weaponId ? save.equipment.find(item => item.id === weaponId) : null;
+  return weapon?.attackStat ?? 'atk';
 }
 
 /**
@@ -631,7 +680,17 @@ function compileEquipped(save, options = {}) {
  * 每組連結會帶上它所在裝備的 castWeight 當 weight。
  */
 function equippedLinks(save) {
-  return equippedItems(save).flatMap(item => normalizeLinks(item.links).map(link => ({ ...link, weight: item.castWeight })));
+  return equippedItems(save).flatMap(item => {
+    // 傳說裝備的機制依 legendaryId 查表（不存在存檔裡，改了表不用遷移）
+    const mechanics = mechanicsOf(item);
+    const granted = mechanics.filter(m => m.type === 'grantSupport').map(m => m.gem);
+    const deathCast = mechanics.find(m => m.type === 'castOnEnemyDeath');
+    return normalizeLinks(item.links).map(link => ({
+      ...link, weight: item.castWeight,
+      ...(granted.length ? { grantedSupports: granted } : {}),
+      ...(deathCast ? { castOnEnemyDeath: { text: deathCast.text } } : {})
+    }));
+  });
 }
 
 // ── 儲存介面 ─────────────────────────────────────────────────
@@ -692,7 +751,7 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, MIGRATIONS, SaveError,
   createEmptySave, validateSave, migrateSave, exportSave, importSave,
-  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, engraveEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip,
+  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, equippedAttackStat, engraveEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip,
   setDifficulty, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };

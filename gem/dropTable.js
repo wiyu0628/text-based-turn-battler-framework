@@ -53,6 +53,13 @@ const TIER_WEIGHTS = {
   15: [  0,  0, 25, 40, 35]
 };
 
+// 各難度「已開放」的最高階（不含 6、9、12 的 3% 預覽）：傳說裝備依它縮放數值
+const TIER_OPEN = [[1, 2, 1], [3, 6, 2], [7, 9, 3], [10, 12, 4], [13, 15, 5]];
+function openTier(difficulty) {
+  checkDifficulty(difficulty);
+  return TIER_OPEN.find(([from, to]) => difficulty >= from && difficulty <= to)[2];
+}
+
 // 刻印數量：P(2 個) = 10% + 1.5% × (難度 − 1)；P(3 個) = 3% × (難度 − 12)，難度 13 起才有
 const ENGRAVING_COUNT = {
   twoBase: 0.10, twoPerLevel: 0.015,
@@ -116,4 +123,4 @@ function rollDrops(difficulty, rng = Math.random) {
   return { engravings, supportGems, legendary };
 }
 
-module.exports = { MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, ENGRAVING_COUNT, GEM_CHANCE, LEGENDARY, dropRates, rollDrops };
+module.exports = { MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, openTier, ENGRAVING_COUNT, GEM_CHANCE, LEGENDARY, dropRates, rollDrops };

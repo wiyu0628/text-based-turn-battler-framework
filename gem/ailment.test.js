@@ -82,6 +82,22 @@ test('ailment damage boosts the snapshot value in battle terms', () => {
   assert.deepEqual(foe.buffs.map(b => b.value), [30, 120]);   // 100 × 0.2 × 1.5、80 × 1 × 1.5
 });
 
+test('equipment ailment duration adds slots to bleed but not to the lingering blade; capped at +2 in the sum', () => {
+  assert.equal(damageAction(compileSkill('rend', [], { equipment: { ailmentDuration: 2 } })).gemAilments[0].duration, 5);
+  assert.equal(damageAction(compileSkill('pursuit', [], { equipment: { ailmentDuration: 2 } })).gemAilments[0].duration, 1);
+  assert.throws(() => compileSkill('rend', [], { equipment: { ailmentDuration: 1.5 } }), /整數/);
+  const { sumEffectAffixes, AILMENT_DURATION_CAP } = require('./affixTable');
+  const line = { scope: 'effect', kind: 'ailmentDuration', value: 1 };
+  assert.equal(AILMENT_DURATION_CAP, 2);
+  assert.equal(sumEffectAffixes([line, line, line, line]).ailmentDuration, 2);
+  // 延長後實際多發作：+1 槽 → 4 次
+  const log = logger();
+  const foe = unit('f', 'B', {});
+  strike(compileSkill('rend', [], { equipment: { ailmentDuration: 1 } }), unit('h', 'A', { atk: 100 }), foe, log);
+  const ticks = [1, 2, 3, 4, 5].map(() => targetSlot(foe, log));
+  assert.deepEqual(ticks, [1, 1, 1, 1, 0]);
+});
+
 test('rend links with physical supports and rejects spell-only ones; charge release keeps the bleed', () => {
   for (const support of ['heavy', 'amp', 'wide', 'pierce', 'leech', 'critup', 'layout', 'trump']) assert.doesNotThrow(() => compileSkill('rend', [support]), support);
   assert.throws(() => compileSkill('rend', ['shock']), /spell/);

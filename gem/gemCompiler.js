@@ -496,6 +496,61 @@ function buildGrantPassives(compiledList) {
   return passives;
 }
 
+// ── 裝備給的機制（傳說裝備，見 legendaryTable.js）────────────────
+
+// 敵人倒下時，插隊多一個行動槽釋放 entry 的技能一次（不扣 SP）。
+// 框架沒有「單位倒下」的被動事件，所以在 AFTER_ACTION（每個行動槽結束、含插隊槽）與 ROUND_START 檢查
+// 「新倒下的敵人」：在行動中被打倒的會在同一槽結束時發現；在自己行動槽開頭被持續傷害打倒的，會在下一個行動槽結束時發現。
+// 最後一個敵人倒下時戰鬥已經結束，不會施放。連鎖（施放又打倒別人）會再觸發，次數以敵人數量為上限。
+// 被動帶戰鬥狀態（記得哪些敵人已處理過），每場戰鬥都要重新編譯。
+function buildEnemyDeathCastPassives(entry, text) {
+  const skill = entry.release ?? entry.skill;
+  const free = Object.create(skill);
+  free.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    return skill.execute.call(this, caster, allies, enemies, logger, context, { ...options, ignoreSp: true });
+  };
+  const use = withSlotCleanup(free, skill.gemSlotBuffIds);
+  const seen = new Set();
+  const check = (self, ctx, logger, engine) => {
+    if (!engine || !self.isAlive) return;
+    const enemies = self.team === 'A' ? engine.teamB : engine.teamA;
+    for (const enemy of enemies) {
+      if (enemy.isAlive || seen.has(enemy)) continue;
+      seen.add(enemy);
+      if (engine.result || !self.canAct?.() || self.silencedBy?.(skill)) continue;
+      if (text) {
+        logger.addLog({ type: 'TEXT', actorId: self.id, targetId: enemy.id,
+          message: text.replaceAll('{caster}', self.name).replaceAll('{target}', enemy.name) });
+      }
+      engine.insertAction(self, use);
+    }
+  };
+  const id = `gem_deathcast:${entry.skill.id}`;
+  return [
+    { id, gemSkillId: entry.skill.id, trigger: 'AFTER_ACTION', action: check },
+    { id: `${id}:round`, gemSkillId: entry.skill.id, trigger: 'ROUND_START', action: check }
+  ];
+}
+
+// 額外輔助寶石（grantSupport）：先照玩家的連結編譯（玩家的錯照常報），再逐一加上額外的輔助寶石；
+// 玩家已連同一顆就跳過；加上去會出錯（條件不符、互斥）的那一顆不套用。額外的不算進連結上限。
+function compileWithGranted(active, supports, granted, options) {
+  let result = compileSkill(active, supports, options);
+  const applied = [];
+  const maxSupports = options.maxSupports ?? MAX_SUPPORTS;
+  for (const gemId of granted) {
+    if (supports.includes(gemId) || applied.includes(gemId)) continue;
+    try {
+      result = compileSkill(active, [...supports, ...applied, gemId], { ...options, maxSupports: maxSupports + applied.length + 1 });
+      applied.push(gemId);
+    } catch (error) {
+      if (!(error instanceof GemLinkError)) throw error;
+    }
+  }
+  result.grantedSupports = applied;
+  return result;
+}
+
 // ── 施放條件 ────────────────────────────────────────────────
 
 // 條件只影響 canCast：引擎抽技能時先濾掉 canCast 為 false 的，所以不成立的技能不會被抽到，也不會讓行動槽落空。
@@ -709,7 +764,8 @@ function compileSkill(activeId, supportIds = [], {
       // 資料欄位 ailments 不送進框架，改放 gemAilments 給被動讀。倍率不乘命中的傷害加成，
       // 只乘裝備的異常傷害增加（自己一個加算區）；basis 'hit' 讀的命中傷害本身已含命中的加成（使用者決定兩者都吃）。
       if (next.ailments) {
-        next.gemAilments = next.ailments.map(ailment => ({ ...ailment, power: round4(ailment.power * (1 + equip.ailmentDmg)) }));
+        next.gemAilments = next.ailments.map(ailment => ({ ...ailment, power: round4(ailment.power * (1 + equip.ailmentDmg)),
+          duration: ailment.duration + (AILMENTS[ailment.kind]?.extendable === false ? 0 : equip.ailmentDuration) }));
         delete next.ailments;
       }
     }
@@ -761,20 +817,21 @@ function compileSkill(activeId, supportIds = [], {
 // ── 裝備的非屬性效果 ────────────────────────────────────────
 
 /**
- * 檢查 options.equipment：{ physDmg?, spellDmg?, reduction?, ailmentDmg? }，都是不小於 0 的有限數字（reduction 還要小於 1）。
+ * 檢查 options.equipment：{ physDmg?, spellDmg?, reduction?, ailmentDmg?, ailmentDuration?, spRegen? }，都是不小於 0 的有限數字（reduction 還要小於 1）。
  * 沒給就是全部 0。回傳補齊的物件。
  */
 function checkEquipment(equipment) {
-  const result = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0 };
+  const result = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 };
   if (equipment === null || equipment === undefined) return result;
   if (typeof equipment !== 'object' || Array.isArray(equipment)) throw new Error('options.equipment 必須是物件');
   for (const key of Object.keys(equipment)) {
-    if (!(key in result)) throw new Error(`options.equipment 沒有「${key}」這個欄位（只有 physDmg、spellDmg、reduction、ailmentDmg）`);
+    if (!(key in result)) throw new Error(`options.equipment 沒有「${key}」這個欄位（只有 ${Object.keys(result).join('、')}）`);
     const value = equipment[key];
     if (!(typeof value === 'number' && Number.isFinite(value) && value >= 0)) throw new Error(`options.equipment.${key} 必須是不小於 0 的有限數字（收到 ${value}）`);
     result[key] = value;
   }
   if (result.reduction >= 1) throw new Error(`options.equipment.reduction 必須小於 1（收到 ${result.reduction}）`);
+  if (!Number.isInteger(result.ailmentDuration)) throw new Error(`options.equipment.ailmentDuration 必須是整數（收到 ${result.ailmentDuration}）`);
   return result;
 }
 
@@ -796,6 +853,24 @@ function buildReductionPassive(reduction) {
     action(self) {
       self.addBuff({ id: 'gem_equipment_reduction', name: '裝備減傷', type: 'STAT', polarity: 'positive', duration: Infinity,
         effect: () => {}, damageTaken: { multiplier: 1 - reduction } });
+    }
+  };
+}
+
+// 每個自己的行動槽結束時回復 SP（AFTER_ACTION 對所有存活單位都會跑，只在 actor 是自己時回復；喘息的槽不算）。
+// 小數部分累積到下一次，所以 0.5 = 每兩槽 1 點。框架的 restoreSp 不寫戰報、會同步疲勞狀態。
+function buildSpRegenPassive(amount) {
+  let carry = 0;
+  return {
+    id: 'gem_equipment_spRegen',
+    trigger: 'AFTER_ACTION',
+    enabled: (self, ctx) => self.isAlive && ctx?.actor === self,
+    action(self, ctx, logger) {
+      carry += amount;
+      const whole = Math.floor(carry + 1e-9);
+      if (whole <= 0) return;
+      carry -= whole;
+      self.restoreSp(whole, logger);
     }
   };
 }
@@ -926,10 +1001,14 @@ function buildWeightGuardPassive() {
  * passives 包含 reaction 類寶石的被動，以及佈局、撒手鐧這類角色層級的被動（同類已合併，見 buildGrantPassives）。
  *   new Entity({ ..., skills: loadout.skills, passives: loadout.passives })
  * 被動物件帶有戰鬥狀態，所以「每場戰鬥」都要重新呼叫一次，不要在多場戰鬥之間共用。
- * @param {{ active: string, supports?: string[], weight?: number }[]} gems 每個元素是一顆主動寶石與它連結的輔助寶石，
- *   以及選填的施放權重 weight（MIN_WEIGHT～MAX_WEIGHT 的整數，預設 DEFAULT_WEIGHT；見 gems.js 的「施放權重」）
+ * @param {{ active: string, supports?: string[], weight?: number, grantedSupports?: string[], castOnEnemyDeath?: { text?: string } }[]} gems
+ *   每個元素是一顆主動寶石與它連結的輔助寶石，以及選填的施放權重 weight（MIN_WEIGHT～MAX_WEIGHT 的整數，預設 DEFAULT_WEIGHT；見 gems.js 的「施放權重」）。
+ *   grantedSupports  裝備給的額外輔助寶石（不佔連結位；不相容的自動不套用；見 compileWithGranted）
+ *   castOnEnemyDeath 裝備給的「敵人倒下時釋放一次」（見 buildEnemyDeathCastPassives）
  * @param {object} [options] 同 compileSkill 的 options；另有 equipment: { physDmg, spellDmg, reduction, ailmentDmg }（裝備的非屬性效果，見 affixTable.js）
  *   ailmentDmg 乘在每個異常效果的倍率上：power × (1 + ailmentDmg)（異常自己的加算區）
+ *   ailmentDuration 加在每個異常的持續槽數上（殘刃這類 extendable: false 的除外）
+ *   spRegen 變成「每個自己的行動槽結束時回復 SP」的被動（passives 裡多一個 gem_equipment_spRegen）
  *   physDmg／spellDmg 進每段傷害的加算區；reduction 變成開戰時掛上的常駐減傷 Buff（passives 裡多一個 gem_equipment_reduction）
  * @returns {{ skills: Skill[], passives: object[], resolver: Function, weights: object, releaseSkills: Skill[], compiled: object[] }}
  *   resolver       給 BattleEngine 的 skillSelectionResolver：蓄力的釋放（先問）加上依權重選招。
@@ -943,12 +1022,18 @@ function buildWeightGuardPassive() {
 function compileLoadout(gems, options = {}) {
   const compiled = [];
   const seen = new Set();
-  for (const { active, supports = [], weight = DEFAULT_WEIGHT } of gems) {
+  const deathCasts = [];
+  for (const { active, supports = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null } of gems) {
     if (!Number.isInteger(weight) || weight < MIN_WEIGHT || weight > MAX_WEIGHT) {
       throw new GemLinkError(active, `施放權重必須是 ${MIN_WEIGHT}～${MAX_WEIGHT} 的整數（收到 ${weight}）`);
     }
-    const result = compileSkill(active, supports, options);
+    if (!Array.isArray(grantedSupports)) throw new GemLinkError(active, 'grantedSupports 必須是陣列');
+    for (const gemId of grantedSupports) {
+      if (!Object.hasOwn(options.supportGems ?? SUPPORT_GEMS, gemId)) throw new GemLinkError(gemId, '裝備給的輔助寶石不存在');
+    }
+    const result = grantedSupports.length ? compileWithGranted(active, supports, grantedSupports, options) : compileSkill(active, supports, options);
     result.weight = weight;
+    if (castOnEnemyDeath) deathCasts.push([result, castOnEnemyDeath.text]);
     if (seen.has(result.skill.id)) {
       throw new GemLinkError(active, `配置重複：${result.skill.id} 出現兩次（同一個技能 id 無法同時存在）`);
     }
@@ -963,7 +1048,9 @@ function compileLoadout(gems, options = {}) {
     passives: [
       ...compiled.flatMap(result => result.passives),
       ...buildGrantPassives(compiled),
+      ...deathCasts.flatMap(([result, text]) => buildEnemyDeathCastPassives(result, text)),
       ...(equip.reduction > 0 ? [buildReductionPassive(equip.reduction)] : []),
+      ...(equip.spRegen > 0 ? [buildSpRegenPassive(equip.spRegen)] : []),
       ...(hasCharge ? [buildChargeGuardPassive()] : []),
       ...(hasUnequalWeights ? [buildWeightGuardPassive()] : [])
     ],

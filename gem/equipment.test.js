@@ -110,7 +110,7 @@ test('equippedEffects sums equipped items only, with reduction capped', () => {
   assert.ok(Math.abs(fx.physDmg - 0.24) < 1e-9);          // 12% × 2
   assert.ok(Math.abs(fx.reduction - 0.115) < 1e-9);       // 5% + 6.5%
   assert.equal(fx.spellDmg, 0);
-  assert.deepEqual(save.equippedEffects(fresh()), { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0 });
+  assert.deepEqual(save.equippedEffects(fresh()), { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 });
 });
 
 test('compileEquipped wires links, damage bonus and reduction in one step', () => {

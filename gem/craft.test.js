@@ -91,7 +91,22 @@ test('one craft affix: ailment damage, max 25% × average tier scale × 0.7~1 ro
   const mixed = [...ten('fury', 5).slice(0, 5), ...ten('fury', 1).slice(0, 5)];                      // 平均縮放 (1 + 0.2) / 2
   assert.equal(rollCraft('weapon', mixed, scripted(0, 0, 0, 0.9999999)).affixes[0].value, 0.15);
   assert.equal(CRAFT_AFFIX_SLOTS, 1);
-  assert.deepEqual(CRAFT_AFFIXES.map(a => a.kind), ['ailmentDmg']);
+  assert.deepEqual(CRAFT_AFFIXES.map(a => a.kind), ['ailmentDmg', 'ailmentDuration', 'spRegen']);
+});
+
+test('craft affix kinds are drawn evenly: ailment damage, ailment duration (fixed +1), SP regen (max 1 per slot)', () => {
+  // 種類骰 r × 300：0～100 異常傷害、100～200 持續時間、200～300 SP 回復
+  const affix = (pick, value, inputs = ten('fury')) => rollCraft('weapon', inputs, scripted(0, 0, pick, value)).affixes[0];
+  assert.equal(affix(0.4, 0).kind, 'ailmentDuration');
+  assert.equal(affix(0.4, 0).value, 1);                                        // 固定 +1：不擲值
+  assert.equal(affix(0.4, 0, ten('fury', 1)).value, 1);                        // 也不吃階級縮放
+  assert.deepEqual(affix(0.9, 0.9999999), { scope: 'effect', kind: 'spRegen', value: 1, source: 'craft:spRegen' });
+  assert.equal(affix(0.9, 0).value, 0.7);
+  assert.equal(affix(0.9, 0, ten('fury', 1)).value, 0.14);                     // 1 × 0.2 × 0.7
+  const rng = createSeededRandom(8);
+  const counts = { ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 };
+  for (let i = 0; i < 9000; i++) counts[rollCraft('weapon', ten('fury'), rng).affixes[0].kind]++;
+  for (const kind of Object.keys(counts)) assert.ok(Math.abs(counts[kind] / 9000 - 1 / 3) < 0.02, kind);
 });
 
 test('craft affix reaches equippedEffects and the compiled ailment power', () => {
