@@ -2,6 +2,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Entity, Skill, BattleEngine, Formulas, createSeededRandom } = require('../src');
 const { LEGENDARIES, rollLegendary, pickLegendary, mechanicsOf } = require('./legendaryTable');
+// 平衡會調的數值從資料讀
+const OMEN_INT = LEGENDARIES.omen.base[0].max;
+const OMEN_INC = LEGENDARIES.omen.unique[0].max;
 const { TIER_SCALE } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
 const save = require('./saveLayer');
@@ -25,17 +28,17 @@ test('omen staff: int weapon with INT flat base, INT % unique, death cast and am
 
 test('values scale with the opened tier of the drop difficulty and roll 0.7~1, like engravings', () => {
   const top = rollLegendary('omen', 15, () => 0.9999999);
-  assert.deepEqual(top.base, [{ stat: 'int', op: 'flat', value: 240 }]);
-  assert.deepEqual(top.affixes, [{ scope: 'wearer', stat: 'int', op: 'inc', value: 0.3, source: 'legendary:omen' }]);
+  assert.deepEqual(top.base, [{ stat: 'int', op: 'flat', value: OMEN_INT }]);
+  assert.deepEqual(top.affixes, [{ scope: 'wearer', stat: 'int', op: 'inc', value: OMEN_INC, source: 'legendary:omen' }]);
   assert.equal(top.castWeight, 100);
   assert.equal(top.attackStat, 'int');
   // rng 順序：base、unique、權重
   const low = rollLegendary('omen', 1, scripted(0, 0, 0));
-  assert.equal(low.base[0].value, Math.round(240 * TIER_SCALE[1] * 0.7));
-  assert.equal(low.affixes[0].value, Math.round(0.3 * TIER_SCALE[1] * 0.7 * 10000) / 10000);
+  assert.equal(low.base[0].value, Math.round(OMEN_INT * TIER_SCALE[1] * 0.7));
+  assert.equal(low.affixes[0].value, Math.round(OMEN_INC * TIER_SCALE[1] * 0.7 * 10000) / 10000);
   assert.equal(low.castWeight, 70);
-  assert.equal(rollLegendary('omen', 6, () => 0.9999999).base[0].value, Math.round(240 * TIER_SCALE[2]));   // 難度 6 開放到第 2 階（3% 預覽不算）
-  assert.equal(rollLegendary('omen', 7, () => 0.9999999).base[0].value, Math.round(240 * TIER_SCALE[3]));
+  assert.equal(rollLegendary('omen', 6, () => 0.9999999).base[0].value, Math.round(OMEN_INT * TIER_SCALE[2]));   // 難度 6 開放到第 2 階（3% 預覽不算）
+  assert.equal(rollLegendary('omen', 7, () => 0.9999999).base[0].value, Math.round(OMEN_INT * TIER_SCALE[3]));
   assert.throws(() => rollLegendary('nope', 5), /nope/);
   assert.throws(() => rollLegendary('omen', 16), /難度/);
 });
@@ -99,8 +102,8 @@ test('compileEquipped wires the omen staff: INT bonuses, amp, death cast passive
   assert.equal(loadout.skills[0].id, 'magicmissile+amp');
   assert.ok(loadout.passives.some(p => p.trigger === 'AFTER_ACTION' && p.id.startsWith('gem_deathcast:')));
   const bonuses = save.equippedBonuses(state);
-  assert.ok(bonuses.some(b => b.stat === 'int' && b.op === 'flat' && b.value === 240));
-  assert.ok(bonuses.some(b => b.stat === 'int' && b.op === 'inc' && b.value === 0.3));
+  assert.ok(bonuses.some(b => b.stat === 'int' && b.op === 'flat' && b.value === OMEN_INT));
+  assert.ok(bonuses.some(b => b.stat === 'int' && b.op === 'inc' && b.value === OMEN_INC));
 });
 
 // ── 敵人倒下時施放 ────────────────────────────────────────

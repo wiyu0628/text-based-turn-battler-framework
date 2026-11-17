@@ -6,6 +6,13 @@ const assert = require('node:assert/strict');
 const { Entity, Skill, Buff, BattleEngine, createSeededRandom } = require('../src');
 const { compileSkill, compileLoadout, buildGrantPassives, buildChargeResolver, combineResolvers, describeSupport, validateGemData, GemLinkError } = require('./gemCompiler');
 const { ACTIVE_GEMS, SUPPORT_GEMS, GROUPS, MAX_SUPPORTS } = require('./gems');
+// 平衡會調的數值從寶石資料讀，調整時不用改測試
+const moreOf = id => SUPPORT_GEMS[id].effects.filter(e => e.op === 'more').reduce((p, e) => p * (1 + e.value), 1);
+const CHARGE = moreOf('charge');                                         // 蓄力本體的傷害倍率
+const costOf = id => SUPPORT_GEMS[id].effects.filter(e => e.op === 'cost').reduce((p, e) => p * (1 + e.value), 1);   // SP 消耗倍率（相乘）
+const PIERCE_RATIO = (300 / (150 + 300)) / (300 / (300 + 300)) * moreOf('pierce');   // 防禦 300 時，穿甲 ÷ 一般
+const SHOCK = () => SUPPORT_GEMS.shock.effects[0].action.buffs[0].damageTaken.multiplier;
+
 
 const plain = new Skill({ id: 'plain', name: '普攻', actions: [{ type: 'DAMAGE' }] });
 const logger = () => ({ logs: [], addLog(entry) { this.logs.push(entry); } });
@@ -379,8 +386,8 @@ test('追加的傷害段：吃到加算與乘算的數值加成，但不受 scop
     const { skill } = compileWith(links, gems);
     assert.equal(skill.actions[0].ignoreDefense, 0.5);         // 原本的傷害段吃到穿甲
     assert.equal(skill.actions[1].ignoreDefense, undefined);   // 追加的不吃旗標
-    assert.equal(skill.actions[0].power, 1.755);               // 原本的傷害段：1.5 × 強力 1.3 × 穿甲 0.9
-    assert.equal(skill.actions[1].power, 0.585);               // 追加的：0.5 × 1.3 × 0.9
+    assert.equal(skill.actions[0].power, round(1.5 * 1.3 * moreOf('pierce')));   // 原本的傷害段：1.5 × 強力 × 穿甲的乘算（平衡後穿甲沒有減傷）
+    assert.equal(skill.actions[1].power, round(0.5 * 1.3 * moreOf('pierce')));               // 追加的：0.5 × 強力 × 穿甲的乘算
   }
   assert.equal(compileWith(['extra', 'wide'], gems).skill.actions[1].targetType, 'ENEMY_SINGLE'); // 擴散改不到它
 });
@@ -449,20 +456,20 @@ test('穿甲：對高防禦目標的傷害明顯高於一般施放', () => {
   };
   const normal = average([]);
   const pierce = average(['pierce']);
-  // 防禦 300 時減傷 50%；穿甲把防禦砍半 → 乘數 0.667，再乘寶石的 0.9，約是一般的 1.2 倍。
-  assert.ok(pierce > normal * 1.15 && pierce < normal * 1.25, `pierce=${pierce} normal=${normal}`);
+  // 防禦 300 時減傷 50%；穿甲把防禦砍半 → 乘數 0.667，再乘寶石自己的乘算（平衡後是 1），約是一般的 PIERCE_RATIO 倍。
+  assert.ok(Math.abs(pierce / normal - PIERCE_RATIO) < 0.05, `pierce=${pierce} normal=${normal} 預期 ${PIERCE_RATIO}`);
 });
 
-test('感電：打中的目標掛上易傷，之後承受的攻擊傷害變成 1.15 倍', () => {
+test('感電：打中的目標掛上易傷，之後承受的攻擊傷害變成資料寫的倍率（平衡後 1.25）', () => {
   const { skill } = compileSkill('magicmissile', ['shock']);
   const hero = makeHero([skill]);
   const foe = makeFoe('a');
   skill.execute(hero, [hero], [foe], logger(), null);
   const shock = foe.buffs.find(buff => buff.id === 'shock');
   assert.ok(shock, '應該掛上感電');
-  assert.equal(shock.damageTaken.multiplier, 1.15);
+  assert.equal(shock.damageTaken.multiplier, SHOCK());
   const hit = foe.takeDamage(1000, logger(), { action: { type: 'DAMAGE' }, caster: hero });
-  assert.equal(hit.damage, 1150);
+  assert.equal(hit.damage, Math.round(1000 * SHOCK()));
 });
 
 test('感電：沒打到傷害的目標不會被掛上（requiresDamage）', () => {
@@ -602,7 +609,7 @@ test('聚焦：全體改單體，傷害乘算 +80%（180%），並拿掉 aoe 標
   assert.equal(result.skill.id, 'whirlwind+focus');
   assert.equal(result.damageFactor, 1.8);
   assert.equal(result.skill.actions[0].targetType, 'ENEMY_SINGLE');
-  assert.equal(result.skill.actions[0].power, 1.62);         // 0.9 × 1.8
+  assert.equal(result.skill.actions[0].power, Math.round(ACTIVE_GEMS.whirlwind.actions[0].power * 1.8 * 1e4) / 1e4);   // × 1.8
   assert.equal(result.skill.tags.includes('aoe'), false);
   assert.ok(result.skill.tags.includes('attack'));
   assert.deepEqual(describeSupport(SUPPORT_GEMS.focus).badges, ['乘算']);
@@ -830,15 +837,15 @@ const chargeBattle = (loadout, { seed = 1, maxTurns = 20, heroStats = {}, foeSta
   return { engine, result, hero, foe };
 };
 
-test('蓄力：外殼只扣 SP 並掛標記，本體保有全部動作、傷害 225%、不再扣 SP', () => {
+test('蓄力：外殼只扣 SP 並掛標記，本體保有全部動作、傷害照資料（225%）、不再扣 SP', () => {
   const result = compileSkill('magicmissile', ['charge']);
   assert.equal(result.skill.id, 'magicmissile+charge');
   assert.equal(result.release.id, 'magicmissile+charge#release');
-  assert.equal(result.damageFactor, 2.25);
-  assert.equal(result.spCost, 10);
+  assert.equal(result.damageFactor, round(CHARGE));
+  assert.equal(result.spCost, Math.ceil(10 * costOf('charge')));          // 平衡第二輪：蓄力 SP +50%
   assert.deepEqual(result.skill.actions.map(action => action.type), ['BUFF']);
-  assert.equal(result.skill.actions[0].spCost, 10);
-  assert.equal(result.release.actions[0].power, 3.375);           // 1.5 × 2.25
+  assert.equal(result.skill.actions[0].spCost, Math.ceil(10 * costOf('charge')));
+  assert.equal(result.release.actions[0].power, round(1.5 * CHARGE));
   assert.equal(result.release.actions[0].spCost, undefined);
   assert.ok(result.skill.tags.includes('charge') && result.release.tags.includes('spell'));
   assert.deepEqual(describeSupport(SUPPORT_GEMS.charge).badges, ['乘算']);
@@ -846,8 +853,8 @@ test('蓄力：外殼只扣 SP 並掛標記，本體保有全部動作、傷害 
 
 test('蓄力：與其他寶石疊加（強力的 SP 與傷害、感電的追加段、汲取綁在本體上）', () => {
   const heavy = compileSkill('magicmissile', ['charge', 'heavy', 'shock']);
-  assert.equal(heavy.spCost, 12);                                 // 10 × 1.2，只寫在外殼
-  assert.equal(heavy.damageFactor, round(2.25 * 1.3));            // 感電不再減傷害
+  assert.equal(heavy.spCost, Math.ceil(10 * 1.2 * costOf('charge')));   // 10 × 強力 1.2 × 蓄力，相乘，只寫在外殼
+  assert.equal(heavy.damageFactor, round(CHARGE * 1.3));            // 感電不再減傷害
   assert.deepEqual(heavy.release.actions.map(action => action.type), ['DAMAGE', 'BUFF']);
 
   const leech = compileSkill('whirlwind', ['charge', 'leech']);
@@ -905,7 +912,7 @@ test('蓄力：整場戰鬥，每次釋放前一個勇者行動槽一定是蓄�
   assert.ok(releases > 100, `應有大量釋放（實際 ${releases}）`);
 });
 
-test('蓄力：釋放的傷害確實約為一般魔法飛彈的 2.25 倍', () => {
+test('蓄力：釋放的傷害確實約為一般魔法飛彈的 CHARGE 倍（平衡後 1.85）', () => {
   const average = (active, supports, pickSkillId) => {
     const damages = [];
     for (let seed = 1; seed <= 20; seed++) {
@@ -917,7 +924,7 @@ test('蓄力：釋放的傷害確實約為一般魔法飛彈的 2.25 倍', () =>
   };
   const normal = average('magicmissile', [], 'magicmissile');
   const charged = average('magicmissile', ['charge'], 'magicmissile+charge#release');
-  assert.ok(Math.abs(charged / normal - 2.25) < 0.08, `倍率 ${charged / normal}`);
+  assert.ok(Math.abs(charged / normal - CHARGE) < 0.08, `倍率 ${charged / normal}`);
 });
 
 test('蓄力：被敵人暈眩的槽不會釋放，標記保留到下一個能行動的槽', () => {

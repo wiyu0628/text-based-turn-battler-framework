@@ -7,32 +7,36 @@ const { rollEngraving, rollBase } = require('./affixTable');
 
 const powers = (loadoutOrSkill) => (loadoutOrSkill.skills ?? [loadoutOrSkill.skill])[0].actions.filter(a => a.type === 'DAMAGE').map(a => a.power);
 const power = (active, supports, equipment) => powers(compileLoadout([{ active, supports }], { equipment }))[0];
+// 預期值從寶石資料算（平衡調整旋風斬的倍率時不用改測試）；編譯器取到小數 4 位
+const WW = require('./gems').ACTIVE_GEMS.whirlwind.actions[0].power;
+const r4 = x => Math.round(x * 10000) / 10000;
 
 // ── 物理／法術傷害提高：進加算區 ─────────────────────────────
 
 test('physical damage bonus applies to atk actions only; spell bonus to int actions only', () => {
-  assert.equal(power('whirlwind', [], { physDmg: 0.3 }), 1.17);        // 0.9 × 1.3
-  assert.equal(power('whirlwind', [], { spellDmg: 0.3 }), 0.9);
+  assert.equal(power('whirlwind', [], { physDmg: 0.3 }), r4(WW * 1.3));
+  assert.equal(power('whirlwind', [], { spellDmg: 0.3 }), WW);
   assert.equal(power('magicmissile', [], { spellDmg: 0.3 }), 1.95);    // 1.5 × 1.3
   assert.equal(power('magicmissile', [], { physDmg: 0.5 }), 1.5);
 });
 
 test('equipment bonus shares the additive zone with gem inc, and multiplies with gem more', () => {
-  assert.equal(power('whirlwind', ['amp'], { physDmg: 0.3 }), 1.35);          // 0.9 × (1 + 0.2 + 0.3)
-  assert.equal(power('whirlwind', ['heavy'], { physDmg: 0.3 }), 1.521);       // 0.9 × 1.3 × 1.3
-  assert.equal(power('whirlwind', ['amp', 'heavy'], { physDmg: 0.3 }), 1.755); // 0.9 × 1.5 × 1.3
+  assert.equal(power('whirlwind', ['amp'], { physDmg: 0.3 }), r4(WW * 1.5));          // × (1 + 0.2 + 0.3)
+  assert.equal(power('whirlwind', ['heavy'], { physDmg: 0.3 }), r4(WW * 1.3 * 1.3));   // × 1.3 × 1.3
+  assert.equal(power('whirlwind', ['amp', 'heavy'], { physDmg: 0.3 }), r4(WW * 1.5 * 1.3)); // × 1.5 × 1.3
 });
 
 test('no equipment option leaves every power unchanged (default behaviour)', () => {
-  assert.equal(power('whirlwind', ['amp'], undefined), 1.08);
-  assert.equal(power('whirlwind', ['amp'], {}), 1.08);
+  assert.equal(power('whirlwind', ['amp'], undefined), r4(WW * 1.2));
+  assert.equal(power('whirlwind', ['amp'], {}), r4(WW * 1.2));
   assert.equal(compileSkill('whirlwind', ['amp']).damageFactor, 1.2);
 });
 
 test('compileSkill also accepts the equipment option and the charge release carries the bonus', () => {
-  assert.equal(compileSkill('whirlwind', [], { equipment: { physDmg: 0.1 } }).skill.actions[0].power, 0.99);
+  assert.equal(compileSkill('whirlwind', [], { equipment: { physDmg: 0.1 } }).skill.actions[0].power, r4(WW * 1.1));
   const charged = compileSkill('whirlwind', ['charge'], { equipment: { physDmg: 0.1 } });
-  assert.equal(charged.release.actions[0].power, 2.2275);   // 0.9 × 1.1 × (1 + 1.25)
+  const chargeMore = require('./gems').SUPPORT_GEMS.charge.effects.find(e => e.op === 'more').value;
+  assert.equal(charged.release.actions[0].power, r4(WW * 1.1 * (1 + chargeMore)));   // × 1.1 × (1 + 蓄力)
 });
 
 test('bad equipment options are rejected', () => {
@@ -119,7 +123,7 @@ test('compileEquipped wires links, damage bonus and reduction in one step', () =
   const weaponId = state.equipped.weapon;
   state = save.setLinks(state, weaponId, [{ active: 'whirlwind', supports: [] }]);
   const loadout = save.compileEquipped(state);
-  assert.equal(loadout.skills[0].actions[0].power, 1.116);   // 0.9 × (1 + 0.24)
+  assert.equal(loadout.skills[0].actions[0].power, r4(WW * 1.24));   // × (1 + 0.24)
   assert.ok(loadout.passives.some(p => p.id === 'gem_equipment_reduction'));
 });
 

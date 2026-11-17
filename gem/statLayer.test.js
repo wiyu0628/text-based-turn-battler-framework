@@ -244,8 +244,8 @@ test('爆擊強化：statBonuses 的資料錯誤在編譯前被指出（type 不
 });
 
 test('爆擊強化：動作串是「對自己的 BUFF → 原本的傷害」，傷害仍打敵人；SP 與倍率不變', () => {
-  const withGem = compileSkill('magicmissile', ['critup']);
-  const without = compileSkill('magicmissile', []);
+  const withGem = compileSkill('whirlwind', ['critup']);
+  const without = compileSkill('whirlwind', []);
   const [first, second] = withGem.skill.actions;
   assert.equal(first.type, 'BUFF');
   assert.equal(first.targetType, 'SELF');
@@ -253,11 +253,11 @@ test('爆擊強化：動作串是「對自己的 BUFF → 原本的傷害」，�
   assert.equal(second.inheritTarget, false, '傷害必須重新挑目標，不然會沿用「自己」');
   assert.equal(withGem.spCost, without.spCost);
   assert.equal(withGem.damageFactor, without.damageFactor);
-  assert.equal(withGem.skill.id, 'magicmissile+critup');
+  assert.equal(withGem.skill.id, 'whirlwind+critup');
 });
 
 test('爆擊強化：Buff 只撐一個行動槽，編譯後 statBonuses 已轉成框架的 effect 函式', () => {
-  const buff = compileSkill('magicmissile', ['critup']).skill.actions[0].buffs[0];
+  const buff = compileSkill('whirlwind', ['critup']).skill.actions[0].buffs[0];
   assert.equal(buff.duration, 1);
   assert.equal(buff.type, 'STAT');
   assert.equal(buff.dispellable, false);
@@ -276,8 +276,8 @@ test('爆擊強化：玩家說明一行，不歸在加算或乘算', () => {
 });
 
 test('爆擊強化：可以和其他輔助寶石一起連結，互不改變對方的數值', () => {
-  const heavy = compileSkill('magicmissile', ['heavy']);
-  const both = compileSkill('magicmissile', ['heavy', 'critup']);
+  const heavy = compileSkill('whirlwind', ['heavy']);
+  const both = compileSkill('whirlwind', ['heavy', 'critup']);
   assert.equal(both.damageFactor, heavy.damageFactor);
   assert.equal(both.spCost, heavy.spCost);
 });
@@ -285,7 +285,7 @@ test('爆擊強化：可以和其他輔助寶石一起連結，互不改變對�
 // ── 爆擊強化：實際戰鬥 ───────────────────────────────────────
 
 const plainSkill = id => new Skill({ id, name: id, actions: [{ type: 'DAMAGE' }] });
-function fight(supports, seed, { active = 'magicmissile', heroStats = {}, foe = {}, maxTurns } = {}) {
+function fight(supports, seed, { active = 'whirlwind', heroStats = {}, foe = {}, maxTurns } = {}) {
   const loadout = compileLoadout([{ active, supports }]);
   const hero = new Entity({
     id: 'hero', name: '勇者', team: 'A', normalAttack: plainSkill('slash'), skills: loadout.skills, passives: loadout.passives,
@@ -310,13 +310,13 @@ test('戰報：爆擊強化沒有提示文字，只留一行空訊息的 BUFF_AP
   assert.ok(!logs.some(log => /爆擊率提升/.test(log.message || '')), '不該再有提示文字');
   assert.equal(logs[index].type, 'BUFF_APPLY');
   assert.equal(logs[index + 1].type, 'DAMAGE');
-  assert.match(logs[index + 1].message, /詠唱魔法飛彈/);
-  assert.equal(logs[index + 1].skillId, 'magicmissile+critup');
+  assert.match(logs[index + 1].message, /揮出旋風斬/);
+  assert.equal(logs[index + 1].skillId, 'whirlwind+critup');
 });
 
 test('戰報：每次施放各出現一次加成行，不會多出', () => {
   const { logs } = fight(['critup'], 2, { foe: { hp: 100000 }, maxTurns: 6 });
-  const casts = logs.filter(log => log.type === 'DAMAGE' && log.skillId === 'magicmissile+critup').length;
+  const casts = logs.filter(log => log.type === 'DAMAGE' && log.skillId === 'whirlwind+critup').length;
   const notices = logs.filter(log => critupLine(log)).length;
   assert.ok(casts > 0);
   assert.equal(notices, casts);
@@ -354,7 +354,7 @@ test('效果：只持續這次施放，普攻與其他行動不受影響（施�
 });
 
 test('效果：每個行動槽結束後，爆擊強化已經從身上消失', () => {
-  const loadout = compileLoadout([{ active: 'magicmissile', supports: ['critup'] }]);
+  const loadout = compileLoadout([{ active: 'whirlwind', supports: ['critup'] }]);
   const hero = new Entity({ id: 'hero', name: '勇者', team: 'A', normalAttack: plainSkill('slash'), skills: loadout.skills,
     stats: { hp: 9000, sp: 900, atk: 150, int: 150, def: 50, spd: 120, cri: 0, skillCastRate: 1 } });
   const boss = new Entity({ id: 'boss', name: '魔王', team: 'B', normalAttack: plainSkill('claw'), stats: { hp: 3000, sp: 0, atk: 1, def: 0, spd: 1 } });
@@ -381,7 +381,7 @@ test('搭配佈局：開頭「第一動，」接在技能那一行，不會接�
   const notice = logs.findIndex(log => critupLine(log));
   assert.ok(notice >= 0, '找不到加成那一行');
   assert.equal(logs[notice + 1].type, 'DAMAGE');
-  assert.match(logs[notice + 1].message, /^勇者的第一動，詠唱魔法飛彈/);
+  assert.match(logs[notice + 1].message, /^勇者的第一動，揮出旋風斬/);
   assert.ok(!logs.some(log => /第一動，的/.test(log.message || '')));
 });
 

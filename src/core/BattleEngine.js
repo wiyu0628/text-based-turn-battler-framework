@@ -52,6 +52,12 @@ class BattleEngine {
     this.counterSource = null;
     this.luckEventsEnabled = options.luckEvents?.enabled ?? true;
     this.hitResolver = options.hitResolver;
+    // 命中公式（1.0.59）：'classic' 是原本的「命中抵銷閃避」，'contest' 是對抗式（見 Formulas.contestEvadeChance）。
+    // 預設 classic，沒指定的戰鬥結果與亂數序列不變；寫錯直接拋錯，不悄悄退回預設。
+    if (options.hitFormula !== undefined && !['classic', 'contest'].includes(options.hitFormula)) {
+      throw new Error(`hitFormula must be 'classic' or 'contest', got "${options.hitFormula}".`);
+    }
+    this.hitFormula = options.hitFormula ?? 'classic';
     this.roundStart = options.roundStart;
     this.actionTargetResolver = options.actionTargetResolver;
     // 延後的目標判定（1.0.41）：同一個行動槽第一次挑「不是自己」的目標時才問，見 docs/ACTIONS.md。
@@ -226,7 +232,7 @@ class BattleEngine {
       return { hit: false, forced: true, evadeMessage: adjustment.evadeMessage, hitMessage: adjustment.hitMessage };
     }
     const hit = Formulas.isHit(caster, target, action.accuracy || 1,
-      adjustment.hitRateModifier || 0);
+      adjustment.hitRateModifier || 0, this.hitFormula);
     adjustment.afterRoll?.(hit);
     return { hit, evadeMessage: adjustment.evadeMessage, hitMessage: adjustment.hitMessage };
   }

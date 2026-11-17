@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>刷怪打王</title>
+<style>
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --ink: #24211d; --muted: #77706a; --line: #e2ddd6;
+    --accent: #3c5a99; --accent-soft: #e6ecf7; --good: #2f7d4f; --bad: #b03a2e; --warn: #a86b12;
+    --rare: #7a4bb0; --elite: #b0412e; --energy: #2a8a8a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 system-ui, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 5px 12px; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.danger { color: var(--bad); border-color: #e7c2bd; }
+  button.danger.active, button.toggle.active { background: var(--bad); color: #fff; border-color: var(--bad); }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  select, input { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  h3 { font-size: 14px; margin: 0 0 8px; }
+  .muted { color: var(--muted); }
+  .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); margin-left: 4px; vertical-align: 1px; }
+  .tag.rare { background: #efe6f8; color: var(--rare); }
+  .tag.elite { background: #f8e6e2; color: var(--elite); }
+  .tag.equipped { background: #e3f2e8; color: var(--good); }
+  .tag.legend { background: #fbeed6; color: var(--warn); }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 18px; margin: 0; }
+  nav { display: flex; gap: 4px; margin-left: 12px; }
+  nav button { border: none; background: transparent; padding: 6px 14px; border-radius: 6px; }
+  nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .energy { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .energy .bar { width: 160px; height: 10px; border-radius: 5px; background: #e4eeee; overflow: hidden; }
+  .energy .bar > div { height: 100%; background: var(--energy); }
+  .header-actions { display: flex; gap: 6px; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .stack > * + * { margin-top: 8px; }
+
+  .hero dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+  .hero dt { color: var(--muted); }
+  .hero dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .hero ul { margin: 4px 0 0; padding-left: 18px; }
+
+  .difficulty { display: flex; gap: 4px; flex-wrap: wrap; }
+  .difficulty button { width: 38px; padding: 5px 0; }
+  .difficulty button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .region-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .region-card ul { margin: 6px 0 10px; padding-left: 18px; }
+  .boss { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+
+  table.bag { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  table.bag th, table.bag td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: center; }
+  table.bag th:first-child, table.bag td:first-child { text-align: left; }
+  table.bag td.has { cursor: pointer; }
+  table.bag td.has:hover { background: var(--accent-soft); }
+  table.bag td.zero { color: #c9c3bb; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; min-height: 28px; }
+  .chip { font-size: 12px; padding: 2px 8px; border-radius: 12px; background: #efece7; cursor: pointer; }
+  .chip:hover { background: #f4d9d5; }
+
+  .item { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .item.worn { border-color: #9cc9ad; background: #f6fbf8; }
+  .item .name { font-weight: 600; }
+  .item ul { margin: 4px 0 6px; padding-left: 16px; }
+  .item .actions { display: flex; gap: 6px; margin-top: 6px; }
+  .slot-col h3 { display: flex; justify-content: space-between; }
+  .slot-col .stack { max-height: 70vh; overflow: auto; padding-right: 4px; }
+
+  .link-editor select { width: 100%; }
+  .error { color: var(--bad); font-size: 12px; white-space: pre-wrap; }
+  .gem-list li { margin-bottom: 4px; }
+
+  .modal-back { position: fixed; inset: 0; background: rgba(30, 26, 22, .45); display: none; align-items: center; justify-content: center; z-index: 20; }
+  #ask-modal, #info-modal { z-index: 25; }
+  .modal-back.open { display: flex; }
+  .modal { background: var(--panel); border-radius: 12px; width: min(820px, 94vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+  .modal header { position: static; border-radius: 12px 12px 0 0; }
+  .modal .body { padding: 12px 18px; overflow: auto; flex: 1; }
+  .modal footer { padding: 10px 18px; border-top: 1px solid var(--line); display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .log { font-size: 13px; }
+  .log div { padding: 1px 0; }
+  .log .turn { color: var(--muted); margin-top: 6px; }
+  .log .hero { color: #1f4b8f; }
+  .log .enemy { color: #7a2c22; }
+  .log .sys { color: var(--warn); }
+  .result { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #f6f4f0; }
+  .result.win { background: #eef7f1; }
+  .result.lose { background: #fbefed; }
+  .subtabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+  .subtabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 6px 14px; }
+  .subtabs button.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+  table.bag td { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  table.bag td.nopick { cursor: default; }
+  table.bag td.nopick:hover { background: transparent; }
+  table.bag td.sel { background: var(--accent); color: #fff; }
+  table.bag tr.off td { color: #c9c3bb; }
+  .layout.no-side { grid-template-columns: minmax(0, 1fr); }
+  .layout.no-side > aside { display: none; }
+  .stepper { display: flex; align-items: center; gap: 10px; }
+  .stepper strong { font-size: 20px; min-width: 2ch; text-align: center; font-variant-numeric: tabular-nums; }
+  .stepper button { width: 36px; font-size: 16px; padding: 3px 0; }
+  .modal.small { width: min(420px, 92vw); }
+  .name-row { display: flex; gap: 6px; margin-bottom: 10px; }
+  .name-row input { flex: 1; min-width: 0; font-weight: 600; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #2a2622; color: #fff; padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 30; max-width: 80vw; }
+  .toast.show { opacity: 1; }
+  .toast.bad { background: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>刷怪打王</h1>
+  <nav id="nav">
+    <button data-tab="adventure" class="active">冒險</button>
+    <button data-tab="workshop">工坊</button>
+    <button data-tab="equipment">裝備</button>
+    <button data-tab="gems">寶石</button>
+  </nav>
+  <div class="energy" title="能量：勝利與分解刻印取得，清除裝備上的刻印時消耗">
+    <span>能量</span><div class="bar"><div id="energy-fill"></div></div><span id="energy-text"></span>
+  </div>
+  <div class="header-actions">
+    <button class="small" id="export-save">匯出存檔</button>
+    <button class="small" id="import-save">匯入存檔</button>
+    <button class="small danger" id="reset-save">重新開始</button>
+  </div>
+</header>
+
+<div class="layout">
+  <main id="main"></main>
+  <aside><div class="panel hero" id="hero"></div></aside>
+</div>
+
+<div class="modal-back" id="battle-modal">
+  <div class="modal">
+    <header><h2 id="battle-title" style="margin:0"></h2></header>
+    <div class="body"><div class="muted" id="battle-sub"></div><div class="log" id="battle-log"></div><div id="battle-result"></div></div>
+    <footer id="battle-footer"></footer>
+  </div>
+</div>
+<div class="modal-back" id="ask-modal">
+  <div class="modal small"><div class="body" id="ask-text"></div><footer><button id="ask-no">取消</button><button class="primary" id="ask-yes">確定</button></footer></div>
+</div>
+<div class="modal-back" id="info-modal">
+  <div class="modal small"><header><h2 id="info-title" style="margin:0"></h2></header><div class="body" id="info-body"></div><footer><button id="info-close">關閉</button></footer></div>
+</div>
+<div class="toast" id="toast"></div>
+<input type="file" id="file-input" accept=".json,application/json" hidden>
+
+<script>
+// jsdom 等環境沒有 structuredClone 時的替代（瀏覽器都有）
+if (typeof structuredClone !== 'function') window.structuredClone = value => JSON.parse(JSON.stringify(value));
+</script>
+<script>
+/*__BUNDLE__*/
+</script>
+<script>
+(function () {
+  'use strict';
+  const { game, save: S, gems: G, compiler, stats: statLayer, affix, craft, drops: dropTable, energy: energyTable, legendary, monsters: M, bosses: B } = window.Game;
+
+  // ── 小工具 ──────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+  function h(tag, attrs, ...children) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'text') el.textContent = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (k === 'disabled' || k === 'selected' || k === 'checked') el[k] = Boolean(v);
+      else el.setAttribute(k, v);
+    }
+    for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) el.append(child.nodeType ? child : document.createTextNode(String(child)));
+    return el;
+  }
+  let toastTimer = null;
+  function toast(message, bad = false) {
+    const el = $('toast');
+    el.textContent = message;
+    el.className = 'toast show' + (bad ? ' bad' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.className = 'toast'; }, 2600);
+  }
+  function download(name, text, type = 'text/plain') {
+    const url = URL.createObjectURL(new Blob([text], { type: type + ';charset=utf-8' }));
+    const a = h('a', { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const pct = x => `${Math.round(x * 1000) / 10}%`;
+  // 確認框：不用瀏覽器的 confirm()（有些環境會擋掉，按了沒反應）
+  function ask(message, yes = '確定') {
+    return new Promise(resolve => {
+      $('ask-text').textContent = message;
+      $('ask-yes').textContent = yes;
+      const done = value => { $('ask-modal').classList.remove('open'); $('ask-yes').onclick = $('ask-no').onclick = $('ask-modal').onclick = null; resolve(value); };
+      $('ask-yes').onclick = () => done(true);
+      $('ask-no').onclick = () => done(false);
+      $('ask-modal').onclick = ev => { if (ev.target === $('ask-modal')) done(false); };
+      $('ask-modal').classList.add('open');
+    });
+  }
+  function showInfo(title, body) {
+    $('info-title').textContent = title;
+    $('info-body').replaceChildren(...body);
+    $('info-modal').classList.add('open');
+  }
+
+  // ── 名稱與說明 ──────────────────────────────────────────────
+  const SLOT_NAMES = { weapon: '武器', helmet: '頭盔', armor: '護甲', boots: '鞋子' };
+  const QUALITY = Object.fromEntries(craft.QUALITIES.map(q => [q.id, q]));
+  const KINDS = Object.keys(affix.ENGRAVING_TYPES);
+  const kindName = kind => affix.ENGRAVING_TYPES[kind]?.name ?? kind;
+  const EFFECT_NAMES = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '每個行動槽回復 SP' };
+  function describeAffix(a) {
+    if (a.scope === 'wearer') return statLayer.describeStatBonus(a).text;
+    if (a.scope === 'effect') {
+      if (a.kind === 'ailmentDuration') return `${EFFECT_NAMES[a.kind]} +${a.value} 槽`;
+      if (a.kind === 'spRegen') return `${EFFECT_NAMES[a.kind]} ${Math.round(a.value * 100) / 100}`;
+      return `${EFFECT_NAMES[a.kind] ?? a.kind} +${pct(a.value)}`;
+    }
+    return `${a.kind}`;
+  }
+  function itemName(item) {
+    if (item.legendaryId) return legendary.LEGENDARIES[item.legendaryId]?.name ?? item.legendaryId;
+    if (item.quality) return `${QUALITY[item.quality].name}${SLOT_NAMES[item.slot]}`;
+    return `新手${SLOT_NAMES[item.slot]}`;
+  }
+  const gemName = id => G.ACTIVE_GEMS[id]?.name ?? G.SUPPORT_GEMS[id]?.name ?? id;
+  const engravingLabel = key => { const [kind, tier] = key.split('@'); return `${kindName(kind)} ${tier} 階`; };
+
+  // ── 狀態與存檔 ──────────────────────────────────────────────
+  const STORAGE_KEY = 'tbtf-game-save';
+  const HISTORY_KEY = 'tbtf-game-history';
+  const HISTORY_MAX = 20;
+  const store = S.createSaveStore(S.createLocalStorageAdapter(window.localStorage, STORAGE_KEY));
+  let state = null;
+  let tab = 'adventure';
+  let history = [];
+  const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], combinePicks: [], salvage: { kind: null, tier: 1, count: 1 },
+    workshopTab: 'craft', engraveItem: null, engraveSel: null, salvageMode: false, linkErrors: {} };
+
+  function loadHistory() {
+    try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (e) { history = []; }
+  }
+  function saveHistory() {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, HISTORY_MAX))); }
+    catch (e) { toast('戰鬥紀錄太多，存不進瀏覽器；舊紀錄已省略', true); history = history.slice(0, 5); }
+  }
+
+  // 所有改存檔的操作都走這裡：成功就寫入並重畫，失敗就提示、存檔不變
+  async function apply(fn, success) {
+    let next;
+    try { next = fn(state); } catch (error) { toast(error.message || String(error), true); return false; }
+    const value = next && next.save && next.save.version ? next : { save: next };
+    try { state = await store.save(value.save); } catch (error) { toast('存檔失敗：' + error.message, true); return false; }
+    if (success) toast(typeof success === 'function' ? success(value) : success);
+    render();
+    return value;
+  }
+
+  // ── 角色面板 ────────────────────────────────────────────────
+  function renderHero() {
+    const stats = game.heroStats(state);
+    const loadout = S.compileEquipped(state);
+    const fx = S.equippedEffects(state);
+    const row = (label, value) => [h('dt', { text: label }), h('dd', { text: value })];
+    const fxLines = Object.entries(fx).filter(([, v]) => v > 0).map(([k, v]) => h('li', { text: describeAffix({ scope: 'effect', kind: k, value: Math.round(v * 10000) / 10000 }) }));
+    $('hero').replaceChildren(...[
+      h('div', { class: 'name-row' },
+        h('input', { id: 'player-name', value: game.playerName(state), maxlength: S.PLAYER_NAME_MAX, 'aria-label': '玩家名字' }),
+        h('button', { class: 'small', text: '確認', onclick: () => apply(s => S.setPlayerName(s, $('player-name').value), v => `名字改為 ${game.playerName(v.save)}`) })),
+      h('dl', {},
+        row('生命', stats.maxHp ?? stats.hp), row('SP', stats.maxSp ?? stats.sp), row('攻擊', stats.atk), row('智力', stats.int), row('防禦', stats.def),
+        row('速度', stats.spd), row('爆擊率', pct(stats.cri)), row('爆擊傷害', `×${stats.criDmg}`), row('命中', stats.hit ?? 0), row('閃避', stats.eva ?? 0),
+        row('普攻', loadout.normalAttackStat === 'int' ? '吃智力' : '吃攻擊')),
+      h('h3', { style: 'margin-top:12px', text: '技能' }),
+      loadout.compiled.length ? h('ul', {}, loadout.compiled.map(c => h('li', { text: `${c.skill.name}（SP ${c.spCost}）` }))) : h('div', { class: 'muted', text: '沒有技能：到「寶石」頁把主動寶石連到穿著的裝備上' }),
+      ...(fxLines.length ? [h('h3', { style: 'margin-top:12px', text: '裝備效果' }), h('ul', {}, fxLines)] : [])
+    ]);
+    const e = state.energy, cap = energyTable.ENERGY_CAP;
+    $('energy-fill').style.width = `${(e / cap) * 100}%`;
+    $('energy-text').textContent = `${e} / ${cap}`;
+  }
+
+  // ── 冒險 ────────────────────────────────────────────────────
+  function renderAdventure() {
+    const d = state.settings.difficulty;
+    const regions = S.availableRegions(state);
+    const diffPanel = h('div', { class: 'panel' },
+      h('h2', { text: '難度' }),
+      h('div', { class: 'stepper' },
+        h('button', { text: '−', 'aria-label': '降低難度', disabled: d <= S.MIN_DIFFICULTY, onclick: () => apply(s => S.setDifficulty(s, d - 1)) }),
+        h('strong', { text: d }),
+        h('button', { text: '+', 'aria-label': '提高難度', disabled: d >= S.MAX_DIFFICULTY, onclick: () => apply(s => S.setDifficulty(s, d + 1)) })),
+      h('div', { class: 'muted', style: 'margin-top:8px', text: `勝利能量 ${dropTable.energyForWin(d)}｜怪物強度 ${game.strengthLevel(d)}` }));
+    const regionCards = Object.values(M.REGIONS).map(region => {
+      const open = regions.includes(region.id);
+      return h('div', { class: 'region-card' },
+        h('h3', { text: region.name }),
+        open ? null : h('p', { class: 'muted', text: '尚未開放（擊敗 Boss 後解鎖）' }),
+        h('button', { class: 'primary', disabled: !open, text: `出發（難度 ${d}）`, onclick: () => startBattle({ kind: 'region', id: region.id, difficulty: d }) }));
+    });
+    const bosses = S.bossStatus(state);
+    const bossPanel = h('div', { class: 'panel' }, h('h2', { text: '挑戰Boss' }),
+      h('div', { class: 'stack' }, bosses.map(b => h('div', { class: 'boss' },
+        h('div', {}, h('strong', { text: b.name }), h('span', { class: 'muted', text: `　難度 ${b.difficulty}` }),
+          b.defeated ? h('span', { class: 'tag equipped', text: '已擊敗' }) : null),
+        h('button', { class: 'primary', disabled: !b.available, text: b.available ? '挑戰' : '尚未開放', onclick: () => startBattle({ kind: 'boss', id: b.id }) })))));
+    const historyPanel = h('div', { class: 'panel' }, h('h2', { text: '戰鬥紀錄' }),
+      h('div', { class: 'row', style: 'margin-bottom:8px' },
+        h('button', { class: 'small', text: '匯入紀錄檔重播', onclick: () => pickFile(text => openRecord(JSON.parse(text))) }),
+        h('input', { id: 'record-code', placeholder: '貼上紀錄碼', style: 'flex:1;min-width:160px' }),
+        h('button', { class: 'small', text: '用紀錄碼重播', onclick: () => { try { openRecord(decodeRecord($('record-code').value.trim())); } catch (e) { toast('紀錄碼不正確', true); } } })),
+      history.length ? h('div', { class: 'stack' }, history.map((entry, i) => h('div', { class: 'boss' },
+        h('div', {}, h('strong', { text: entry.title }), h('span', { class: entry.victory ? '' : 'muted', text: `　${entry.victory ? '勝利' : '敗北'}　${entry.turns} 回合` }),
+          h('div', { class: 'muted', style: 'font-size:12px', text: `${new Date(entry.record.at).toLocaleString()}　種子 ${entry.record.seed}` })),
+        h('div', { class: 'row' }, h('button', { class: 'small', text: '重播', onclick: () => openRecord(entry.record, entry.title) }),
+          h('button', { class: 'small', text: '下載紀錄', onclick: () => download(`battle-${entry.record.seed}.json`, JSON.stringify(entry.record), 'application/json') }))))) : h('div', { class: 'muted', text: '還沒有紀錄' }));
+    return [diffPanel, h('div', { class: 'grid2' }, regionCards), bossPanel, historyPanel];
+  }
+
+  // ── 戰鬥彈窗 ────────────────────────────────────────────────
+  const SPEEDS = [['慢', 600], ['中', 250], ['快', 80], ['立即', 0]];
+  let speed = 250;
+  let player = null;
+  function targetTitle(target, difficulty) {
+    if (target.kind === 'boss') return `Boss：${B.findBoss(target.id).name}（難度 ${B.findBoss(target.id).difficulty}）`;
+    return `${M.REGIONS[target.id].name}（難度 ${difficulty ?? target.difficulty}）`;
+  }
+  async function startBattle(target) {
+    let result;
+    try { result = game.runBattle(state, target, game.randomSeed()); } catch (error) { toast(error.message, true); return; }
+    if (result.victory) {
+      try { state = await store.save(result.save); } catch (error) { toast('存檔失敗：' + error.message, true); }
+    }
+    const title = targetTitle(target, result.difficulty);
+    history.unshift({ title, victory: result.victory, turns: result.turns, record: result.record });
+    history = history.slice(0, HISTORY_MAX);
+    saveHistory();
+    showBattle(title, result, { live: true });
+    render();
+  }
+  function openRecord(record, title) {
+    let replay;
+    try { replay = game.replayBattle(record); } catch (error) { toast('無法重播：' + error.message, true); return; }
+    showBattle((title || targetTitle(record.target)) + '（重播）', { ...replay, record }, { live: false });
+  }
+  function encodeRecord(record) { return btoa(unescape(encodeURIComponent(JSON.stringify(record)))); }
+  function decodeRecord(code) { return JSON.parse(decodeURIComponent(escape(atob(code)))); }
+  function logClass(log) {
+    if (log.type === 'TURN_START') return 'turn';
+    if (log.type === 'BATTLE_START' || log.type === 'BATTLE_END' || log.type === 'TEXT') return 'sys';
+    if (log.actorId === 'hero') return 'hero';
+    return 'enemy';
+  }
+  function showBattle(title, result, { live }) {
+    if (player) clearTimeout(player.timer);
+    $('battle-title').textContent = title;
+    $('battle-sub').textContent = `敵人：${result.enemies.join('、')}`;
+    const logEl = $('battle-log');
+    logEl.replaceChildren();
+    $('battle-result').replaceChildren();
+    const lines = result.logs.filter(log => log.message);
+    player = { lines, index: 0, timer: null, paused: false, done: false, result, title, live };
+    const finish = () => {
+      while (player.index < lines.length) appendLine();
+      player.done = true;
+      clearTimeout(player.timer);
+      $('battle-result').replaceChildren(resultBox(result, live));
+      renderFooter();
+      logEl.parentElement.scrollTop = logEl.parentElement.scrollHeight;
+    };
+    function appendLine() {
+      const log = lines[player.index++];
+      logEl.append(h('div', { class: logClass(log), text: log.message }));
+    }
+    function step() {
+      if (player.paused || player.done) return;
+      if (speed === 0) return finish();
+      appendLine();
+      logEl.parentElement.scrollTop = logEl.parentElement.scrollHeight;
+      if (player.index >= lines.length) return finish();
+      player.timer = setTimeout(step, speed);
+    }
+    player.finish = finish;
+    player.step = step;
+    $('battle-modal').classList.add('open');
+    renderFooter();
+    step();
+  }
+  function resultBox(result, live) {
+    const box = h('div', { class: 'result ' + (result.victory ? 'win' : 'lose') },
+      h('strong', { text: result.victory ? `勝利！（${result.turns} 回合）` : (result.winner === 'TEAM_B' ? `敗北（${result.turns} 回合）` : `時間到，未分勝負（${result.turns} 回合）`) }));
+    if (!live) { box.append(h('div', { class: 'muted', text: '重播不會改變存檔' })); return box; }
+    if (result.victory && result.drops) {
+      const d = result.drops;
+      const parts = [];
+      if (d.engravings.length) parts.push('刻印：' + d.engravings.map(e => `${kindName(e.type)} ${e.tier} 階`).join('、'));
+      if (d.supportGems.length) parts.push('輔助寶石：' + d.supportGems.map(gemName).join('、'));
+      if (d.legendary) parts.push(`傳說裝備 ×${d.legendary}`);
+      parts.push(`能量 +${d.energy}`);
+      box.append(h('div', {}, parts.join('｜')));
+      if (result.info?.rare) box.append(h('div', { class: 'muted', text: '遇到稀有怪：額外刻印' }));
+      if (result.info?.elite && !result.info?.boss) box.append(h('div', { class: 'muted', text: '遇到菁英怪：額外刻印' }));
+    }
+    if (result.firstClear) {
+      const r = result.rewards;
+      box.append(h('div', { style: 'margin-top:6px;font-weight:600', text: '首次擊敗！' + [r.gems.length ? '獲得主動寶石：' + r.gems.map(gemName).join('、') : '', r.unlockRegions.length ? '開放地區：' + r.unlockRegions.map(id => M.REGIONS[id]?.name ?? id).join('、') : ''].filter(Boolean).join('｜') }));
+    }
+    if (!result.victory) box.append(h('div', { class: 'muted', text: '沒有掉落' }));
+    return box;
+  }
+  function renderFooter() {
+    const p = player;
+    const buttons = [];
+    if (!p.done) {
+      buttons.push(h('span', { class: 'muted', style: 'margin-right:auto' }, '速度：', SPEEDS.map(([label, ms]) =>
+        h('button', { class: 'small' + (ms === speed ? ' primary' : ''), text: label, onclick: () => { speed = ms; renderFooter(); if (!p.paused) { clearTimeout(p.timer); p.step(); } } }))));
+      buttons.push(h('button', { text: p.paused ? '繼續' : '暫停', onclick: () => { p.paused = !p.paused; renderFooter(); if (!p.paused) p.step(); } }));
+      buttons.push(h('button', { text: '跳到結尾', onclick: () => p.finish() }));
+    } else {
+      const text = () => game.battleText(p.result.logs, `${p.title}　種子 ${p.result.record.seed}`);
+      buttons.push(h('button', { class: 'small', text: '重播', onclick: () => openRecord(p.result.record, p.title.replace('（重播）', '')) }));
+      buttons.push(h('button', { class: 'small', text: '下載戰報', onclick: () => download(`battle-${p.result.record.seed}.txt`, text()) }));
+      buttons.push(h('button', { class: 'small', text: '下載紀錄', onclick: () => download(`battle-${p.result.record.seed}.json`, JSON.stringify(p.result.record), 'application/json') }));
+      buttons.push(h('button', { class: 'small', text: '複製紀錄碼', onclick: async () => {
+        const code = encodeRecord(p.result.record);
+        try { await navigator.clipboard.writeText(code); toast('紀錄碼已複製'); } catch (e) { download(`battle-${p.result.record.seed}.code.txt`, code); toast('無法複製，已改成下載'); }
+      } }));
+      if (p.live) buttons.push(h('button', { class: 'primary', text: '再打一場', onclick: () => startBattle(p.result.record.target) }));
+    }
+    buttons.push(h('button', { text: '關閉', onclick: closeBattle }));
+    $('battle-footer').replaceChildren(...buttons);
+  }
+  function closeBattle() {
+    if (player) { clearTimeout(player.timer); player = null; }
+    $('battle-modal').classList.remove('open');
+  }
+
+  // ── 工坊：製作裝備／刻印到裝備／刻印合成／分解刻印（第二層分頁，每頁都有刻印表） ──
+  const TIERS = [1, 2, 3, 4, 5];
+  const WORKSHOP_TABS = [['craft', '製作裝備'], ['engrave', '刻印到裝備'], ['combine', '刻印合成'], ['salvage', '分解刻印']];
+  function bagCount(kind, tier, extraUsed = []) {
+    const key = `${kind}@${tier}`;
+    return (state.engravings[key] ?? 0) - extraUsed.filter(k => k === key).length;
+  }
+  // 刻到裝備時的數值範圍（ROLL_MIN～1 × 上限 × 階級縮放；3 行隨機取 2 行）。製作裝備時的數值不顯示（使用者決定）。
+  const INT_STATS = new Set(['hp', 'sp', 'atk', 'int', 'def', 'spd', 'hit', 'eva']);
+  function lineRange(entry, tier) {
+    const hi = entry.max * affix.TIER_SCALE[tier], lo = hi * affix.ROLL_MIN;
+    if (entry.kind !== 'stat') {
+      const name = EFFECT_NAMES[entry.kind] ?? entry.kind;
+      return `${name} +${pct(lo)}～${pct(hi)}`;
+    }
+    const def = statLayer.STAT_DEFS[entry.stat];
+    if (entry.op === 'inc') return `${def.name}提高 ${pct(lo)}～${pct(hi)}`;
+    if (def.display === 'percent') return `${def.name} +${pct(lo)}～${pct(hi)}`;
+    const fmt = v => INT_STATS.has(entry.stat) ? Math.round(v) : +v.toFixed(2);
+    return `${def.name} +${fmt(lo)}～${fmt(hi)}`;
+  }
+  function showEngravingInfo(kind, tier) {
+    const def = affix.ENGRAVING_TYPES[kind];
+    showInfo(`${def.name} ${tier} 階`, [
+      h('div', { class: 'muted', style: 'margin-bottom:6px', text: `刻到裝備時從下面 ${affix.LINES_PER_ENGRAVING} 行隨機取 2 行，數值在範圍內隨機。` }),
+      h('ul', { style: 'margin:0;padding-left:18px' }, def.lines.map(entry => h('li', { text: lineRange(entry, tier) }))),
+      h('div', { class: 'muted', style: 'margin-top:6px', text: `能刻的部位：${affix.ENGRAVING_SLOTS[kind].map(s => SLOT_NAMES[s]).join('、')}｜背包有 ${bagCount(kind, tier)} 個` })
+    ]);
+  }
+  // 右鍵（電腦）或長按（手機）看數值；長按後的那次點擊不算點選
+  function bindInfo(el, kind, tier) {
+    let timer = null, longPressed = false;
+    el.addEventListener('contextmenu', ev => { ev.preventDefault(); showEngravingInfo(kind, tier); });
+    el.addEventListener('touchstart', () => { longPressed = false; timer = setTimeout(() => { longPressed = true; showEngravingInfo(kind, tier); }, 500); }, { passive: true });
+    const cancel = () => clearTimeout(timer);
+    el.addEventListener('touchend', cancel); el.addEventListener('touchmove', cancel); el.addEventListener('touchcancel', cancel);
+    el.addEventListener('click', ev => { if (longPressed) { ev.stopImmediatePropagation(); ev.preventDefault(); longPressed = false; } }, true);
+  }
+  /** 刻印表：used = 已選走的（從數量扣掉）；allowed(kind, tier) = 這格能不能點；selected = 目前選中的格。 */
+  function renderBag({ onPick = null, used = [], allowed = () => true, selected = null } = {}) {
+    return h('table', { class: 'bag' },
+      h('tr', {}, h('th', { text: '刻印' }), TIERS.map(t => h('th', { text: `${t} 階` }))),
+      KINDS.map(kind => h('tr', { class: TIERS.some(t => allowed(kind, t)) ? '' : 'off' }, h('td', { text: kindName(kind) }), TIERS.map(tier => {
+        const n = bagCount(kind, tier, used);
+        const can = Boolean(onPick) && n > 0 && allowed(kind, tier);
+        const isSel = selected && selected.kind === kind && selected.tier === tier;
+        const cell = h('td', { class: [n > 0 ? 'has' : 'zero', can ? 'pick' : 'nopick', isSel ? 'sel' : ''].join(' '), text: n, onclick: can ? () => onPick(kind, tier) : null });
+        bindInfo(cell, kind, tier);
+        return cell;
+      }))));
+  }
+  const bagHint = text => h('p', { class: 'muted', style: 'margin:8px 0 4px', text: text + '　在數量上按右鍵（手機長按）可以看刻到裝備時的數值。' });
+
+  function craftView() {
+    const picks = ui.craftPicks;
+    return h('div', { class: 'panel' }, h('h2', { text: '製作裝備' }),
+      h('div', { class: 'row' }, '部位',
+        h('select', { onchange: ev => { ui.craftSlot = ev.target.value; render(); } }, Object.entries(SLOT_NAMES).map(([id, name]) => h('option', { value: id, selected: id === ui.craftSlot, text: name }))),
+        ui.craftSlot === 'weapon' ? ['普攻', h('select', { onchange: ev => { ui.craftStat = ev.target.value; } }, [['atk', '吃攻擊'], ['int', '吃智力']].map(([v, t]) => h('option', { value: v, selected: v === ui.craftStat, text: t })))] : null),
+      bagHint(`點刻印表加入材料（${picks.length} / ${craft.CRAFT_INPUTS}），點上面的材料移除。種類與階級可以混；品質製作時才擲。`),
+      h('div', { class: 'chips' }, picks.map((p, i) => h('span', { class: 'chip', text: `${kindName(p.type)} ${p.tier}`, onclick: () => { picks.splice(i, 1); render(); } }))),
+      renderBag({ onPick: (kind, tier) => { if (picks.length < craft.CRAFT_INPUTS) { picks.push({ type: kind, tier }); render(); } }, used: picks.map(p => `${p.type}@${p.tier}`), allowed: () => picks.length < craft.CRAFT_INPUTS }),
+      picks.length === craft.CRAFT_INPUTS ? h('div', { class: 'muted', style: 'margin-top:6px', text: '預覽（次等 ×1）：' + previewCraft(ui.craftSlot, picks) }) : null,
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('button', { class: 'primary', disabled: picks.length !== craft.CRAFT_INPUTS, text: '製作', onclick: () => apply(s => S.craftEquipment(s, ui.craftSlot, picks, Math.random, ui.craftSlot === 'weapon' ? { attackStat: ui.craftStat } : {}),
+          v => { ui.craftPicks = []; const item = v.save.equipment.find(x => x.id === v.id); return `做出了 ${itemName(item)}（${QUALITY[v.quality].name} ×${QUALITY[v.quality].mult}）`; }) }),
+        h('button', { class: 'small', disabled: !picks.length, text: '清空', onclick: () => { ui.craftPicks = []; render(); } })));
+  }
+
+  function engraveView() {
+    const e = state.energy;
+    const crafted = state.equipment.filter(item => S.ENGRAVABLE_ORIGINS.includes(item.origin));
+    if (!crafted.some(item => item.id === ui.engraveItem)) ui.engraveItem = crafted[0]?.id ?? null;
+    const item = crafted.find(x => x.id === ui.engraveItem);
+    if (!item) return h('div', { class: 'panel' }, h('h2', { text: '刻印到裝備' }), h('div', { class: 'muted', text: '還沒有能刻印的裝備（傳說裝備不能刻）' }));
+    const current = S.itemEngravings(item);
+    const full = current.length >= affix.ENGRAVINGS_PER_ITEM;
+    const sel = ui.engraveSel;
+    if (sel && (!affix.canEngrave(sel.kind, item.slot) || bagCount(sel.kind, sel.tier) <= 0)) ui.engraveSel = null;
+    return h('div', { class: 'grid2' },
+      h('div', { class: 'panel' }, h('h2', { text: '刻印到裝備' }),
+        h('div', { class: 'row' }, '裝備', h('select', { onchange: ev => { ui.engraveItem = ev.target.value; ui.engraveSel = null; render(); } },
+          crafted.map(x => h('option', { value: x.id, selected: x.id === ui.engraveItem, text: `${itemName(x)}${state.equipped[x.slot] === x.id ? '（穿著）' : ''}　${S.itemEngravings(x).length}/${affix.ENGRAVINGS_PER_ITEM}` })))),
+        bagHint(full ? `已刻滿 ${affix.ENGRAVINGS_PER_ITEM} 個；要換請先在右邊清除。` : `點刻印表選一個，再按「刻印」。灰色的種類不能刻在${SLOT_NAMES[item.slot]}。`),
+        renderBag({ onPick: full ? null : (kind, tier) => { ui.engraveSel = { kind, tier }; render(); }, allowed: kind => affix.canEngrave(kind, item.slot), selected: ui.engraveSel }),
+        h('div', { class: 'row', style: 'margin-top:8px' },
+          h('button', { class: 'primary', disabled: full || !ui.engraveSel, text: ui.engraveSel ? `刻印（${kindName(ui.engraveSel.kind)} ${ui.engraveSel.tier} 階）` : '刻印', onclick: () => {
+            const { kind, tier } = ui.engraveSel;
+            apply(s => S.engraveEquipment(s, item.id, kind, tier), v => { ui.engraveSel = null; return '刻上了：' + v.affixes.map(describeAffix).join('、'); });
+          } }))),
+      h('div', { class: 'panel' }, h('h2', { text: '這件裝備' }),
+        itemCard(item, { compact: true }),
+        h('h3', { style: 'margin-top:12px', text: `已刻的刻印（${current.length}/${affix.ENGRAVINGS_PER_ITEM}）` }),
+        current.length ? h('div', { class: 'stack' }, current.map((key, i) => {
+          const tier = Number(key.split('@')[1]);
+          const cost = energyTable.CLEAR_COST[tier];
+          return h('div', { class: 'row' }, h('span', { text: engravingLabel(key) }),
+            h('button', { class: 'small danger', text: `清除（${cost} 能量）`, onclick: async () => {
+              if (e < cost) { toast(`能量不足：清除第 ${tier} 階刻印要 ${cost}，目前只有 ${e}`, true); return; }
+              if (await ask(`清除「${engravingLabel(key)}」？刻印不會退回，消耗 ${cost} 能量。`, '清除')) apply(s => S.clearEngraving(s, item.id, i), v => `已清除 ${engravingLabel(v.removed)}（−${v.cost} 能量）`);
+            } }));
+        })) : h('div', { class: 'muted', text: '還沒有刻印' }),
+        h('p', { class: 'muted', style: 'margin:8px 0 0', text: `清除費用（1～5 階）：${Object.values(energyTable.CLEAR_COST).join('／')} 能量；目前 ${e} / ${energyTable.ENERGY_CAP}。` })));
+  }
+
+  function combineView() {
+    const cp = ui.combinePicks;   // [{ kind, tier }]
+    const tier = cp[0]?.tier ?? null;
+    const preview = cp.length === affix.COMBINE_INPUTS
+      ? (cp.every(p => p.kind === cp[0].kind) ? `→ ${kindName(cp[0].kind)} ${tier + 1} 階` : `→ 隨機種類 ${tier + 1} 階`) : null;
+    return h('div', { class: 'panel' }, h('h2', { text: `刻印合成（${affix.COMBINE_INPUTS} → 高一階）` }),
+      bagHint(`點刻印表放入 ${affix.COMBINE_INPUTS} 個同階刻印（${cp.length} / ${affix.COMBINE_INPUTS}），點上面的移除。三個同種 → 同種高一階；不是三個同種 → 高一階隨機種類。第 5 階不能合成。`),
+      h('div', { class: 'chips' }, cp.map((p, i) => h('span', { class: 'chip', text: `${kindName(p.kind)} ${p.tier}`, onclick: () => { cp.splice(i, 1); render(); } }))),
+      renderBag({ onPick: (kind, t) => { cp.push({ kind, tier: t }); render(); }, used: cp.map(p => `${p.kind}@${p.tier}`),
+        allowed: (kind, t) => t < affix.MAX_TIER && cp.length < affix.COMBINE_INPUTS && (tier === null || t === tier) }),
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('button', { class: 'primary', disabled: cp.length !== affix.COMBINE_INPUTS, text: '合成', onclick: () => apply(s => S.combineEngravings(s, cp.map(p => p.kind), tier),
+          v => { ui.combinePicks = []; return `合成出 ${kindName(v.type)} ${v.tier} 階${v.mode === 'mixed' ? '（隨機）' : ''}`; }) }),
+        h('button', { class: 'small', disabled: !cp.length, text: '清空', onclick: () => { ui.combinePicks = []; render(); } }),
+        preview ? h('span', { class: 'muted', text: preview }) : null));
+  }
+
+  function salvageView() {
+    const sv = ui.salvage;   // { kind, tier, count } 或 kind = null
+    const have = sv.kind ? bagCount(sv.kind, sv.tier) : 0;
+    if (sv.kind && have <= 0) sv.kind = null;
+    if (sv.kind) sv.count = Math.min(Math.max(1, sv.count), have);
+    return h('div', { class: 'panel' }, h('h2', { text: '分解刻印（換能量）' }),
+      bagHint(`點刻印表選一種，設定數量後分解。分解 1 個（1～5 階）：${Object.values(energyTable.SALVAGE_ENERGY).join('／')} 能量，超過上限 ${energyTable.ENERGY_CAP} 的部分作廢。`),
+      renderBag({ onPick: (kind, tier) => { ui.salvage = { kind, tier, count: 1 }; render(); }, selected: sv.kind ? sv : null }),
+      sv.kind ? h('div', { class: 'row', style: 'margin-top:8px' },
+        h('strong', { text: `${kindName(sv.kind)} ${sv.tier} 階` }), h('span', { class: 'muted', text: `（有 ${have}）` }), '數量',
+        h('input', { type: 'number', min: 1, max: have, value: sv.count, style: 'width:70px', onchange: ev => { sv.count = Math.max(1, Math.min(have, Number(ev.target.value) || 1)); render(); } }),
+        h('button', { class: 'small', text: '全部', onclick: () => { sv.count = have; render(); } }),
+        h('span', { class: 'muted', text: `= ${energyTable.SALVAGE_ENERGY[sv.tier] * sv.count} 能量` }),
+        h('button', { class: 'primary', text: '分解', onclick: () => apply(s => S.salvageEngravings(s, sv.kind, sv.tier, sv.count),
+          v => v.wasted > 0 ? `能量 +${v.gained}（滿了，${v.wasted} 作廢）` : `能量 +${v.gained}`) }))
+        : h('div', { class: 'muted', style: 'margin-top:8px', text: '還沒選刻印' }));
+  }
+
+  function renderWorkshop() {
+    const views = { craft: craftView, engrave: engraveView, combine: combineView, salvage: salvageView };
+    return [h('div', { class: 'subtabs' }, WORKSHOP_TABS.map(([id, name]) => h('button', { class: ui.workshopTab === id ? 'active' : '', text: name, onclick: () => { ui.workshopTab = id; render(); } }))),
+      views[ui.workshopTab]()];
+  }
+  function previewCraft(slot, picks) {
+    const raw = craft.rawBase(picks);
+    const mult = craft.SLOT_MULT[slot];
+    return craft.CRAFT_STATS.map(stat => [stat, Math.round(raw[stat] * mult[stat])]).filter(([, v]) => v > 0)
+      .map(([stat, v]) => `${statLayer.STAT_DEFS[stat].name} +${v}`).join('、') + '；品質最高 ×1.5';
+  }
+
+  // ── 裝備 ────────────────────────────────────────────────────
+  function itemCard(item, { compact = false } = {}) {
+    const worn = state.equipped[item.slot] === item.id;
+    const engravings = S.itemEngravings(item);
+    const lines = [
+      ...item.base.map(b => statLayer.describeStatBonus(b).text),
+      ...item.affixes.map(a => describeAffix(a) + (a.source?.startsWith('engraving:') ? `（${engravingLabel(a.source.slice(10))}）` : a.source?.startsWith('craft:') ? '（製作詞綴）' : a.source?.startsWith('legendary:') ? '（獨有）' : ''))
+    ];
+    const mech = legendary.mechanicsOf(item).map(m => m.type === 'grantSupport' ? `裝備的主動寶石具有${gemName(m.gem)}` : m.type === 'castOnEnemyDeath' ? '敵人倒下時釋放一次裝備的主動寶石' : m.type);
+    const links = S.equippedLinks({ ...state, equipped: { weapon: null, helmet: null, armor: null, boots: null, [item.slot]: item.id } });
+    return h('div', { class: 'item' + (worn ? ' worn' : '') },
+      h('div', { class: 'name' }, itemName(item), h('span', { class: 'muted', style: 'font-weight:normal', text: `　${SLOT_NAMES[item.slot]}` }),
+        worn ? h('span', { class: 'tag equipped', text: '穿著' }) : null, item.legendaryId ? h('span', { class: 'tag legend', text: '傳說' }) : null),
+      h('ul', {}, lines.map(t => h('li', { text: t })), mech.map(t => h('li', { text: t }))),
+      compact ? null : h('div', { class: 'muted', style: 'font-size:12px' },
+        `施放權重 ${item.castWeight}`, item.slot === 'weapon' ? `｜普攻${(item.attackStat ?? 'atk') === 'int' ? '吃智力' : '吃攻擊'}` : '',
+        S.ENGRAVABLE_ORIGINS.includes(item.origin) ? `｜刻印 ${engravings.length}/${affix.ENGRAVINGS_PER_ITEM}` : '',
+        links.length ? `｜寶石：${links.map(l => [l.active, ...(l.supports || [])].map(gemName).join('＋')).join('；')}` : ''),
+      compact ? null : h('div', { class: 'actions' },
+        ui.salvageMode
+          ? h('button', { class: 'small danger', disabled: !item.materials, title: item.materials ? null : '只有用刻印製作的裝備能分解',
+            text: item.materials ? `分解（退回 ${craft.SALVAGE_RETURN} 個刻印）` : '不能分解',
+            onclick: async () => { if (await ask(`分解 ${itemName(item)}？會隨機退回 ${craft.SALVAGE_RETURN} 個當初投入的刻印，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => '退回：' + v.returned.map(engravingLabel).join('、')); } })
+          : worn ? h('button', { class: 'small', text: '脫下', onclick: () => apply(s => S.unequip(s, item.slot)) })
+            : h('button', { class: 'small primary', text: '穿上', onclick: () => apply(s => S.equip(s, item.id)) })));
+  }
+  function renderEquipment() {
+    const bySlot = slot => state.equipment.filter(item => item.slot === slot).sort((a, b) => (state.equipped[slot] === b.id) - (state.equipped[slot] === a.id));
+    return [h('div', { class: 'panel' },
+      h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:10px' },
+        h('h2', { style: 'margin:0', text: `裝備（${state.equipment.length} 件）` }),
+        h('button', { class: 'toggle danger' + (ui.salvageMode ? ' active' : ''), text: ui.salvageMode ? '分解模式：開（點按鈕分解）' : '分解模式：關', onclick: () => { ui.salvageMode = !ui.salvageMode; render(); } })),
+      h('div', { class: 'grid4' }, Object.entries(SLOT_NAMES).map(([slot, name]) => h('div', { class: 'slot-col' },
+        h('h3', {}, name, h('span', { class: 'muted', style: 'font-weight:normal', text: `${bySlot(slot).length} 件` })),
+        h('div', { class: 'stack' }, bySlot(slot).length ? bySlot(slot).map(item => itemCard(item)) : h('div', { class: 'muted', text: '沒有' }))))))];
+  }
+
+  // ── 寶石 ────────────────────────────────────────────────────
+  function linkEditor(slot) {
+    const id = state.equipped[slot];
+    const item = state.equipment.find(x => x.id === id);
+    if (!item) return h('div', { class: 'panel' }, h('h3', { text: SLOT_NAMES[slot] }), h('div', { class: 'muted', text: '沒有穿裝備' }));
+    const link = (item.links || [])[0] || { active: null, supports: [] };
+    const draft = ui[`link_${slot}`] && ui[`link_${slot}`].itemId === id ? ui[`link_${slot}`] : { itemId: id, active: link.active, supports: [...(link.supports || [])] };
+    ui[`link_${slot}`] = draft;
+    const has = gemId => (state.gems[gemId] ?? 0) + ((link.active === gemId ? 1 : 0) + (link.supports || []).filter(g => g === gemId).length);
+    const activeOptions = Object.keys(G.ACTIVE_GEMS).filter(g => has(g) > 0);
+    const supportOptions = Object.keys(G.SUPPORT_GEMS).filter(g => has(g) > 0);
+    const granted = legendary.mechanicsOf(item).filter(m => m.type === 'grantSupport').map(m => gemName(m.gem));
+    return h('div', { class: 'panel link-editor' },
+      h('h3', {}, SLOT_NAMES[slot], h('span', { class: 'muted', style: 'font-weight:normal', text: `　${itemName(item)}　權重 ${item.castWeight}` })),
+      h('div', { class: 'stack' },
+        h('label', {}, '主動寶石', h('select', { onchange: ev => { draft.active = ev.target.value || null; if (!draft.active) draft.supports = []; } },
+          h('option', { value: '', text: '（不放）' }), activeOptions.map(g => h('option', { value: g, selected: g === draft.active, text: `${gemName(g)}（有 ${has(g)}）` })))),
+        Array.from({ length: G.MAX_SUPPORTS }, (_, i) => h('label', {}, `輔助 ${i + 1}`, h('select', { onchange: ev => { draft.supports[i] = ev.target.value || null; } },
+          h('option', { value: '', text: '（不放）' }), supportOptions.map(g => h('option', { value: g, selected: g === draft.supports[i], text: `${gemName(g)}（有 ${has(g)}）` }))))),
+        granted.length ? h('div', { class: 'muted', style: 'font-size:12px', text: `裝備額外給：${granted.join('、')}（不佔位）` }) : null,
+        h('div', { class: 'row' },
+          h('button', { class: 'primary small', text: '套用', onclick: () => {
+            const supports = draft.supports.filter(Boolean);
+            const links = draft.active ? [{ active: draft.active, supports }] : [];
+            ui.linkErrors[slot] = null;
+            apply(s => S.setLinks(s, id, links), '寶石連結已更新').then(ok => { if (!ok) { try { S.setLinks(state, id, links); } catch (error) { ui.linkErrors[slot] = (error.message || '') + (error.problems ? '\n' + error.problems.join('\n') : ''); render(); } } });
+          } }),
+          h('button', { class: 'small', text: '還原', onclick: () => { delete ui[`link_${slot}`]; ui.linkErrors[slot] = null; render(); } })),
+        ui.linkErrors[slot] ? h('div', { class: 'error', text: ui.linkErrors[slot] }) : null));
+  }
+  function describeActive(gem) {
+    const dmg = gem.actions.filter(a => a.type === 'DAMAGE');
+    const parts = [`SP ${gem.spCost}`, gem.tags.includes('spell') ? '法術' : '物理'];
+    for (const a of dmg) parts.push(`${a.targetType === 'ENEMY_ALL' ? '全體' : '單體'} ${Math.round((a.power ?? 1) * 100)}%`);
+    for (const a of dmg) for (const ail of a.ailments || []) parts.push(`附加${G.AILMENTS[ail.kind]?.name ?? ail.kind}（${ail.basis === 'hit' ? '命中傷害' : '攻擊力'}的 ${Math.round(ail.power * 100)}%，${ail.duration} 槽）`);
+    if (gem.actions.some(a => a.type === 'HEAL')) parts.push('治療');
+    return parts.join('｜');
+  }
+  function renderGems() {
+    const owned = Object.entries(state.gems).filter(([, n]) => n > 0);
+    const actives = owned.filter(([id]) => G.ACTIVE_GEMS[id]);
+    const supports = owned.filter(([id]) => G.SUPPORT_GEMS[id]);
+    return [h('div', { class: 'grid4' }, Object.keys(SLOT_NAMES).map(linkEditor)),
+      h('div', { class: 'grid2' },
+        h('div', { class: 'panel' }, h('h2', { text: '背包：主動寶石' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有（鑲在裝備上的不算）' })),
+        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), h('div', { class: 'muted', style: 'font-size:12px', text: compiler.describeSupport(G.SUPPORT_GEMS[id]).lines.map(l => l.text).join('；') })))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' })))];
+  }
+
+  // ── 畫面 ────────────────────────────────────────────────────
+  function render() {
+    if (!state) return;
+    for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('active', b.dataset.tab === tab);
+    const views = { adventure: renderAdventure, workshop: renderWorkshop, equipment: renderEquipment, gems: renderGems };
+    $('main').replaceChildren(...views[tab]());
+    document.querySelector('.layout').classList.toggle('no-side', !['adventure', 'equipment'].includes(tab));
+    renderHero();
+  }
+  function pickFile(onText) {
+    const input = $('file-input');
+    input.value = '';
+    input.onchange = () => { const file = input.files[0]; if (!file) return; file.text().then(text => { try { onText(text); } catch (e) { toast('檔案內容不正確：' + e.message, true); } }); };
+    input.click();
+  }
+
+  document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => { tab = b.dataset.tab; render(); }));
+  $('export-save').addEventListener('click', () => download(`save-${new Date().toISOString().slice(0, 10)}.json`, S.exportSave(state), 'application/json'));
+  $('import-save').addEventListener('click', () => pickFile(async text => {
+    const next = S.importSave(text);
+    if (!(await ask('匯入會取代目前的存檔，確定？', '匯入'))) return;
+    state = await store.save(next);
+    toast('已匯入存檔');
+    render();
+  }));
+  $('reset-save').addEventListener('click', async () => {
+    if (!(await ask('重新開始會清掉目前的存檔（戰鬥紀錄保留）。建議先匯出存檔。確定？', '重新開始'))) return;
+    state = await store.save(game.createNewGame());
+    toast('已重新開始');
+    render();
+  });
+  $('info-close').addEventListener('click', () => $('info-modal').classList.remove('open'));
+  $('info-modal').addEventListener('click', ev => { if (ev.target === $('info-modal')) $('info-modal').classList.remove('open'); });
+  $('battle-modal').addEventListener('click', ev => { if (ev.target === $('battle-modal') && player?.done) closeBattle(); });
+
+  (async function init() {
+    loadHistory();
+    try { state = await store.load(); } catch (error) { toast('讀檔失敗：' + error.message + '（沒有覆蓋舊存檔）', true); }
+    if (!state) state = await store.save(game.createNewGame());
+    render();
+    window.GameUI = { get state() { return state; }, render, startBattle, openRecord, closeBattle, setTab: t => { tab = t; render(); }, ui };
+  })();
+})();
+</script>
+</body>
+</html>

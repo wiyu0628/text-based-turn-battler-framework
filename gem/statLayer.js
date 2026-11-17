@@ -42,6 +42,9 @@ const STAT_DEFS = {
   def:           { name: '防禦',       display: 'number',  integer: true,  min: 0, fallback: 0 },
   int:           { name: '智力',       display: 'number',  integer: true,  min: 0, fallback: 0 },
   spd:           { name: '速度',       display: 'number',  integer: true,  min: 0, fallback: 0 },
+  // 命中與閃避（框架 1.0.59 的 hitFormula: 'contest'：命中 = 200 + hit；見 docs/MECHANICS.md）
+  hit:           { name: '命中',       display: 'number',  integer: true,  min: 0, fallback: 0 },
+  eva:           { name: '閃避',       display: 'number',  integer: true,  min: 0, fallback: 0 },
   cri:           { name: '暴擊率',     display: 'percent', integer: false, min: 0, max: 1, fallback: 0 },
   criDmg:        { name: '暴擊傷害',   display: 'percent', integer: false, min: 1, fallback: 1.5 },
   skillCastRate: { name: '技能施放率', display: 'percent', integer: false, min: 0, max: 1, fallback: 0.35 }

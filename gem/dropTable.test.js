@@ -30,14 +30,15 @@ test('tier unlocks follow 1-2 / 3-6 / 7-9 / 10-12 / 13-15, with a 3% preview at 
   assert.deepEqual(TIER_WEIGHTS[2], [100, 0, 0, 0, 0]);   // 難度 1、2 不可能掉第 2 階以上
 });
 
-test('three engravings only from difficulty 13; legendary goes 0.5% → 4%; gem stays 15%', () => {
+test('three engravings only from difficulty 13; legendary goes 0.5% → 4%; gem stays 30%', () => {
   assert.equal(dropRates(12).count[3], 0);
   assert.ok(dropRates(13).count[3] > 0);
-  assert.equal(dropRates(15).count[3], 0.09);
-  assert.equal(dropRates(15).count[2], 0.31);
+  assert.equal(dropRates(15).count[3], 0.24);
+  assert.equal(dropRates(15).count[2], 0.51);
+  assert.equal(dropRates(1).count[2], 0.3);
   assert.equal(dropRates(1).legendary, 0.005);
   assert.equal(dropRates(15).legendary, 0.04);
-  for (const d of DIFFS) assert.equal(dropRates(d).gem, 0.15);
+  for (const d of DIFFS) assert.equal(dropRates(d).gem, 0.3);
 });
 
 test('bad difficulty is rejected', () => {
@@ -50,7 +51,7 @@ test('rng order: count, then tier and type per engraving, then gem (and which), 
   // 難度 15：count r=0.95 → 3 個；階級 0/0.3/0.99 → 3/4/5 階；種類 0 → 第一種、0.99 → 最後一種
   const drops = rollDrops(15, scripted(0.95, 0, 0, 0.3, 0.5, 0.99, 0.99, 0.1, 0.99, 0.01));
   const types = Object.keys(ENGRAVING_TYPES);
-  assert.deepEqual(drops.engravings, [{ type: types[0], tier: 3 }, { type: types[3], tier: 4 }, { type: types.at(-1), tier: 5 }]);
+  assert.deepEqual(drops.engravings, [{ type: types[0], tier: 3 }, { type: types[Math.floor(0.5 * types.length)], tier: 4 }, { type: types.at(-1), tier: 5 }]);
   assert.deepEqual(drops.supportGems, [Object.keys(SUPPORT_GEMS).at(-1)]);
   assert.equal(drops.legendary, 1);
 });
@@ -81,7 +82,7 @@ test('low difficulty never drops above its tier; distributions match the table',
     });
     assert.ok(Math.abs(engr / n - (rates.count[1] + 2 * rates.count[2] + 3 * rates.count[3])) < 0.02);
     assert.ok(Math.abs(three / n - rates.count[3]) < 0.006);
-    assert.ok(Math.abs(gems / n - 0.15) < 0.01);
+    assert.ok(Math.abs(gems / n - 0.3) < 0.012);
     assert.ok(Math.abs(legend / n - rates.legendary) < 0.004);
   }
 });

@@ -79,8 +79,8 @@ new Entity({ id, name, team, stats, normalAttack, skills, passives, ... })
 | `atk` | 應設定 | DAMAGE / HEAL 預設讀的能力值；讀不到會直接拋錯 |
 | `def` | `0` | 減傷：`傷害 × 300 / (def + 300)` |
 | `spd` | 應設定 | 行動順序權重；速度差決定普攻連擊數。沒給的話沒有人會行動，整場打成平手 |
-| `hit` | `0` | 命中加成，每點 +1% |
-| `eva` | `0` | 閃避：`eva / (eva + 100)`。命中率保底 10% |
+| `hit` | `0` | 命中加成，每點 +1%。引擎選 `hitFormula: 'contest'` 時改成加在初始命中 200 上（見下） |
+| `eva` | `0` | 閃避：`eva / (eva + 100)`。命中率保底 10%。`contest` 時見 `hitFormula` |
 | `cri` | `0` | 爆擊率（0～1） |
 | `criDmg` | `1.5` | 爆擊倍率 |
 | `counter` | `0` | 反擊點數，0 表示不反擊。機率看雙方點數差，見 [COUNTERS.md](COUNTERS.md) |
@@ -267,6 +267,7 @@ new BattleEngine(teamA, teamB, options).start()
 | `skillResolver` | `(skillId) => Skill`，`CAST_SKILL` 與觸發型 Buff 用 |
 | `roundStart` | `(engine) => void`，每回合 TURN_START 之後 |
 | `battleEnd` | `(engine) => void`，勝負已定、BATTLE_END 之前，可補結尾日誌 |
+| `hitFormula` | `'classic'`（預設）或 `'contest'`（1.0.59）。`contest`：命中 = 200 + `hit`，閃避機率 = `(100 + max(0, eva − 命中)) / (200 + \|eva − 命中\|)`，命中率 = `(1 − 閃避機率) × accuracy + hitRateModifier`，夾 10%～100%。見 [MECHANICS.md](MECHANICS.md) |
 | `hitResolver` | `({ caster, target, skill, action, hitIndex, turn, engine }) => { hitRateModifier, forceMiss, evadeMessage, hitMessage, afterRoll }`，逐擊調整命中 |
 | `actionTargetResolver` | `({ caster, skill, allies, enemies, engine })`，出手前改目標：回傳目標陣列、`{ targets, uncounterable }`、`{ swapSides: true, excludeSelf? }`（混亂），或 `undefined` |
 | `targetSelectionResolver` | 參數多了 `targetType`，在行動槽第一次挑目標時才問一次，回傳格式同上 |

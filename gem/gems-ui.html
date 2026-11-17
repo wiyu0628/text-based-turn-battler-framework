@@ -215,6 +215,12 @@ class BattleEngine {
     this.counterSource = null;
     this.luckEventsEnabled = options.luckEvents?.enabled ?? true;
     this.hitResolver = options.hitResolver;
+    // 命中公式（1.0.59）：'classic' 是原本的「命中抵銷閃避」，'contest' 是對抗式（見 Formulas.contestEvadeChance）。
+    // 預設 classic，沒指定的戰鬥結果與亂數序列不變；寫錯直接拋錯，不悄悄退回預設。
+    if (options.hitFormula !== undefined && !['classic', 'contest'].includes(options.hitFormula)) {
+      throw new Error(`hitFormula must be 'classic' or 'contest', got "${options.hitFormula}".`);
+    }
+    this.hitFormula = options.hitFormula ?? 'classic';
     this.roundStart = options.roundStart;
     this.actionTargetResolver = options.actionTargetResolver;
     // 延後的目標判定（1.0.41）：同一個行動槽第一次挑「不是自己」的目標時才問，見 docs/ACTIONS.md。
@@ -389,7 +395,7 @@ class BattleEngine {
       return { hit: false, forced: true, evadeMessage: adjustment.evadeMessage, hitMessage: adjustment.hitMessage };
     }
     const hit = Formulas.isHit(caster, target, action.accuracy || 1,
-      adjustment.hitRateModifier || 0);
+      adjustment.hitRateModifier || 0, this.hitFormula);
     adjustment.afterRoll?.(hit);
     return { hit, evadeMessage: adjustment.evadeMessage, hitMessage: adjustment.hitMessage };
   }
@@ -2802,9 +2808,30 @@ class Formulas {
   }
 
   // 命中判定
-  static isHit(attacker, defender, skillAccuracy = 1, hitRateModifier = 0) {
+  // 對抗式命中的閃避機率（1.0.59，hitFormula: 'contest'）。
+  // 命中 = CONTEST_BASE_HIT + hit 屬性，差距 = 閃避 − 命中：
+  //   閃避機率 = (100 + max(0, 差距)) / (200 + |差距|)
+  // 以 50% 為中心對稱（差距 +X 與 −X 的閃避機率相加 = 1），兩端只會逼近 0% 與 100%。
+  // 為什麼要有這一套：classic 公式裡命中只能抵銷閃避，對方閃避 0 時命中完全沒有作用；
+  // 這裡命中與閃避任何時候都有效果，只是越往兩端越平緩。初始命中 200、閃避 0 時有 25% 打空。
+  static contestEvadeChance(hitStat = 0, evaStat = 0) {
+    const hit = Formulas.CONTEST_BASE_HIT + Math.max(0, hitStat || 0);
+    const gap = Math.max(0, evaStat || 0) - hit;
+    return (100 + Math.max(0, gap)) / (200 + Math.abs(gap));
+  }
+
+  // formula：'classic'（預設，原本的公式）或 'contest'（見上）。由 BattleEngine 的 hitFormula 選項帶入。
+  // 兩種都只擲一次骰，所以換公式不會讓之後的亂數錯位；沒開 contest 時結果與亂數序列和舊版相同。
+  static isHit(attacker, defender, skillAccuracy = 1, hitRateModifier = 0, formula = 'classic') {
     const hitStat = Math.max(0, statsOf(attacker).hit || 0);
     const evaStat = Math.max(0, statsOf(defender).eva || 0);
+
+    if (formula === 'contest') {
+      // 技能命中修正（accuracy）乘在命中率上；hitRateModifier（hitResolver）照舊加減；保底 10%、上限 100%。
+      const rate = (1 - Formulas.contestEvadeChance(hitStat, evaStat)) * skillAccuracy + hitRateModifier;
+      return random() < Math.min(1.0, Math.max(0.1, rate));
+    }
+    if (formula !== 'classic') throw new Error(`hitFormula must be 'classic' or 'contest', got "${formula}".`);
 
     // 漸進式閃避計算：閃避值越高，實際閃避機率的成長越平緩 (以 100 為基準點)
     // 例如：eva = 100 -> 50% 閃避 | eva = 300 -> 75% 閃避
@@ -2824,6 +2851,9 @@ class Formulas {
     return random() < finalHitRate;
   }
 }
+
+// 對抗式命中（hitFormula: 'contest'）的初始命中：hit 屬性加在它上面。
+Formulas.CONTEST_BASE_HIT = 200;
 
 module.exports = Formulas;
 
@@ -2979,6 +3009,9 @@ const STAT_DEFS = {
   def:           { name: '防禦',       display: 'number',  integer: true,  min: 0, fallback: 0 },
   int:           { name: '智力',       display: 'number',  integer: true,  min: 0, fallback: 0 },
   spd:           { name: '速度',       display: 'number',  integer: true,  min: 0, fallback: 0 },
+  // 命中與閃避（框架 1.0.59 的 hitFormula: 'contest'：命中 = 200 + hit；見 docs/MECHANICS.md）
+  hit:           { name: '命中',       display: 'number',  integer: true,  min: 0, fallback: 0 },
+  eva:           { name: '閃避',       display: 'number',  integer: true,  min: 0, fallback: 0 },
   cri:           { name: '暴擊率',     display: 'percent', integer: false, min: 0, max: 1, fallback: 0 },
   criDmg:        { name: '暴擊傷害',   display: 'percent', integer: false, min: 1, fallback: 1.5 },
   skillCastRate: { name: '技能施放率', display: 'percent', integer: false, min: 0, max: 1, fallback: 0.35 }
@@ -3349,7 +3382,7 @@ const ACTIVE_GEMS = {
       {
         type: 'DAMAGE',
         targetType: 'ENEMY_ALL',
-        power: 0.9,
+        power: 1.0,
         text: { action: '{caster} 揮出旋風斬，' }
       }
     ]
@@ -3360,7 +3393,7 @@ const ACTIVE_GEMS = {
     id: 'rend',
     name: '撕裂',
     tags: ['attack'],
-    spCost: 10,
+    spCost: 14,
     uncounterable: false,
     actions: [
       {
@@ -3470,8 +3503,8 @@ const SUPPORT_GEMS = {
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['pierce'],
     effects: [
-      { op: 'actionFlag', flag: 'ignoreDefense', value: 0.5 },
-      { op: 'more', value: -0.10 }
+      // 平衡第一輪：拿掉原本的傷害 −10%（多數怪防禦只有 20～80，穿甲反而變弱）
+      { op: 'actionFlag', flag: 'ignoreDefense', value: 0.5 }
     ]
   },
 
@@ -3488,7 +3521,7 @@ const SUPPORT_GEMS = {
     effects: [
       {
         op: 'appendAction',
-        text: '命中的敵人受到的攻擊傷害增加 15%，持續 2 個行動槽',
+        text: '命中的敵人受到的攻擊傷害增加 25%，持續 2 個行動槽',
         action: {
           type: 'BUFF',
           requiresDamage: true,
@@ -3501,7 +3534,7 @@ const SUPPORT_GEMS = {
               dispellable: true,
               duration: 2,
               stackPolicy: 'refresh',
-              damageTaken: { multiplier: 1.15 }
+              damageTaken: { multiplier: 1.25 }
             }
           ]
         }
@@ -3531,6 +3564,7 @@ const SUPPORT_GEMS = {
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['charge'],
     effects: [
+      { op: 'cost', value: 0.5 },    // 平衡第二輪（使用者決定）：改回 +125%，改成 SP 消耗 +50%
       { op: 'more', value: 1.25 },
       { op: 'wrap', kind: 'charge' }
     ]
@@ -3581,7 +3615,8 @@ const SUPPORT_GEMS = {
   critup: {
     id: 'critup',
     name: '爆擊強化',
-    requires: { action: { type: 'DAMAGE' } },
+    // 平衡第一輪：禁止連到法術（使用者決定；法術不擲爆擊骰，連了也沒有效果）
+    requires: { action: { type: 'DAMAGE' }, tags: { none: ['spell'] } },
     addTags: [],
     effects: [
       {
@@ -3609,7 +3644,14 @@ const SUPPORT_GEMS = {
   }
 };
 
-module.exports = { ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };
+// 主動寶石的取得（使用者決定）：大部分開局就有，一部分打王獲得。掉落只掉輔助寶石。
+// 名單是我擬的佔位：追刃留給打王。王的獎勵還沒做，BOSS_REWARD_GEMS 只是記錄。
+// 治癒術暫時不給（使用者：還沒有配套的輔助寶石），列在 UNOBTAINABLE_ACTIVE_GEMS，之後再決定來源。
+const STARTING_ACTIVE_GEMS = ['magicmissile', 'whirlwind', 'rend'];
+const BOSS_REWARD_GEMS = ['pursuit'];
+const UNOBTAINABLE_ACTIVE_GEMS = ['mend'];
+
+module.exports = { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_GEMS, ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };
 
 },
 "gem/gemCompiler.js": function (module, exports, require) {

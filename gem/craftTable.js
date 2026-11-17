@@ -31,6 +31,8 @@ const { TIER_SCALE, ROLL_MIN, ENGRAVING_TYPES, EFFECT_KINDS } = require('./affix
 
 const CRAFT_INPUTS = 10;
 const CRAFT_AFFIX_SLOTS = 1;   // 製作詞綴的條數
+// 分解製作裝備時，從當初投入的 10 個刻印裡隨機退回幾個（使用者：做壞的裝備也能回收；數量我擬，佔位）
+const SALVAGE_RETURN = 3;
 
 // 製作詞綴表：kind 是 affixTable 的 EFFECT_KINDS（scope 'effect'）；max 是第 5 階、滿骰的值；weight 是抽中的相對機率。
 // fixed: true 的數值固定為 max（不乘階級縮放、不擲值），但仍照樣呼叫 rng 一次，讓擲取順序不變。
@@ -52,7 +54,8 @@ const KIND_SHARES = {
   vital:   { hp: 0.6, def: 0.25, sp: 0.15 },
   bulwark: { def: 0.6, hp: 0.4 },
   gale:    { spd: 0.6, hp: 0.2, sp: 0.2 },
-  endure:  { hp: 0.4, sp: 0.4, def: 0.2 }
+  endure:  { hp: 0.4, sp: 0.4, def: 0.2 },
+  deft:    { spd: 0.5, hp: 0.3, atk: 0.1, int: 0.1 }
 };
 
 const SLOT_MULT = {
@@ -142,4 +145,4 @@ function rollCraft(slot, engravings, rng = Math.random) {
   return { slot, base, castWeight, quality: quality.id, affixes: rollCraftAffixes(inputs, rng) };
 }
 
-module.exports = { CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, CRAFT_AFFIXES, CRAFT_STATS, STAT_UNIT, KIND_SHARES, SLOT_MULT, QUALITIES, WEIGHT, rawBase, rollQuality, rollCraft };
+module.exports = { CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, SALVAGE_RETURN, CRAFT_AFFIXES, CRAFT_STATS, STAT_UNIT, KIND_SHARES, SLOT_MULT, QUALITIES, WEIGHT, rawBase, rollQuality, rollCraft };

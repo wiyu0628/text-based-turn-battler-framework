@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 存檔層 v1：存檔的資料結構、驗證、版本遷移、背包操作，以及可替換的儲存介面。
+ * 存檔層 v2：存檔的資料結構、驗證、版本遷移、背包操作，以及可替換的儲存介面。
  *
  * ── 存檔裡有什麼 ─────────────────────────────────────────────
  *   version     存檔版本號（整數）。改了資料結構就加一，並在 MIGRATIONS 補上升級函式。
@@ -19,13 +19,15 @@
  *                   quality?: 'common'                                           製作裝備的品質（craftTable.QUALITIES 的 id；掉落裝備沒有）
  *                   legendaryId?: 'omen'                                         傳說裝備的種類（legendaryTable.LEGENDARIES 的鍵；只有掉落裝備）
  *                   attackStat?: 'int'                                           武器：普攻吃 atk 或 int（沒寫＝atk；只有武器能寫）
+ *                   materials?: ['fury@5', …]                                    製作時投入的 10 個刻印（分解時從這裡退回；只有製作裝備）
  *                   links:   [{ active, supports: [] }] }                        鑲在這件裝備上的寶石連結
  *               每件裝備一組連結（1 顆主動 + 3 顆輔助），槽數沒有個體差異，所以不存在裝備裡，
  *               而是由 SLOT_RULES 決定。之後主動寶石能放進輔助槽時，只要改 SLOT_RULES（與編譯器），存檔格式不變。
  *               權重在裝備上、不在連結上：換寶石不會洗掉權重。穿戴時 equippedLinks 才把權重帶進連結。
  *   equipped    { weapon, helmet, armor, boots }：穿戴中的裝備 id 或 null
  *   progress    defeatedBosses、unlockedRegions、unlockedMonsters（id 字串陣列）
- *   settings    difficulty（1～15）
+ *   settings    difficulty（1～15）；playerName（選填，1～PLAYER_NAME_MAX 字；沒有就用遊戲層的預設名，不需要遷移）
+ *   energy      能量槽（0～ENERGY_CAP 的整數；v2 新增）。勝利與分解刻印取得，清除裝備上的刻印時消耗（見 energyTable.js）
  *
  * 不存：編譯後的技能、最終屬性、戰報、掉落表。這些讀檔後重新計算。
  *
@@ -39,25 +41,30 @@
  * createSaveStore 回傳的方法一律是 async。
  */
 
-const { ACTIVE_GEMS, SUPPORT_GEMS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
+const { ACTIVE_GEMS, SUPPORT_GEMS, STARTING_ACTIVE_GEMS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBonuses } = require('./statLayer');
-const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, sumEffectAffixes, rollCombine, rollEngraving } = require('./affixTable');
+const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, ENGRAVING_TYPES, canEngrave, sumEffectAffixes, rollCombine, rollEngraving } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
-const { QUALITIES, CRAFT_AFFIX_SLOTS, rollCraft } = require('./craftTable');
+const { QUALITIES, CRAFT_AFFIX_SLOTS, CRAFT_INPUTS, SALVAGE_RETURN, rollCraft } = require('./craftTable');
 const { LEGENDARIES, rollLegendary, pickLegendary, mechanicsOf } = require('./legendaryTable');
+const { ENERGY_CAP, SALVAGE_ENERGY, CLEAR_COST, addEnergy } = require('./energyTable');
+const { BOSSES } = require('./bosses');
+const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 1;
+const SAVE_VERSION = 2;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
 const ENGRAVABLE_ORIGINS = ['craft'];
+const SLOT_NAMES = { weapon: '武器', helmet: '頭盔', armor: '護甲', boots: '鞋子' };
 const ENGRAVING_SOURCE = /^engraving:([A-Za-z][A-Za-z0-9_]*@[1-5])$/;
 const LINES_PER_ITEM_ENGRAVING = LINES_PER_ENGRAVING - 1;   // 每個刻印刻上去生效的行數（3 取 2）
 const AFFIX_SCOPES = ['wearer', 'gems', 'effect'];
 const PROGRESS_KEYS = ['defeatedBosses', 'unlockedRegions', 'unlockedMonsters'];
 const MIN_DIFFICULTY = 1;
 const MAX_DIFFICULTY = 15;
+const PLAYER_NAME_MAX = 12;   // 玩家名字長度上限（字元數，我定的）
 const MIN_TIER = 1;
 const MAX_TIER = 5;
 const ENGRAVING_TYPE = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -84,6 +91,16 @@ const isGemId = id => Object.hasOwn(ACTIVE_GEMS, id) || Object.hasOwn(SUPPORT_GE
 // ── 建立 ─────────────────────────────────────────────────────
 
 /**
+ * 開新遊戲用的存檔：空存檔 ＋ 開局的主動寶石各 1 顆（gems.STARTING_ACTIVE_GEMS）。
+ * createEmptySave 維持完全空白（測試與工具用）。
+ */
+function createStarterSave(options = {}) {
+  const save = createEmptySave(options);
+  for (const gemId of STARTING_ACTIVE_GEMS) save.gems[gemId] = (save.gems[gemId] ?? 0) + 1;
+  return save;
+}
+
+/**
  * 全新的存檔。
  * @param {{ now?: string, gameVersion?: string }} [options] now 是 ISO 時間字串（測試時傳固定值）
  */
@@ -96,7 +113,8 @@ function createEmptySave({ now = new Date().toISOString(), gameVersion = null } 
     equipment: [],
     equipped: Object.fromEntries(SLOTS.map(slot => [slot, null])),
     progress: Object.fromEntries(PROGRESS_KEYS.map(key => [key, []])),
-    settings: { difficulty: MIN_DIFFICULTY }
+    settings: { difficulty: MIN_DIFFICULTY },
+    energy: 0
   };
 }
 
@@ -217,6 +235,12 @@ function validateEquipmentItem(item, where, nextId) {
     else if (def.slot !== item.slot) problems.push(`${where}是傳說裝備「${def.name}」，部位必須是 ${def.slot}`);
     if (item.origin !== 'drop') problems.push(`${where}有 legendaryId，origin 必須是 drop`);
   }
+  if (item.materials !== undefined) {
+    if (item.origin !== 'craft') problems.push(`${where}不是製作裝備，不能有 materials`);
+    else if (!Array.isArray(item.materials) || item.materials.length !== CRAFT_INPUTS || item.materials.some(key => typeof key !== 'string' || !ENGRAVING_KEY.test(key))) {
+      problems.push(`${where}的 materials 必須是 ${CRAFT_INPUTS} 個「種類@階級」`);
+    }
+  }
   if (item.attackStat !== undefined) {
     if (item.slot !== 'weapon') problems.push(`${where}不是武器，不能寫 attackStat`);
     else if (!ATTACK_STATS.includes(item.attackStat)) problems.push(`${where}的 attackStat「${item.attackStat}」不是 ${ATTACK_STATS.join('、')} 之一`);
@@ -261,6 +285,10 @@ function validateSave(save) {
     for (const key of ['gameVersion', 'createdAt', 'savedAt']) {
       if (meta[key] !== null && typeof meta[key] !== 'string') problems.push(`meta.${key} 必須是字串或 null`);
     }
+  }
+
+  if (!(Number.isInteger(save.energy) && save.energy >= 0 && save.energy <= ENERGY_CAP)) {
+    problems.push(`energy 必須是 0～${ENERGY_CAP} 的整數（收到 ${JSON.stringify(save.energy)}）`);
   }
 
   problems.push(...validateStacks(save.gems, 'gems', id => (isGemId(id) ? null : '不是已知的寶石')));
@@ -317,6 +345,10 @@ function validateSave(save) {
     if (!Number.isInteger(difficulty) || difficulty < MIN_DIFFICULTY || difficulty > MAX_DIFFICULTY) {
       problems.push(`settings.difficulty 必須是 ${MIN_DIFFICULTY}～${MAX_DIFFICULTY} 的整數`);
     }
+    const { playerName } = save.settings;
+    if (playerName !== undefined && (typeof playerName !== 'string' || !playerName.trim() || [...playerName].length > PLAYER_NAME_MAX)) {
+      problems.push(`settings.playerName 必須是 1～${PLAYER_NAME_MAX} 字的非空字串`);
+    }
   }
   return problems;
 }
@@ -326,7 +358,10 @@ function validateSave(save) {
 // 舊版本 → 升到下一版的函式。例如存檔結構改成第 2 版時：
 //   MIGRATIONS[1] = save => ({ ...save, version: 2, 新欄位: 預設值 });
 // 每一步只升一版，必須把 version 設成原本加一；讀檔時會一路升到 SAVE_VERSION。
-const MIGRATIONS = {};
+const MIGRATIONS = {
+  // v1 → v2：新增能量槽，舊存檔從 0 開始
+  1: save => ({ ...save, version: 2, energy: 0 })
+};
 
 function migrateSave(raw, migrations = MIGRATIONS, target = SAVE_VERSION) {
   if (!isObject(raw)) throw new SaveError('存檔必須是物件');
@@ -447,7 +482,7 @@ function combineEngravings(save, types, tier, rng = Math.random, { pool } = {}) 
 }
 
 /**
- * 把一場的掉落（dropTable.rollDrops 的結果）放進背包：刻印、輔助寶石、傳說裝備。
+ * 把一場的掉落（dropTable.rollDrops 的結果）放進背包：刻印、輔助寶石、傳說裝備，以及能量（超過上限的作廢）。
  * 傳說裝備（drops.legendary 件）從 legendaryTable 平均抽、依掉落難度縮放，所以有傳說裝備時**一定要傳 difficulty**，
  * 沒傳會丟錯（不會默默丟掉玩家的掉落）。內容不合法丟 SaveError，原存檔不變。
  * @param {{ difficulty?: number, rng?: () => number }} [options] rng 只用在傳說裝備（每件：抽種類 1 次，再照 rollLegendary 的順序）
@@ -458,6 +493,8 @@ function grantDrops(save, drops, { difficulty, rng = Math.random } = {}) {
   if (!Array.isArray(engravings) || !Array.isArray(supportGems)) throw new SaveError('掉落的 engravings 與 supportGems 必須是陣列');
   const keys = engravings.map(entry => stackKey(entry?.type, entry?.tier));
   supportGems.forEach(requireGem);
+  const energyGain = drops.energy ?? 0;
+  if (!(Number.isInteger(energyGain) && energyGain >= 0)) throw new SaveError('掉落的 energy 必須是不小於 0 的整數');
   const legendaryCount = drops.legendary ?? 0;
   if (!(Number.isInteger(legendaryCount) && legendaryCount >= 0)) throw new SaveError('掉落的 legendary 必須是不小於 0 的整數');
   const legendaries = [];
@@ -469,6 +506,7 @@ function grantDrops(save, drops, { difficulty, rng = Math.random } = {}) {
     for (const key of keys) addToStack(draft.engravings, key, 1);
     for (const gemId of supportGems) addToStack(draft.gems, gemId, 1);
     for (const item of legendaries) draft.equipment.push({ id: `eq${draft.meta.nextId++}`, ...item, links: [] });
+    draft.energy = addEnergy(draft.energy, energyGain).energy;   // 超過上限的部分作廢
   });
 }
 
@@ -512,7 +550,7 @@ function craftEquipment(save, slot, engravings, rng = Math.random, { attackStat 
     for (const [key, count] of Object.entries(need)) takeFromStack(draft.engravings, key, count, `刻印「${key}」`);
     const id = `eq${draft.meta.nextId++}`;
     draft.equipment.push({ id, slot, origin: 'craft', base: crafted.base, affixes: crafted.affixes, castWeight: crafted.castWeight, quality: crafted.quality,
-      ...(slot === 'weapon' ? { attackStat: attackStat ?? 'atk' } : {}), links: [] });
+      ...(slot === 'weapon' ? { attackStat: attackStat ?? 'atk' } : {}), materials: keys, links: [] });
     return { id, quality: crafted.quality };
   });
 }
@@ -531,7 +569,7 @@ function itemEngravings(item) {
 /**
  * 把背包裡的 1 個刻印刻到現有裝備上：扣 1 個刻印，擲出 2 行詞綴（3 取 2，數值隨機，見 affixTable.rollEngraving）加到裝備的 affixes 後面。
  * 每件最多 ENGRAVINGS_PER_ITEM（2）個，可以是同一種；**已刻的不能覆蓋**（清除重刻尚未決定）。
- * 只有 ENGRAVABLE_ORIGINS（製作裝備）能刻；穿戴中、鑲著寶石的裝備也能刻。
+ * 只有 ENGRAVABLE_ORIGINS（製作裝備）能刻；刻印要符合部位限制（affixTable.ENGRAVING_SLOTS）；穿戴中、鑲著寶石的裝備也能刻。
  * 回傳 { save, affixes（這次新增的行）}；失敗丟 SaveError，原存檔不變。
  */
 function engraveEquipment(save, id, type, tier, rng = Math.random) {
@@ -539,6 +577,9 @@ function engraveEquipment(save, id, type, tier, rng = Math.random) {
   return mutate(save, draft => {
     const item = findItem(draft, id);
     if (!ENGRAVABLE_ORIGINS.includes(item.origin)) throw new SaveError(`裝備「${id}」是${item.origin === 'drop' ? '掉落的傳說裝備' : `「${item.origin}」裝備`}，不能刻刻印`);
+    if (ENGRAVING_TYPES[type] && !canEngrave(type, item.slot)) {
+      throw new SaveError(`「${ENGRAVING_TYPES[type].name}」刻印不能刻在${SLOT_NAMES[item.slot] ?? item.slot}上`);
+    }
     const current = itemEngravings(item);
     if (current.length >= ENGRAVINGS_PER_ITEM) throw new SaveError(`裝備「${id}」已經有 ${ENGRAVINGS_PER_ITEM} 個刻印（${current.join('、')}），不能再刻`);
     takeFromStack(draft.engravings, key, 1, `刻印「${key}」`);
@@ -550,6 +591,73 @@ function engraveEquipment(save, id, type, tier, rng = Math.random) {
     }
     item.affixes.push(...lines);
     return { affixes: structuredClone(lines) };
+  });
+}
+
+/**
+ * 分解一件製作裝備：從它的 materials（當初投入的 10 個刻印）隨機退回 SALVAGE_RETURN 個到背包，
+ * 鑲著的寶石退回背包、穿著的脫下，裝備消失。用在品質做壞、或用不到的製作裝備。
+ * 傳說裝備與沒有 materials 的裝備不能分解（丟 SaveError，原存檔不變）。回傳 { save, returned: ['fury@5', …] }。
+ */
+function salvageEquipment(save, id, rng = Math.random) {
+  return mutate(save, draft => {
+    const item = findItem(draft, id);
+    if (item.origin !== 'craft' || !Array.isArray(item.materials)) throw new SaveError(`裝備「${id}」不是製作裝備，不能分解`);
+    const pool = [...item.materials];
+    const returned = [];
+    for (let i = 0; i < Math.min(SALVAGE_RETURN, pool.length); i++) {
+      const index = Math.min(pool.length - 1, Math.floor(rng() * pool.length));
+      returned.push(pool.splice(index, 1)[0]);
+    }
+    for (const key of returned) addToStack(draft.engravings, key, 1);
+    for (const [gemId, count] of Object.entries(linkGemCounts(item.links))) addToStack(draft.gems, gemId, count);
+    for (const slot of SLOTS) if (draft.equipped[slot] === id) draft.equipped[slot] = null;
+    draft.equipment = draft.equipment.filter(entry => entry.id !== id);
+    return { returned };
+  });
+}
+
+/**
+ * 分解背包裡的刻印換能量：每個第 t 階給 energyTable.SALVAGE_ENERGY[t]。超過上限的部分作廢（回傳 wasted，讓介面提醒）。
+ * 背包不夠、格式不對丟 SaveError，原存檔不變。回傳 { save, gained, wasted }。
+ */
+function salvageEngravings(save, type, tier, count = 1) {
+  const key = stackKey(type, tier);
+  if (!Number.isInteger(count) || count < 1) throw new SaveError(`分解數量必須是 1 以上的整數（收到 ${count}）`);
+  return mutate(save, draft => {
+    takeFromStack(draft.engravings, key, count, `刻印「${key}」`);
+    const result = addEnergy(draft.energy, SALVAGE_ENERGY[tier] * count);
+    draft.energy = result.energy;
+    return { gained: result.gained, wasted: result.wasted };
+  });
+}
+
+/**
+ * 清除裝備上的一個刻印：移除那個刻印的 2 行詞綴，空出位置可以再刻。被清掉的刻印**不會退回背包**。
+ * index 是 itemEngravings(item) 的位置（0 = 先刻的、1 = 後刻的）；另一個刻印與製作詞綴不受影響，順序不變。
+ * 代價：消耗能量，依被清除刻印的階級（energyTable.CLEAR_COST）；能量不夠就失敗。
+ * 回傳 { save, removed: '種類@階級', affixes: 被移除的詞綴, cost }；失敗丟 SaveError，原存檔不變。
+ */
+function clearEngraving(save, id, index) {
+  return mutate(save, draft => {
+    const item = findItem(draft, id);
+    const current = itemEngravings(item);
+    if (!current.length) throw new SaveError(`裝備「${id}」沒有刻印可以清除`);
+    if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+      throw new SaveError(`刻印位置必須是 0～${current.length - 1} 的整數（收到 ${index}）`);
+    }
+    // 刻印的詞綴依刻上去的順序排列、每個固定 LINES_PER_ITEM_ENGRAVING 行，所以第 index 個刻印是第 index 組。
+    const positions = item.affixes
+      .map((affix, position) => (ENGRAVING_SOURCE.test(affix?.source ?? '') ? position : -1))
+      .filter(position => position >= 0)
+      .slice(index * LINES_PER_ITEM_ENGRAVING, (index + 1) * LINES_PER_ITEM_ENGRAVING);
+    const tier = Number(current[index].split('@')[1]);
+    const cost = CLEAR_COST[tier];
+    if (draft.energy < cost) throw new SaveError(`能量不足：清除第 ${tier} 階刻印要 ${cost}，目前只有 ${draft.energy}`);
+    draft.energy -= cost;
+    const removed = positions.map(position => item.affixes[position]);
+    item.affixes = item.affixes.filter((_, position) => !positions.includes(position));
+    return { removed: current[index], affixes: structuredClone(removed), cost };
   });
 }
 
@@ -628,7 +736,55 @@ function setDifficulty(save, difficulty) {
   return mutate(save, draft => { draft.settings.difficulty = difficulty; });
 }
 
+/** 改玩家名字：去掉前後空白；空的或超過 PLAYER_NAME_MAX 字就丟 SaveError。 */
+function setPlayerName(save, name) {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!trimmed) throw new SaveError('名字不能是空的');
+  if ([...trimmed].length > PLAYER_NAME_MAX) throw new SaveError(`名字最多 ${PLAYER_NAME_MAX} 個字`);
+  return mutate(save, draft => { draft.settings.playerName = trimmed; });
+}
+
 /** 記錄進度（已擊敗的王、已解鎖的地區或怪物）。重複記錄不會有影響。 */
+/**
+ * 王的狀態（依 bosses.BOSSES 的順序）：擊敗過的都能再打，第一隻沒擊敗的也能打，之後的鎖住。
+ * @returns {{ id, name, difficulty, defeated: boolean, available: boolean }[]}
+ */
+function bossStatus(save) {
+  let nextOpen = true;
+  return BOSSES.map(boss => {
+    const defeated = save.progress.defeatedBosses.includes(boss.id);
+    const available = defeated || nextOpen;
+    if (!defeated) nextOpen = false;
+    return { id: boss.id, name: boss.name, difficulty: boss.difficulty, defeated, available };
+  });
+}
+
+/**
+ * 記錄打贏王：第一次擊敗時記進 progress.defeatedBosses，並發首次獎勵（rewards.gems 各 1 顆、rewards.unlockRegions 開放地區）。
+ * 再打贏不會重複發首次獎勵（一般掉落由呼叫端照常給）。還沒開放的王丟 SaveError。
+ * 回傳 { save, firstClear, rewards }（rewards 是這次實際發的；不是首次時為空）。
+ */
+function recordBossVictory(save, bossId) {
+  const status = bossStatus(save).find(entry => entry.id === bossId);
+  if (!status) throw new SaveError(`找不到王「${bossId}」`);
+  if (!status.available) throw new SaveError(`王「${status.name}」還沒開放（要先擊敗前一隻王）`);
+  const boss = BOSSES.find(entry => entry.id === bossId);
+  return mutate(save, draft => {
+    if (status.defeated) return { firstClear: false, rewards: { gems: [], unlockRegions: [] } };
+    draft.progress.defeatedBosses.push(bossId);
+    const gems = [...(boss.rewards?.gems ?? [])];
+    const unlockRegions = (boss.rewards?.unlockRegions ?? []).filter(id => !draft.progress.unlockedRegions.includes(id));
+    for (const gemId of gems) addToStack(draft.gems, gemId, 1);
+    draft.progress.unlockedRegions.push(...unlockRegions);
+    return { firstClear: true, rewards: { gems, unlockRegions } };
+  });
+}
+
+/** 開放中的地區：沒有標 locked 的一開始就開放；locked: true 的要在 progress.unlockedRegions 裡（王的獎勵會加進去）。 */
+function availableRegions(save) {
+  return Object.values(REGIONS).filter(region => !region.locked || save.progress.unlockedRegions.includes(region.id)).map(region => region.id);
+}
+
 function addProgress(save, kind, id) {
   if (!PROGRESS_KEYS.includes(kind)) throw new SaveError(`未知的進度類型「${kind}」（支援：${PROGRESS_KEYS.join('、')}）`);
   return mutate(save, draft => { if (!draft.progress[kind].includes(id)) draft.progress[kind].push(id); });
@@ -749,9 +905,9 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 }
 
 module.exports = {
-  SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, MIGRATIONS, SaveError,
-  createEmptySave, validateSave, migrateSave, exportSave, importSave,
-  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, equippedAttackStat, engraveEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip,
-  setDifficulty, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
+  SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, MIGRATIONS, SaveError,
+  createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
+  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip,
+  setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };

@@ -55,8 +55,33 @@ const ENGRAVING_TYPES = {
   vital:    { name: '堅韌', lines: [stat('hp', 'inc', 0.21), stat('def', 'flat', 33), line('reduction', { max: 0.05 })] },
   bulwark:  { name: '鐵壁', lines: [stat('def', 'inc', 0.25), stat('hp', 'flat', 330), line('reduction', { max: 0.065 })] },
   gale:     { name: '疾風', lines: [stat('spd', 'inc', 0.21), stat('sp', 'flat', 50), stat('cri', 'flat', 0.04)] },
-  endure:   { name: '持久', lines: [stat('sp', 'flat', 75), stat('hp', 'inc', 0.08), stat('atk', 'inc', 0.065)] }
+  endure:   { name: '持久', lines: [stat('sp', 'flat', 75), stat('hp', 'inc', 0.08), stat('atk', 'inc', 0.065)] },
+  // 靈巧：命中與閃避（遊戲用 hitFormula: 'contest'，命中 = 200 + hit、閃避機率 = (100 + max(0, 差距)) / (200 + |差距|)）
+  deft:     { name: '靈巧', lines: [stat('hit', 'flat', 150), stat('eva', 'flat', 50), stat('spd', 'inc', 0.12)] }
 };
+// 各刻印能刻到哪些部位（使用者決定：部位專用是限制手段，避免全身都堆同一種效果，也讓各部位有差異）。
+// 只限制「刻到裝備上」（saveLayer.engraveEquipment）；製作裝備時投入的刻印、掉落與合成都不受限。
+// 已經刻在存檔裡的裝備不會因為改表而失效（讀檔不檢查），之後調整這張表不需要遷移。
+// 配置是我擬的佔位：武器偏攻擊、護甲偏防禦、鞋子偏速度與閃避、頭盔最雜；閃避（靈巧）只在頭盔與鞋子。
+const ENGRAVING_SLOTS = {
+  fury:    ['weapon', 'helmet', 'armor'],
+  arcane:  ['weapon', 'helmet', 'armor'],
+  precise: ['weapon', 'helmet'],
+  vital:   ['helmet', 'armor', 'boots'],
+  bulwark: ['armor', 'boots'],
+  gale:    ['weapon', 'boots'],
+  endure:  ['helmet', 'armor', 'boots'],
+  deft:    ['helmet', 'boots']
+};
+/** 這種刻印能不能刻到這個部位。 */
+const canEngrave = (type, slot) => Boolean(ENGRAVING_SLOTS[type]?.includes(slot));
+for (const type of Object.keys(ENGRAVING_TYPES)) {
+  const slots = ENGRAVING_SLOTS[type];
+  if (!Array.isArray(slots) || !slots.length || slots.some(slot => !['weapon', 'helmet', 'armor', 'boots'].includes(slot))) {
+    throw new Error(`刻印「${type}」的可刻部位（ENGRAVING_SLOTS）必須是 weapon／helmet／armor／boots 的非空清單`);
+  }
+}
+
 const ENGRAVINGS_PER_ITEM = 2;
 const LINES_PER_ENGRAVING = 3;      // 每種刻印固定的詞綴行數；刻印時落選 1 行、取 2 行
 const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg', 'ailmentDuration', 'spRegen'];
@@ -70,7 +95,7 @@ const BASE_BY_SLOT = {
   boots:  [{ stat: 'hp', op: 'flat', max: 860 }, { stat: 'def', op: 'flat', max: 32 }, { stat: 'spd', op: 'flat', max: 11 }]
 };
 
-const INTEGER_STATS = new Set(['hp', 'sp', 'atk', 'int', 'def', 'spd']);
+const INTEGER_STATS = new Set(['hp', 'sp', 'atk', 'int', 'def', 'spd', 'hit', 'eva']);
 // 只有固定值的整數屬性取整；百分比（inc）與 cri／criDmg 保留小數。
 const round = (stat, op, value) => (op === 'flat' && INTEGER_STATS.has(stat) ? Math.round(value) : Math.round(value * 10000) / 10000);
 
@@ -148,4 +173,4 @@ function rollCombine(types, tier, rng = Math.random, pool = Object.keys(ENGRAVIN
   return { type: pool[index], tier: tier + 1, mode: 'mixed' };
 }
 
-module.exports = { TIER_SCALE, ROLL_MIN, REDUCTION_CAP, AILMENT_DURATION_CAP, COMBINE_INPUTS, MAX_TIER, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, EFFECT_KINDS, ENGRAVING_TYPES, BASE_BY_SLOT, rollEngraving, rollBase, rollCombine, sumEffectAffixes };
+module.exports = { TIER_SCALE, ROLL_MIN, REDUCTION_CAP, AILMENT_DURATION_CAP, COMBINE_INPUTS, MAX_TIER, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, EFFECT_KINDS, ENGRAVING_TYPES, BASE_BY_SLOT, rollEngraving, rollBase, rollCombine, sumEffectAffixes, ENGRAVING_SLOTS, canEngrave };

@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Entity, Skill, BattleEngine, Formulas, createSeededRandom } = require('../src');
-const { compileSkill, compileLoadout, describeSupport } = require('./gemCompiler');
+const { compileSkill, compileLoadout, describeSupport, GemLinkError } = require('./gemCompiler');
 const { ACTIVE_GEMS, SUPPORT_GEMS } = require('./gems');
 const { STAT_DEFS } = require('./statLayer');
 
@@ -45,7 +45,7 @@ test('法術寶石的資料：魔法飛彈讀智力、不可暴擊、不可反�
 });
 
 test('編譯後的技能保留這些設定，連結輔助寶石也不會弄丟', () => {
-  for (const supports of [[], ['heavy', 'pierce', 'critup'], ['wide', 'shock']]) {
+  for (const supports of [[], ['heavy', 'pierce', 'amp'], ['wide', 'shock']]) {   // 爆擊強化已禁止連到法術，見下
     const [first] = spell(supports).actions.filter(action => action.type === 'DAMAGE');
     assert.equal(first.stat, 'int');
     assert.equal(first.uncritable, true);
@@ -76,8 +76,10 @@ test('穿甲：法術與攻擊都無視一半防禦', t => {
   for (const make of [spell, attack]) {
     const normal = cast(t, make(), {}, { def: 300 }).damage;
     const pierce = cast(t, make(['pierce']), {}, { def: 300 }).damage;
-    // 防禦砍半 → 乘數 0.667（原本 0.5），再乘寶石的 0.9，約是一般的 1.2 倍。
-    assert.ok(pierce > normal * 1.15 && pierce < normal * 1.25, `${pierce} / ${normal}`);
+    // 防禦砍半 → 乘數 0.667（原本 0.5），再乘寶石自己的乘算（平衡後拿掉了 −10%），約是一般的 1.33 倍。
+    const more = SUPPORT_GEMS.pierce.effects.filter(e => e.op === 'more').reduce((p, e) => p * (1 + e.value), 1);
+    const ratio = (300 / 450) / (300 / 600) * more;
+    assert.ok(Math.abs(pierce / normal - ratio) < 0.06, `${pierce} / ${normal}，預期 ${ratio}`);
   }
 });
 
@@ -93,18 +95,10 @@ test('法術不會爆擊：爆擊率 100% 也一樣；物理照常爆擊', t => 
   assert.ok(a.logs.filter(log => log.type === 'DAMAGE').every(log => log.isCrit === true));
 });
 
-test('爆擊強化連到法術：沒有效果（加成掛上了，但法術本身不擲爆擊）', () => {
-  let crits = 0;
-  let hits = 0;
-  for (let seed = 1; seed <= 60; seed++) {
-    const loadout = compileLoadout([{ active: 'magicmissile', supports: ['critup'] }]);
-    const h = hero(loadout.skills, { cri: 0.5 });
-    const f = foe();
-    const result = new BattleEngine([h], [f], { rng: createSeededRandom(seed), maxTurns: 4, skillSelectionResolver: loadout.resolver }).start();
-    for (const log of result.logs) if (log.actorId === 'hero' && typeof log.isCrit === 'boolean') { hits++; if (log.isCrit) crits++; }
-  }
-  assert.ok(hits > 100);
-  assert.equal(crits, 0);
+test('爆擊強化不能連到法術（平衡第一輪：法術不擲爆擊骰，連了也沒效果，所以禁止）；物理照常可以', () => {
+  assert.throws(() => compileLoadout([{ active: 'magicmissile', supports: ['critup'] }]), error => error instanceof GemLinkError && error.gemId === 'critup');
+  assert.doesNotThrow(() => compileLoadout([{ active: 'whirlwind', supports: ['critup'] }]));
+  assert.doesNotThrow(() => compileLoadout([{ active: 'rend', supports: ['critup'] }]));
 });
 
 test('治癒術的回復量讀智力', t => {

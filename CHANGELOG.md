@@ -2,6 +2,10 @@
 
 版本號只往上加，不重複使用同一個版本號重新打包。沒有特別註明時，既有技能的行為與亂數序列不變。
 
+## 1.0.59（2026-11-17）
+
+- 新增引擎選項 `hitFormula`：`'classic'`（預設，原本的公式）或 `'contest'`（對抗式命中）。`contest` 時命中 = 200 + `hit`，閃避機率 = `(100 + max(0, eva − 命中)) / (200 + |eva − 命中|)`，命中率 = `(1 − 閃避機率) × accuracy + hitRateModifier`，夾在 10%～100%；初始值下有 25% 打空。新增 `Formulas.contestEvadeChance` 與 `Formulas.CONTEST_BASE_HIT`。不是這兩個值時拋錯。沒指定時結果與亂數序列不變。見 [docs/MECHANICS.md](docs/MECHANICS.md)。
+
 ## 1.0.58（2026-11-14）
 
 - `ignoreDefense` 可以給 0～1 的比例：目標的防禦先乘上 `1 - 比例` 再進公式（0.4 = 用 60% 的防禦計算）。`true` 等於 1、`false` 等於 0。不是布林也不在範圍內時建構與 `Formulas.calculateDamage` 都拋錯。沒用到時傷害與亂數序列不變。

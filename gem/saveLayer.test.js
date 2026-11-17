@@ -386,28 +386,30 @@ test('遷移：沒有版本號、版本不合法、比遊戲新的存檔都拒�
 });
 
 test('遷移：一路升級到目標版本，不改傳入的物件', () => {
+  const v = SAVE_VERSION;
   const migrations = {
-    1: old => ({ ...old, version: 2, settings: { ...old.settings, music: true } }),
-    2: old => ({ ...old, version: 3, renamed: old.progress })
+    [v]: old => ({ ...old, version: v + 1, settings: { ...old.settings, music: true } }),
+    [v + 1]: old => ({ ...old, version: v + 2, renamed: old.progress })
   };
   const old = deepFreeze(fresh());
-  const upgraded = migrateSave(old, migrations, 3);
-  assert.equal(upgraded.version, 3);
+  const upgraded = migrateSave(old, migrations, v + 2);
+  assert.equal(upgraded.version, v + 2);
   assert.equal(upgraded.settings.music, true);
   assert.deepEqual(upgraded.renamed, old.progress);
-  assert.equal(old.version, 1);
+  assert.equal(old.version, v);
 });
 
 test('遷移：缺升級函式、或升級函式沒把 version 加一，都報錯', () => {
-  assert.throws(() => migrateSave(fresh(), {}, 2), /找不到從存檔版本 1/);
-  assert.throws(() => migrateSave(fresh(), { 1: old => ({ ...old }) }, 2), /沒有把 version 設成 2/);
+  const v = SAVE_VERSION;
+  assert.throws(() => migrateSave(fresh(), {}, v + 1), new RegExp(`找不到從存檔版本 ${v}`));
+  assert.throws(() => migrateSave(fresh(), { [v]: old => ({ ...old }) }, v + 1), new RegExp(`沒有把 version 設成 ${v + 1}`));
 });
 
 // ── 匯出與匯入 ───────────────────────────────────────────────
 
 test('匯出再匯入：內容逐項相同', () => {
-  let { state, id } = stocked({ magicmissile: 3, heavy: 2, critup: 1 }, sword({ castWeight: 150 }));
-  state = setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'critup'] }]);
+  let { state, id } = stocked({ magicmissile: 3, heavy: 2, amp: 1 }, sword({ castWeight: 150 }));
+  state = setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp'] }]);
   state = equip(addEngraving(addProgress(setDifficulty(state, 7), 'unlockedRegions', 'forest'), 'atkA', 4, 2), id);
   const back = importSave(exportSave(state));
   assert.deepEqual(back, state);
@@ -510,11 +512,11 @@ test('localStorage adapter：空間不足轉成 SaveError，提醒匯出；沒�
 
 test('效能：兩百件裝備連續操作不會越來越慢（同一組連結只編譯一次）', () => {
   let state = fresh();
-  for (const gemId of ['magicmissile', 'heavy', 'critup']) state = addGems(state, gemId, 200);
+  for (const gemId of ['magicmissile', 'heavy', 'amp']) state = addGems(state, gemId, 200);
   const started = Date.now();
   for (let i = 0; i < 200; i++) {
     const added = addEquipment(state, sword());
-    state = setLinks(added.save, added.id, [{ active: 'magicmissile', supports: ['heavy', 'critup'] }]);
+    state = setLinks(added.save, added.id, [{ active: 'magicmissile', supports: ['heavy', 'amp'] }]);
   }
   assert.equal(state.equipment.length, 200);
   assert.ok(Date.now() - started < 5000, `太慢：${Date.now() - started} 毫秒`);

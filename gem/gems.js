@@ -214,7 +214,7 @@ const ACTIVE_GEMS = {
       {
         type: 'DAMAGE',
         targetType: 'ENEMY_ALL',
-        power: 0.9,
+        power: 1.0,
         text: { action: '{caster} 揮出旋風斬，' }
       }
     ]
@@ -225,7 +225,7 @@ const ACTIVE_GEMS = {
     id: 'rend',
     name: '撕裂',
     tags: ['attack'],
-    spCost: 10,
+    spCost: 14,
     uncounterable: false,
     actions: [
       {
@@ -335,8 +335,8 @@ const SUPPORT_GEMS = {
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['pierce'],
     effects: [
-      { op: 'actionFlag', flag: 'ignoreDefense', value: 0.5 },
-      { op: 'more', value: -0.10 }
+      // 平衡第一輪：拿掉原本的傷害 −10%（多數怪防禦只有 20～80，穿甲反而變弱）
+      { op: 'actionFlag', flag: 'ignoreDefense', value: 0.5 }
     ]
   },
 
@@ -353,7 +353,7 @@ const SUPPORT_GEMS = {
     effects: [
       {
         op: 'appendAction',
-        text: '命中的敵人受到的攻擊傷害增加 15%，持續 2 個行動槽',
+        text: '命中的敵人受到的攻擊傷害增加 25%，持續 2 個行動槽',
         action: {
           type: 'BUFF',
           requiresDamage: true,
@@ -366,7 +366,7 @@ const SUPPORT_GEMS = {
               dispellable: true,
               duration: 2,
               stackPolicy: 'refresh',
-              damageTaken: { multiplier: 1.15 }
+              damageTaken: { multiplier: 1.25 }
             }
           ]
         }
@@ -396,6 +396,7 @@ const SUPPORT_GEMS = {
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['charge'],
     effects: [
+      { op: 'cost', value: 0.5 },    // 平衡第二輪（使用者決定）：改回 +125%，改成 SP 消耗 +50%
       { op: 'more', value: 1.25 },
       { op: 'wrap', kind: 'charge' }
     ]
@@ -446,7 +447,8 @@ const SUPPORT_GEMS = {
   critup: {
     id: 'critup',
     name: '爆擊強化',
-    requires: { action: { type: 'DAMAGE' } },
+    // 平衡第一輪：禁止連到法術（使用者決定；法術不擲爆擊骰，連了也沒有效果）
+    requires: { action: { type: 'DAMAGE' }, tags: { none: ['spell'] } },
     addTags: [],
     effects: [
       {
@@ -474,4 +476,11 @@ const SUPPORT_GEMS = {
   }
 };
 
-module.exports = { ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };
+// 主動寶石的取得（使用者決定）：大部分開局就有，一部分打王獲得。掉落只掉輔助寶石。
+// 名單是我擬的佔位：追刃留給打王。王的獎勵還沒做，BOSS_REWARD_GEMS 只是記錄。
+// 治癒術暫時不給（使用者：還沒有配套的輔助寶石），列在 UNOBTAINABLE_ACTIVE_GEMS，之後再決定來源。
+const STARTING_ACTIVE_GEMS = ['magicmissile', 'whirlwind', 'rend'];
+const BOSS_REWARD_GEMS = ['pursuit'];
+const UNOBTAINABLE_ACTIVE_GEMS = ['mend'];
+
+module.exports = { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_GEMS, ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };

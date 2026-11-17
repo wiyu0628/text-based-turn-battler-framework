@@ -25,10 +25,10 @@ const targetSlot = (target, log) => {
 
 // ── 編譯 ──────────────────────────────────────────────────
 
-test('rend is a physical single-target 120% hit costing 10 SP that carries a 20% / 3-slot bleed', () => {
+test('rend is a physical single-target 120% hit costing 14 SP (balanced from 10) that carries a 20% / 3-slot bleed', () => {
   const gem = ACTIVE_GEMS.rend;
   assert.equal(gem.name, '撕裂');
-  assert.equal(gem.spCost, 10);
+  assert.equal(gem.spCost, 14);   // 平衡：10 → 16（第一輪方案 A）→ 14（第二輪，使用者決定）
   assert.ok(gem.tags.includes('attack') && !gem.tags.includes('spell'));
   const compiled = compileSkill('rend');
   const action = damageAction(compiled);
@@ -37,7 +37,7 @@ test('rend is a physical single-target 120% hit costing 10 SP that carries a 20%
   assert.equal(action.stat, undefined);           // 吃 atk、可暴擊
   assert.equal(action.ailments, undefined);       // 資料欄位不送進框架
   assert.deepEqual(action.gemAilments, [{ kind: 'bleed', basis: 'stat', power: 0.2, duration: 3 }]);
-  assert.equal(compiled.spCost, 10);
+  assert.equal(compiled.spCost, 14);
   assert.equal(compiled.passives.length, 1);
   assert.equal(compileSkill('whirlwind').passives.length, 0);   // 沒有異常的技能不多掛被動
 });
@@ -70,7 +70,7 @@ test('equipment ailment damage multiplies both bleed and lingering blade in thei
   const both = damageAction(compileSkill('rend', ['amp'], { equipment: { physDmg: 0.3, ailmentDmg: 0.2 } }));
   assert.equal(both.power, 1.8);                     // 1.2 × (1 + 0.2 + 0.3)
   assert.equal(both.gemAilments[0].power, 0.24);     // 0.2 × (1 + 0.2)
-  assert.equal(damageAction(compileSkill('whirlwind', [], { equipment: { ailmentDmg: 0.5 } })).power, 0.9);   // 沒有異常的技能不受影響
+  assert.equal(damageAction(compileSkill('whirlwind', [], { equipment: { ailmentDmg: 0.5 } })).power, ACTIVE_GEMS.whirlwind.actions[0].power);   // 沒有異常的技能不受影響
   assert.throws(() => compileSkill('rend', [], { equipment: { ailmentDmg: -0.1 } }), /ailmentDmg/);
 });
 

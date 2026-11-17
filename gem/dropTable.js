@@ -12,24 +12,33 @@
  *     難度 1～2 第 1 階、3～6 開第 2 階、7～9 開第 3 階、10～12 開第 4 階、13～15 開第 5 階。
  *     新開放的階級從 15% 起跳、同一段每升一級 +10%；最低階逐漸淡出。
  *     難度 6、9、12（下一階開放的前一級）有 3% 機率先掉下一階（預覽）。
- *   種類：7 種平均抽（affixTable.ENGRAVING_TYPES）。
+ *   種類：所有刻印種類平均抽（affixTable.ENGRAVING_TYPES，目前 8 種）。
  *
  * ── 輔助寶石 ──────────────────────────────────────────────────
- *   GEM_CHANCE（15%）掉 1 顆，從所有輔助寶石平均抽；只掉輔助寶石（主動寶石不掉）。沒有難度門檻。
+ *   GEM_CHANCE（30%）掉 1 顆，從所有輔助寶石平均抽；只掉輔助寶石（主動寶石不掉）。沒有難度門檻。
  *
  * ── 傳說裝備 ──────────────────────────────────────────────────
  *   不能用刻印製作的獨有裝備。機率 0.5% 起、每升一級 +0.25%，難度 15 是 4%。沒有難度門檻。
  *   傳說裝備本身還沒設計，所以 rollDrops 只回傳「掉了幾件」（legendary），由之後的傳說表決定是哪一件。
+ *
+ * ── 能量 ──────────────────────────────────────────────────────
+ *   每場勝利依「已開放的最高階」給固定能量（energyTable.WIN_ENERGY，不擲骰），放在 rollDrops 的 energy。
+ *
+ * ── 稀有怪與菁英怪的額外掉落（monsters.rollEncounter 的 info.rare／info.elite）────────
+ *   稀有怪那場：多掉 RARE_BONUS.engravings（2）個刻印，每個擲兩次階級取高的（偏向高階）。
+ *   菁英怪那場：多掉 ELITE_BONUS.engravings（1）個刻印，照一般機率。數值是我擬的佔位。
  *
  * ── rng 呼叫順序（測試依賴）──────────────────────────────────
  *   1. 刻印數量 1 次
  *   2. 每個刻印：階級 1 次、種類 1 次
  *   3. 寶石是否掉落 1 次；掉了再 1 次決定是哪一顆
  *   4. 傳說裝備 1 次
+ *   5. 額外刻印（有稀有或菁英時才有）：每個 階級 1 次（稀有再 1 次）、種類 1 次。排在最後，所以沒有稀有菁英時順序不變。
  */
 
 const { ENGRAVING_TYPES } = require('./affixTable');
 const { SUPPORT_GEMS } = require('./gems');
+const { WIN_ENERGY } = require('./energyTable');
 
 const MIN_DIFFICULTY = 1;
 const MAX_DIFFICULTY = 15;
@@ -60,13 +69,16 @@ function openTier(difficulty) {
   return TIER_OPEN.find(([from, to]) => difficulty >= from && difficulty <= to)[2];
 }
 
-// 刻印數量：P(2 個) = 10% + 1.5% × (難度 − 1)；P(3 個) = 3% × (難度 − 12)，難度 13 起才有
+// 刻印數量：P(2 個) = 30% + 1.5% × (難度 − 1)；P(3 個) = 8% × (難度 − 12)，難度 13 起才有（平均：難度 1 約 1.30 個、15 約 1.99 個）
+// 第二版（2026-11-17，依刷取速度目標調整：難度 15 講究配方約 120～150 場、基本約 40～50 場；見 grind-sim.js）
 const ENGRAVING_COUNT = {
-  twoBase: 0.10, twoPerLevel: 0.015,
-  threeFrom: 13, threePerLevel: 0.03
+  twoBase: 0.30, twoPerLevel: 0.015,
+  threeFrom: 13, threePerLevel: 0.08
 };
-const GEM_CHANCE = 0.15;
+const GEM_CHANCE = 0.30;   // 第二版：15% → 30%（使用者：輔助寶石的機率可以調高）
 const LEGENDARY = { base: 0.005, perLevel: 0.0025 };
+const RARE_BONUS = { engravings: 2, rollsForTier: 2 };
+const ELITE_BONUS = { engravings: 1, rollsForTier: 1 };
 
 function checkDifficulty(difficulty) {
   if (!Number.isInteger(difficulty) || difficulty < MIN_DIFFICULTY || difficulty > MAX_DIFFICULTY) {
@@ -103,13 +115,19 @@ function pickWeighted(weights, r) {
 }
 const pickUniform = (list, r) => list[Math.min(list.length - 1, Math.max(0, Math.floor(r * list.length)))];
 
+/** 某難度打贏一場得到的能量（不擲骰）。 */
+function energyForWin(difficulty) {
+  return WIN_ENERGY[openTier(difficulty)];
+}
+
 /**
  * 擲一場勝利的掉落。
  * @param {number} difficulty 1～15
  * @param {() => number} [rng] 預設 Math.random；回傳 [0, 1)
- * @returns {{ engravings: { type: string, tier: number }[], supportGems: string[], legendary: number }}
+ * @param {{ rare?: boolean, elite?: boolean }} [encounter] 這場有沒有稀有怪、菁英怪（rollEncounter 的 info）
+ * @returns {{ engravings: { type: string, tier: number }[], supportGems: string[], legendary: number, energy: number }}
  */
-function rollDrops(difficulty, rng = Math.random) {
+function rollDrops(difficulty, rng = Math.random, { rare = false, elite = false } = {}) {
   const rates = dropRates(difficulty);
   const count = 1 + pickWeighted([rates.count[1], rates.count[2], rates.count[3]], rng());
   const types = Object.keys(ENGRAVING_TYPES);
@@ -120,7 +138,13 @@ function rollDrops(difficulty, rng = Math.random) {
   }
   const supportGems = rng() < rates.gem ? [pickUniform(Object.keys(SUPPORT_GEMS), rng())] : [];
   const legendary = rng() < rates.legendary ? 1 : 0;
-  return { engravings, supportGems, legendary };
+  const bonus = rare ? RARE_BONUS : elite ? ELITE_BONUS : null;
+  for (let i = 0; bonus && i < bonus.engravings; i++) {
+    let tier = 0;
+    for (let k = 0; k < bonus.rollsForTier; k++) tier = Math.max(tier, pickWeighted(rates.tiers, rng()) + 1);
+    engravings.push({ type: pickUniform(types, rng()), tier });
+  }
+  return { engravings, supportGems, legendary, energy: energyForWin(difficulty) };
 }
 
-module.exports = { MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, openTier, ENGRAVING_COUNT, GEM_CHANCE, LEGENDARY, dropRates, rollDrops };
+module.exports = { MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, openTier, energyForWin, ENGRAVING_COUNT, GEM_CHANCE, LEGENDARY, RARE_BONUS, ELITE_BONUS, dropRates, rollDrops };

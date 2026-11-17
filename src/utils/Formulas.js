@@ -211,9 +211,30 @@ class Formulas {
   }
 
   // 命中判定
-  static isHit(attacker, defender, skillAccuracy = 1, hitRateModifier = 0) {
+  // 對抗式命中的閃避機率（1.0.59，hitFormula: 'contest'）。
+  // 命中 = CONTEST_BASE_HIT + hit 屬性，差距 = 閃避 − 命中：
+  //   閃避機率 = (100 + max(0, 差距)) / (200 + |差距|)
+  // 以 50% 為中心對稱（差距 +X 與 −X 的閃避機率相加 = 1），兩端只會逼近 0% 與 100%。
+  // 為什麼要有這一套：classic 公式裡命中只能抵銷閃避，對方閃避 0 時命中完全沒有作用；
+  // 這裡命中與閃避任何時候都有效果，只是越往兩端越平緩。初始命中 200、閃避 0 時有 25% 打空。
+  static contestEvadeChance(hitStat = 0, evaStat = 0) {
+    const hit = Formulas.CONTEST_BASE_HIT + Math.max(0, hitStat || 0);
+    const gap = Math.max(0, evaStat || 0) - hit;
+    return (100 + Math.max(0, gap)) / (200 + Math.abs(gap));
+  }
+
+  // formula：'classic'（預設，原本的公式）或 'contest'（見上）。由 BattleEngine 的 hitFormula 選項帶入。
+  // 兩種都只擲一次骰，所以換公式不會讓之後的亂數錯位；沒開 contest 時結果與亂數序列和舊版相同。
+  static isHit(attacker, defender, skillAccuracy = 1, hitRateModifier = 0, formula = 'classic') {
     const hitStat = Math.max(0, statsOf(attacker).hit || 0);
     const evaStat = Math.max(0, statsOf(defender).eva || 0);
+
+    if (formula === 'contest') {
+      // 技能命中修正（accuracy）乘在命中率上；hitRateModifier（hitResolver）照舊加減；保底 10%、上限 100%。
+      const rate = (1 - Formulas.contestEvadeChance(hitStat, evaStat)) * skillAccuracy + hitRateModifier;
+      return random() < Math.min(1.0, Math.max(0.1, rate));
+    }
+    if (formula !== 'classic') throw new Error(`hitFormula must be 'classic' or 'contest', got "${formula}".`);
 
     // 漸進式閃避計算：閃避值越高，實際閃避機率的成長越平緩 (以 100 為基準點)
     // 例如：eva = 100 -> 50% 閃避 | eva = 300 -> 75% 閃避
@@ -233,5 +254,8 @@ class Formulas {
     return random() < finalHitRate;
   }
 }
+
+// 對抗式命中（hitFormula: 'contest'）的初始命中：hit 屬性加在它上面。
+Formulas.CONTEST_BASE_HIT = 200;
 
 module.exports = Formulas;

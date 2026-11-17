@@ -33,8 +33,9 @@ const LEGENDARIES = {
     name: '報喪法杖',
     slot: 'weapon',
     attackStat: 'int',
-    base: [{ stat: 'int', op: 'flat', max: 240 }],
-    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.30 }],
+    // 平衡第一輪：240 → 280、30% → 35%（原本比製作的第 5 階武器還弱；調整後單體 +2～3%、多隻怪 +5～10%）
+    base: [{ stat: 'int', op: 'flat', max: 280 }],
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.35 }],
     mechanics: [
       { type: 'castOnEnemyDeath', text: '{caster} 手中的報喪法杖為 {target} 敲響喪鐘！' },
       { type: 'grantSupport', gem: 'amp' }

@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, CRAFT_AFFIXES, STAT_UNIT, KIND_SHARES, SLOT_MULT, QUALITIES, WEIGHT, rawBase, rollQuality, rollCraft } = require('./craftTable');
+const { CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, SALVAGE_RETURN, CRAFT_AFFIXES, STAT_UNIT, KIND_SHARES, SLOT_MULT, QUALITIES, WEIGHT, rawBase, rollQuality, rollCraft } = require('./craftTable');
 const { ENGRAVING_TYPES, TIER_SCALE } = require('./affixTable');
 const save = require('./saveLayer');
 const { createSeededRandom } = require('../src');
@@ -167,4 +167,45 @@ test('craftEquipment fails without changing the save; bad quality in a save is r
   assert.throws(() => save.craftEquipment(state, 'weapon', ten('fury').slice(0, 9)), save.SaveError);
   assert.deepEqual(state.engravings, { 'fury@5': 9 });
   assert.throws(() => save.addEquipment(state, { slot: 'weapon', origin: 'craft', base: [], affixes: [], quality: 'legendary' }), /quality/);
+});
+
+// ── 分解製作裝備 ──────────────────────────────────────────
+
+test('crafted items remember their ten materials; salvaging returns 3 of them at random and the linked gems', () => {
+  let state = save.addEngraving(save.addEngraving(save.createEmptySave({ now: '2026-01-01T00:00:00Z' }), 'fury', 5, 6), 'vital', 3, 4);
+  const inputs = [...ten('fury', 5).slice(0, 6), ...ten('vital', 3).slice(0, 4)];
+  const made = save.craftEquipment(state, 'weapon', inputs);
+  const item = made.save.equipment.find(e => e.id === made.id);
+  assert.deepEqual(item.materials, [...Array(6).fill('fury@5'), ...Array(4).fill('vital@3')]);
+  state = save.addGems(made.save, 'whirlwind', 1);
+  state = save.equip(save.setLinks(state, made.id, [{ active: 'whirlwind', supports: [] }]), made.id);
+  // rng 0.95 → 每次挑剩下的最後一個：vital@3 ×3
+  const result = save.salvageEquipment(state, made.id, () => 0.95);
+  assert.deepEqual(result.returned, ['vital@3', 'vital@3', 'vital@3']);
+  assert.deepEqual(result.save.engravings, { 'vital@3': 3 });
+  assert.equal(result.save.gems.whirlwind, 1);
+  assert.equal(result.save.equipped.weapon, null);
+  assert.equal(result.save.equipment.length, 0);
+  assert.equal(state.equipment.length, 1);                                   // 原存檔不變
+  assert.equal(save.salvageEquipment(state, made.id, () => 0).returned.length, SALVAGE_RETURN);
+});
+
+test('only crafted items with materials can be salvaged; bad materials are rejected', () => {
+  const legend = save.addLegendary(save.createEmptySave({ now: '2026-01-01T00:00:00Z' }), 'omen', 15);
+  assert.throws(() => save.salvageEquipment(legend.save, legend.id), err => err instanceof save.SaveError && /不能分解/.test(err.message));
+  const add = spec => save.addEquipment(save.createEmptySave({ now: '2026-01-01T00:00:00Z' }), { slot: 'weapon', base: [], affixes: [], ...spec });
+  assert.throws(() => add({ origin: 'craft', materials: ['fury@5'] }), /materials/);
+  assert.throws(() => add({ origin: 'drop', materials: Array(10).fill('fury@5') }), /materials/);
+  assert.doesNotThrow(() => add({ origin: 'craft', materials: Array(10).fill('fury@5') }));
+});
+
+test('a new game starts with most active gems; the rest come from bosses', () => {
+  const { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_GEMS, ACTIVE_GEMS } = require('./gems');
+  const starter = save.createStarterSave({ now: '2026-01-01T00:00:00Z' });
+  assert.deepEqual(starter.gems, Object.fromEntries(STARTING_ACTIVE_GEMS.map(id => [id, 1])));
+  assert.deepEqual(save.validateSave(starter), []);
+  // 每顆主動寶石都歸在某一類（開局、打王、暫時不能取得）
+  assert.deepEqual([...STARTING_ACTIVE_GEMS, ...BOSS_REWARD_GEMS, ...UNOBTAINABLE_ACTIVE_GEMS].sort(), Object.keys(ACTIVE_GEMS).sort());
+  assert.ok(!STARTING_ACTIVE_GEMS.includes('mend'));
+  assert.deepEqual(save.createEmptySave().gems, {});
 });
