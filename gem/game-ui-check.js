@@ -66,7 +66,8 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   click($('#info-close'));
   // 製作 1 件武器
   for (let i = 0; i < 10; i++) { const cell = $$('table.bag td.pick')[0]; if (!cell) break; click(cell); await sleep(5); }
-  console.log('材料數：', $$('.chips')[0].children.length, '預覽：', text().includes('預覽'));
+  console.log('材料數：', $$('.chips')[0].children.length, '沒有預覽：', !text().includes('預覽'));
+  $('#craft-name').value = '堅韌布甲'; $('#craft-name').dispatchEvent(new w.Event('input', { bubbles: true }));
   click($$('button').find(b => b.textContent === '製作')); await sleep(50);
   console.log('製作後裝備數：', ui.state.equipment.length, '提示：', $('#toast').textContent);
   // 分解刻印
@@ -96,9 +97,17 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   console.log('刻印：', $('#toast').textContent);
   const clearBtn = $$('button').find(b => b.textContent.startsWith('清除（'));
   if (clearBtn) { const e0 = ui.state.energy; click(clearBtn); await yes(); console.log('清除：', $('#toast').textContent, '能量', e0, '→', ui.state.energy); }
-  // 寶石頁也沒有側欄
+  // 寶石頁也沒有側欄；不合法的連結只提示一次
   click($$('#nav button').find(b => b.textContent === '寶石')); await sleep(30);
   console.log('寶石側欄隱藏：', $('.layout').classList.contains('no-side'));
+  ui.state.gems.critup || (await (async () => { const S = w.Game.save; const st = S.addGems(ui.state, 'critup', 1); w.GameUI.ui.__inject = st; })());
+  if (w.GameUI.ui.__inject) { w.GameUI.forceState(w.GameUI.ui.__inject); await sleep(30); }
+  const ed = $$('.link-editor')[0];
+  setSelect(ed.querySelectorAll('select')[0], 'magicmissile'); setSelect(ed.querySelectorAll('select')[1], 'critup');
+  $('#toast').textContent = '';
+  click([...ed.querySelectorAll('button')].find(b => b.textContent === '套用')); await sleep(50);
+  const errText = $$('.link-editor .error').map(e => e.textContent).join('|');
+  console.log('連結錯誤：', JSON.stringify(errText), '出現次數', errText.split('無法連結').length - 1, 'toast：', JSON.stringify($('#toast').textContent));
   // 裝備頁：穿上新武器、分解模式
   click($$('#nav button').find(b => b.textContent === '裝備')); await sleep(50);
   const wear = $$('.item button').find(b => b.textContent === '穿上');
@@ -113,7 +122,7 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   click(btn('挑戰'));
   for (let k = 0; k < 50 && !$('#battle-modal').classList.contains('open'); k++) await sleep(20);
   click($$('#battle-footer button').find(b => b.textContent === '跳到結尾')); await sleep(10);
-  console.log('王戰：', $('#battle-result').textContent.slice(0, 40));
+  console.log('王戰：', $('#battle-title').textContent, $('#battle-result').textContent.slice(0, 40));
   click($$('#battle-footer button').find(b => b.textContent === '關閉'));
   // 難度 +／−
   for (let i = 0; i < 6; i++) { click($$('.stepper button')[1]); await sleep(20); }
@@ -130,6 +139,12 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   console.log('戰報用新名字：', $('#battle-log').textContent.includes('阿明'), '舊名字：', $('#battle-log').textContent.includes('玩家'));
   click($$('#battle-footer button').find(b => b.textContent === '關閉'));
   // 重新載入頁面：存檔還在
+  // 深色模式切換
+  const t0 = w.document.documentElement.dataset.theme, b0 = $('#theme-toggle').textContent;
+  click($('#theme-toggle')); await sleep(10);
+  console.log('主題：', t0, b0, '→', w.document.documentElement.dataset.theme, $('#theme-toggle').textContent, '記住：', w.localStorage.getItem('tbtf-game-theme'));
+  click($('#theme-toggle')); await sleep(10);
+  console.log('再切回：', w.document.documentElement.dataset.theme, w.localStorage.getItem('tbtf-game-theme'), '存檔沒有主題：', !w.localStorage.getItem('tbtf-game-save').includes('theme'));
   const saved = w.localStorage.getItem('tbtf-game-save');
   console.log('存檔有寫入：', !!saved, '錯誤：', errors.length ? errors : '無');
   process.exit(0);

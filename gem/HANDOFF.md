@@ -17,7 +17,7 @@ node gem/gems-ui-build.js
 node gem/game-build.js                                  # 正式遊戲介面
 ```
 
-**預期**：`npm test` 651 項全過；`gem/` 內 `castWeight.test.js` 22、`gems.test.js` 94、`ailment.test.js` 14、`spRegen.test.js` 3、`deft.test.js` 3、`energy.test.js` 6、`difficulty.test.js` 2、`monsters.test.js` 9、`bosses.test.js` 3、`game.test.js` 8、`statLayer.test.js` 42、`spell.test.js` 12、`saveLayer.test.js` 47、`affixTable.test.js` 12、`equipment.test.js` 12、`combine.test.js` 8、`dropTable.test.js` 9、`legendary.test.js` 9、`craft.test.js` 16、`engrave.test.js` 12；`tests/uncritable.test.js` 8、`tests/ignoreDefenseRatio.test.js` 5、`tests/hitFormula.test.js` 4；UI 打包成功（15 個模組）。
+**預期**：`npm test` 652 項全過；`gem/` 內 `castWeight.test.js` 22、`gems.test.js` 94、`ailment.test.js` 14、`spRegen.test.js` 3、`deft.test.js` 3、`energy.test.js` 6、`difficulty.test.js` 2、`monsters.test.js` 9、`bosses.test.js` 3、`game.test.js` 8、`statLayer.test.js` 42、`spell.test.js` 12、`saveLayer.test.js` 47、`affixTable.test.js` 12、`equipment.test.js` 12、`combine.test.js` 8、`dropTable.test.js` 9、`legendary.test.js` 9、`craft.test.js` 16、`engrave.test.js` 12；`tests/uncritable.test.js` 8、`tests/ignoreDefenseRatio.test.js` 5、`tests/hitFormula.test.js` 4；UI 打包成功（15 個模組）。
 
 **如果結果不同，先判斷是哪一種情況：**
 
@@ -374,7 +374,14 @@ node gem/game-build.js                                  # 正式遊戲介面
    - 工坊改成**第二層分頁**：製作裝備／刻印到裝備／刻印合成／分解刻印，每頁都用同一張刻印表點選。刻印到裝備：不能刻在該部位的種類整列變灰；點一格選中再按「刻印」。合成：放了第一個之後只能點同一階，第 5 階不能點。分解：點一格、設數量（有「全部」）。
    - 刻印表的數量格**按右鍵（手機長按 0.5 秒）**跳出該刻印**刻到裝備時**的 3 行數值範圍（70%～100% × 上限 × 階級縮放）與可刻部位；製作裝備時的數值不顯示（使用者決定）。
    - **清除沒反應的原因**：按鈕用了瀏覽器的 `confirm()`，有些環境（例如在 App 裡預覽、沙盒 iframe）會直接擋掉並回傳否，所以按了沒有任何反應；另外能量不夠時按鈕是停用的。改成頁面內的確認框（`ask()`，匯入存檔、重新開始、分解裝備也一起換掉），清除按鈕不再停用、能量不夠時提示差多少。`game-ui-check.js` 會在有人呼叫 `confirm()` 時報錯。
-5. **還沒做／已知限制**：**沒在真正的瀏覽器看過**（版面、手機寬度、深色模式未確認）；手機版面；新手武器與王戰掉落是我的決定；戰鬥紀錄只留最近 20 場；舊的 `gems-ui.html` 仍在（測試用，沒有刪）。
+5. **第二輪修改（使用者）**：
+   - 難度底下只寫「怪物強度 N」（拿掉勝利能量與掉落階級）。
+   - 挑戰Boss：加說明「Boss難度固定，勝利可以開啟新地圖（尚未實裝）」，不顯示難度（彈窗標題也拿掉）。
+   - 製作裝備：**不預覽**；可以自己取名（最多 12 字，`saveLayer.ITEM_NAME_MAX`；存在裝備的 `name`，只有製作裝備能有；不填就用部位名）。顯示名稱是「品質的名字」，例如「上等的堅韌布甲」。
+   - 寶石連結不合法時的提示出現兩次：原因是 `SaveError.message` 本身已含問題清單，介面又把 `problems` 再接一次，外加跳一次提示。改成只在那一欄顯示一次、不跳提示，訊息裡的寶石 id 換成名稱。
+   - `GameUI.forceState(save)` 只給 `game-ui-check.js` 塞測試狀態用。
+6. **深色模式（使用者要求）**：頁首「深色模式／淺色模式」按鈕一鍵切換；選擇存在 localStorage `tbtf-game-theme`（和遊戲存檔分開，匯出／重新開始不影響）；沒選過就跟系統設定（`prefers-color-scheme`）；在 `<head>` 先套上，避免閃一下淺色。所有顏色都改成 CSS 變數，`:root[data-theme="dark"]` 換一組；主要文字對比 12.4、次要 5.6、我方／敵方戰報 7.5／7.2（只有數量 0 的格子刻意偏暗）。
+7. **還沒做／已知限制**：**沒在真正的瀏覽器看過**（版面、手機寬度未確認；深色模式只在 jsdom 檢查過切換）；手機版面；新手武器與王戰掉落是我的決定；戰鬥紀錄只留最近 20 場；舊的 `gems-ui.html` 仍在（測試用，沒有刪）。
 
 ## 4. 被否決或放棄的方案
 

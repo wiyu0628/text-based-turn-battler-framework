@@ -4,30 +4,59 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>刷怪打王</title>
+<script>
+// 主題在畫面出來前就套上，避免閃一下淺色。沒選過就跟系統設定。
+(function () {
+  var theme = null;
+  try { theme = localStorage.getItem('tbtf-game-theme'); } catch (e) {}
+  if (theme !== 'dark' && theme !== 'light') theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.dataset.theme = theme;
+})();
+</script>
 <style>
   :root {
     --bg: #f4f2ee; --panel: #ffffff; --ink: #24211d; --muted: #77706a; --line: #e2ddd6;
     --accent: #3c5a99; --accent-soft: #e6ecf7; --good: #2f7d4f; --bad: #b03a2e; --warn: #a86b12;
     --rare: #7a4bb0; --elite: #b0412e; --energy: #2a8a8a;
+    --on-accent: #fff; --input-bg: #fff; --danger-line: #e7c2bd; --faint: #c9c3bb; --energy-track: #e4eeee;
+    --tag-rare-bg: #efe6f8; --tag-elite-bg: #f8e6e2; --tag-good-bg: #e3f2e8; --tag-legend-bg: #fbeed6;
+    --chip: #efece7; --chip-hover: #f4d9d5; --worn-line: #9cc9ad; --worn-bg: #f6fbf8;
+    --backdrop: rgba(30, 26, 22, .45); --shadow: rgba(0, 0, 0, .25);
+    --log-hero: #1f4b8f; --log-enemy: #7a2c22; --result: #f6f4f0; --result-win: #eef7f1; --result-lose: #fbefed;
+    --toast-bg: #2a2622; --toast-ink: #fff;
+    color-scheme: light;
+  }
+  /* 深色模式：頁首按鈕切換，選擇存在 localStorage（tbtf-game-theme），和遊戲存檔分開 */
+  :root[data-theme="dark"] {
+    --bg: #1a1917; --panel: #24221f; --ink: #e8e3dc; --muted: #a09890; --line: #3a3632;
+    --accent: #86a4e6; --accent-soft: #2a3347; --good: #6cc391; --bad: #e57d70; --warn: #dba65a;
+    --rare: #b993e8; --elite: #e88a76; --energy: #4fbaba;
+    --on-accent: #131620; --input-bg: #1e1c1a; --danger-line: #6a3a34; --faint: #57514b; --energy-track: #2c3636;
+    --tag-rare-bg: #352a45; --tag-elite-bg: #452b26; --tag-good-bg: #23392c; --tag-legend-bg: #42361f;
+    --chip: #34312d; --chip-hover: #4a2f2b; --worn-line: #3f6b51; --worn-bg: #1f2a23;
+    --backdrop: rgba(0, 0, 0, .6); --shadow: rgba(0, 0, 0, .6);
+    --log-hero: #8fb3f0; --log-enemy: #ec9a8c; --result: #2b2926; --result-win: #1f3327; --result-lose: #3a2422;
+    --toast-bg: #e8e3dc; --toast-ink: #1a1917;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 system-ui, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
   button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 5px 12px; }
   button:hover:not(:disabled) { border-color: var(--accent); }
   button:disabled { opacity: .45; cursor: not-allowed; }
-  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  button.danger { color: var(--bad); border-color: #e7c2bd; }
-  button.danger.active, button.toggle.active { background: var(--bad); color: #fff; border-color: var(--bad); }
+  button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  button.danger { color: var(--bad); border-color: var(--danger-line); }
+  button.danger.active, button.toggle.active { background: var(--bad); color: var(--on-accent); border-color: var(--bad); }
   button.small { padding: 2px 8px; font-size: 12px; }
-  select, input { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
+  select, input { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); color: var(--ink); }
   h2 { font-size: 16px; margin: 0 0 10px; }
   h3 { font-size: 14px; margin: 0 0 8px; }
   .muted { color: var(--muted); }
   .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); margin-left: 4px; vertical-align: 1px; }
-  .tag.rare { background: #efe6f8; color: var(--rare); }
-  .tag.elite { background: #f8e6e2; color: var(--elite); }
-  .tag.equipped { background: #e3f2e8; color: var(--good); }
-  .tag.legend { background: #fbeed6; color: var(--warn); }
+  .tag.rare { background: var(--tag-rare-bg); color: var(--rare); }
+  .tag.elite { background: var(--tag-elite-bg); color: var(--elite); }
+  .tag.equipped { background: var(--tag-good-bg); color: var(--good); }
+  .tag.legend { background: var(--tag-legend-bg); color: var(--warn); }
 
   header { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
   header h1 { font-size: 18px; margin: 0; }
@@ -35,7 +64,7 @@
   nav button { border: none; background: transparent; padding: 6px 14px; border-radius: 6px; }
   nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .energy { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .energy .bar { width: 160px; height: 10px; border-radius: 5px; background: #e4eeee; overflow: hidden; }
+  .energy .bar { width: 160px; height: 10px; border-radius: 5px; background: var(--energy-track); overflow: hidden; }
   .energy .bar > div { height: 100%; background: var(--energy); }
   .header-actions { display: flex; gap: 6px; }
 
@@ -53,7 +82,7 @@
 
   .difficulty { display: flex; gap: 4px; flex-wrap: wrap; }
   .difficulty button { width: 38px; padding: 5px 0; }
-  .difficulty button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .difficulty button.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
   .region-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
   .region-card ul { margin: 6px 0 10px; padding-left: 18px; }
   .boss { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
@@ -63,13 +92,13 @@
   table.bag th:first-child, table.bag td:first-child { text-align: left; }
   table.bag td.has { cursor: pointer; }
   table.bag td.has:hover { background: var(--accent-soft); }
-  table.bag td.zero { color: #c9c3bb; }
+  table.bag td.zero { color: var(--faint); }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; min-height: 28px; }
-  .chip { font-size: 12px; padding: 2px 8px; border-radius: 12px; background: #efece7; cursor: pointer; }
-  .chip:hover { background: #f4d9d5; }
+  .chip { font-size: 12px; padding: 2px 8px; border-radius: 12px; background: var(--chip); cursor: pointer; }
+  .chip:hover { background: var(--chip-hover); }
 
   .item { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
-  .item.worn { border-color: #9cc9ad; background: #f6fbf8; }
+  .item.worn { border-color: var(--worn-line); background: var(--worn-bg); }
   .item .name { font-weight: 600; }
   .item ul { margin: 4px 0 6px; padding-left: 16px; }
   .item .actions { display: flex; gap: 6px; margin-top: 6px; }
@@ -80,30 +109,30 @@
   .error { color: var(--bad); font-size: 12px; white-space: pre-wrap; }
   .gem-list li { margin-bottom: 4px; }
 
-  .modal-back { position: fixed; inset: 0; background: rgba(30, 26, 22, .45); display: none; align-items: center; justify-content: center; z-index: 20; }
+  .modal-back { position: fixed; inset: 0; background: var(--backdrop); display: none; align-items: center; justify-content: center; z-index: 20; }
   #ask-modal, #info-modal { z-index: 25; }
   .modal-back.open { display: flex; }
-  .modal { background: var(--panel); border-radius: 12px; width: min(820px, 94vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+  .modal { background: var(--panel); border-radius: 12px; width: min(820px, 94vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px var(--shadow); }
   .modal header { position: static; border-radius: 12px 12px 0 0; }
   .modal .body { padding: 12px 18px; overflow: auto; flex: 1; }
   .modal footer { padding: 10px 18px; border-top: 1px solid var(--line); display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .log { font-size: 13px; }
   .log div { padding: 1px 0; }
   .log .turn { color: var(--muted); margin-top: 6px; }
-  .log .hero { color: #1f4b8f; }
-  .log .enemy { color: #7a2c22; }
+  .log .hero { color: var(--log-hero); }
+  .log .enemy { color: var(--log-enemy); }
   .log .sys { color: var(--warn); }
-  .result { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #f6f4f0; }
-  .result.win { background: #eef7f1; }
-  .result.lose { background: #fbefed; }
+  .result { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: var(--result); }
+  .result.win { background: var(--result-win); }
+  .result.lose { background: var(--result-lose); }
   .subtabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
   .subtabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 6px 14px; }
   .subtabs button.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
   table.bag td { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   table.bag td.nopick { cursor: default; }
   table.bag td.nopick:hover { background: transparent; }
-  table.bag td.sel { background: var(--accent); color: #fff; }
-  table.bag tr.off td { color: #c9c3bb; }
+  table.bag td.sel { background: var(--accent); color: var(--on-accent); }
+  table.bag tr.off td { color: var(--faint); }
   .layout.no-side { grid-template-columns: minmax(0, 1fr); }
   .layout.no-side > aside { display: none; }
   .stepper { display: flex; align-items: center; gap: 10px; }
@@ -112,9 +141,9 @@
   .modal.small { width: min(420px, 92vw); }
   .name-row { display: flex; gap: 6px; margin-bottom: 10px; }
   .name-row input { flex: 1; min-width: 0; font-weight: 600; }
-  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #2a2622; color: #fff; padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 30; max-width: 80vw; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--toast-bg); color: var(--toast-ink); padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 30; max-width: 80vw; }
   .toast.show { opacity: 1; }
-  .toast.bad { background: var(--bad); }
+  .toast.bad { background: var(--bad); color: var(--on-accent); }
 </style>
 </head>
 <body>
@@ -130,6 +159,7 @@
     <span>能量</span><div class="bar"><div id="energy-fill"></div></div><span id="energy-text"></span>
   </div>
   <div class="header-actions">
+    <button class="small" id="theme-toggle"></button>
     <button class="small" id="export-save">匯出存檔</button>
     <button class="small" id="import-save">匯入存檔</button>
     <button class="small danger" id="reset-save">重新開始</button>
@@ -234,7 +264,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   }
   function itemName(item) {
     if (item.legendaryId) return legendary.LEGENDARIES[item.legendaryId]?.name ?? item.legendaryId;
-    if (item.quality) return `${QUALITY[item.quality].name}${SLOT_NAMES[item.slot]}`;
+    if (item.quality) return `${QUALITY[item.quality].name}的${item.name ?? SLOT_NAMES[item.slot]}`;
     return `新手${SLOT_NAMES[item.slot]}`;
   }
   const gemName = id => G.ACTIVE_GEMS[id]?.name ?? G.SUPPORT_GEMS[id]?.name ?? id;
@@ -248,7 +278,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   let state = null;
   let tab = 'adventure';
   let history = [];
-  const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], combinePicks: [], salvage: { kind: null, tier: 1, count: 1 },
+  const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], salvage: { kind: null, tier: 1, count: 1 },
     workshopTab: 'craft', engraveItem: null, engraveSel: null, salvageMode: false, linkErrors: {} };
 
   function loadHistory() {
@@ -304,7 +334,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
         h('button', { text: '−', 'aria-label': '降低難度', disabled: d <= S.MIN_DIFFICULTY, onclick: () => apply(s => S.setDifficulty(s, d - 1)) }),
         h('strong', { text: d }),
         h('button', { text: '+', 'aria-label': '提高難度', disabled: d >= S.MAX_DIFFICULTY, onclick: () => apply(s => S.setDifficulty(s, d + 1)) })),
-      h('div', { class: 'muted', style: 'margin-top:8px', text: `勝利能量 ${dropTable.energyForWin(d)}｜怪物強度 ${game.strengthLevel(d)}` }));
+      h('div', { class: 'muted', style: 'margin-top:8px', text: `怪物強度 ${game.strengthLevel(d)}` }));
     const regionCards = Object.values(M.REGIONS).map(region => {
       const open = regions.includes(region.id);
       return h('div', { class: 'region-card' },
@@ -313,9 +343,9 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
         h('button', { class: 'primary', disabled: !open, text: `出發（難度 ${d}）`, onclick: () => startBattle({ kind: 'region', id: region.id, difficulty: d }) }));
     });
     const bosses = S.bossStatus(state);
-    const bossPanel = h('div', { class: 'panel' }, h('h2', { text: '挑戰Boss' }),
+    const bossPanel = h('div', { class: 'panel' }, h('h2', { text: '挑戰Boss' }), h('p', { class: 'muted', style: 'margin:-4px 0 8px', text: 'Boss難度固定，勝利可以開啟新地圖（尚未實裝）' }),
       h('div', { class: 'stack' }, bosses.map(b => h('div', { class: 'boss' },
-        h('div', {}, h('strong', { text: b.name }), h('span', { class: 'muted', text: `　難度 ${b.difficulty}` }),
+        h('div', {}, h('strong', { text: b.name }),
           b.defeated ? h('span', { class: 'tag equipped', text: '已擊敗' }) : null),
         h('button', { class: 'primary', disabled: !b.available, text: b.available ? '挑戰' : '尚未開放', onclick: () => startBattle({ kind: 'boss', id: b.id }) })))));
     const historyPanel = h('div', { class: 'panel' }, h('h2', { text: '戰鬥紀錄' }),
@@ -336,7 +366,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   let speed = 250;
   let player = null;
   function targetTitle(target, difficulty) {
-    if (target.kind === 'boss') return `Boss：${B.findBoss(target.id).name}（難度 ${B.findBoss(target.id).difficulty}）`;
+    if (target.kind === 'boss') return `Boss：${B.findBoss(target.id).name}`;
     return `${M.REGIONS[target.id].name}（難度 ${difficulty ?? target.difficulty}）`;
   }
   async function startBattle(target) {
@@ -511,10 +541,12 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
       bagHint(`點刻印表加入材料（${picks.length} / ${craft.CRAFT_INPUTS}），點上面的材料移除。種類與階級可以混；品質製作時才擲。`),
       h('div', { class: 'chips' }, picks.map((p, i) => h('span', { class: 'chip', text: `${kindName(p.type)} ${p.tier}`, onclick: () => { picks.splice(i, 1); render(); } }))),
       renderBag({ onPick: (kind, tier) => { if (picks.length < craft.CRAFT_INPUTS) { picks.push({ type: kind, tier }); render(); } }, used: picks.map(p => `${p.type}@${p.tier}`), allowed: () => picks.length < craft.CRAFT_INPUTS }),
-      picks.length === craft.CRAFT_INPUTS ? h('div', { class: 'muted', style: 'margin-top:6px', text: '預覽（次等 ×1）：' + previewCraft(ui.craftSlot, picks) }) : null,
+      h('div', { class: 'row', style: 'margin-top:8px' }, '名字',
+        h('input', { id: 'craft-name', value: ui.craftName, maxlength: S.ITEM_NAME_MAX, placeholder: `不填就用「${SLOT_NAMES[ui.craftSlot]}」`, style: 'width:200px', oninput: ev => { ui.craftName = ev.target.value; } }),
+        h('span', { class: 'muted', style: 'font-size:12px', text: `最多 ${S.ITEM_NAME_MAX} 字；完整名稱是「品質的名字」，例如「上等的堅韌布甲」` })),
       h('div', { class: 'row', style: 'margin-top:8px' },
-        h('button', { class: 'primary', disabled: picks.length !== craft.CRAFT_INPUTS, text: '製作', onclick: () => apply(s => S.craftEquipment(s, ui.craftSlot, picks, Math.random, ui.craftSlot === 'weapon' ? { attackStat: ui.craftStat } : {}),
-          v => { ui.craftPicks = []; const item = v.save.equipment.find(x => x.id === v.id); return `做出了 ${itemName(item)}（${QUALITY[v.quality].name} ×${QUALITY[v.quality].mult}）`; }) }),
+        h('button', { class: 'primary', disabled: picks.length !== craft.CRAFT_INPUTS, text: '製作', onclick: () => apply(s => S.craftEquipment(s, ui.craftSlot, picks, Math.random, { ...(ui.craftSlot === 'weapon' ? { attackStat: ui.craftStat } : {}), name: ui.craftName }),
+          v => { ui.craftPicks = []; ui.craftName = ''; const item = v.save.equipment.find(x => x.id === v.id); return `做出了 ${itemName(item)}（${QUALITY[v.quality].name} ×${QUALITY[v.quality].mult}）`; }) }),
         h('button', { class: 'small', disabled: !picks.length, text: '清空', onclick: () => { ui.craftPicks = []; render(); } })));
   }
 
@@ -594,12 +626,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     return [h('div', { class: 'subtabs' }, WORKSHOP_TABS.map(([id, name]) => h('button', { class: ui.workshopTab === id ? 'active' : '', text: name, onclick: () => { ui.workshopTab = id; render(); } }))),
       views[ui.workshopTab]()];
   }
-  function previewCraft(slot, picks) {
-    const raw = craft.rawBase(picks);
-    const mult = craft.SLOT_MULT[slot];
-    return craft.CRAFT_STATS.map(stat => [stat, Math.round(raw[stat] * mult[stat])]).filter(([, v]) => v > 0)
-      .map(([stat, v]) => `${statLayer.STAT_DEFS[stat].name} +${v}`).join('、') + '；品質最高 ×1.5';
-  }
+
 
   // ── 裝備 ────────────────────────────────────────────────────
   function itemCard(item, { compact = false } = {}) {
@@ -662,8 +689,10 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
           h('button', { class: 'primary small', text: '套用', onclick: () => {
             const supports = draft.supports.filter(Boolean);
             const links = draft.active ? [{ active: draft.active, supports }] : [];
+            // 不合法時只在這一欄顯示一次（錯誤訊息本身已含問題清單，不再另外附加，也不跳提示）
+            try { S.setLinks(state, id, links); } catch (error) { ui.linkErrors[slot] = String(error.message || error).replace(/「(\w+)」/g, (m, gid) => `「${gemName(gid)}」`); render(); return; }
             ui.linkErrors[slot] = null;
-            apply(s => S.setLinks(s, id, links), '寶石連結已更新').then(ok => { if (!ok) { try { S.setLinks(state, id, links); } catch (error) { ui.linkErrors[slot] = (error.message || '') + (error.problems ? '\n' + error.problems.join('\n') : ''); render(); } } });
+            apply(s => S.setLinks(s, id, links), '寶石連結已更新');
           } }),
           h('button', { class: 'small', text: '還原', onclick: () => { delete ui[`link_${slot}`]; ui.linkErrors[slot] = null; render(); } })),
         ui.linkErrors[slot] ? h('div', { class: 'error', text: ui.linkErrors[slot] }) : null));
@@ -717,6 +746,20 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     toast('已重新開始');
     render();
   });
+  // 深色／淺色切換（存在 localStorage，和遊戲存檔分開）
+  const THEME_KEY = 'tbtf-game-theme';
+  function paintThemeButton() {
+    const dark = document.documentElement.dataset.theme === 'dark';
+    $('theme-toggle').textContent = dark ? '淺色模式' : '深色模式';
+    $('theme-toggle').setAttribute('aria-pressed', String(dark));
+  }
+  $('theme-toggle').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+    paintThemeButton();
+  });
+  paintThemeButton();
   $('info-close').addEventListener('click', () => $('info-modal').classList.remove('open'));
   $('info-modal').addEventListener('click', ev => { if (ev.target === $('info-modal')) $('info-modal').classList.remove('open'); });
   $('battle-modal').addEventListener('click', ev => { if (ev.target === $('battle-modal') && player?.done) closeBattle(); });
@@ -726,7 +769,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     try { state = await store.load(); } catch (error) { toast('讀檔失敗：' + error.message + '（沒有覆蓋舊存檔）', true); }
     if (!state) state = await store.save(game.createNewGame());
     render();
-    window.GameUI = { get state() { return state; }, render, startBattle, openRecord, closeBattle, setTab: t => { tab = t; render(); }, ui };
+    window.GameUI = { get state() { return state; }, forceState: next => { state = next; render(); }, render, startBattle, openRecord, closeBattle, setTab: t => { tab = t; render(); }, ui };
   })();
 })();
 </script>

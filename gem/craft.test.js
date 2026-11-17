@@ -209,3 +209,16 @@ test('a new game starts with most active gems; the rest come from bosses', () =>
   assert.ok(!STARTING_ACTIVE_GEMS.includes('mend'));
   assert.deepEqual(save.createEmptySave().gems, {});
 });
+
+test('crafted items can be named: trimmed, empty means no name, over ITEM_NAME_MAX is refused, only craft items', () => {
+  const state = save.addEngraving(save.createEmptySave({ now: '2026-01-01T00:00:00Z' }), 'vital', 1, 30);
+  const named = save.craftEquipment(state, 'armor', ten('vital', 1), scripted(), { name: '  堅韌布甲 ' });
+  assert.equal(named.save.equipment.find(e => e.id === named.id).name, '堅韌布甲');
+  assert.equal(save.importSave(save.exportSave(named.save)).equipment[0].name, '堅韌布甲');
+  const blank = save.craftEquipment(state, 'armor', ten('vital', 1), scripted(), { name: '   ' });
+  assert.equal('name' in blank.save.equipment[0], false);
+  assert.throws(() => save.craftEquipment(state, 'armor', ten('vital', 1), scripted(), { name: '甲'.repeat(save.ITEM_NAME_MAX + 1) }), /最多/);
+  assert.doesNotThrow(() => save.craftEquipment(state, 'armor', ten('vital', 1), scripted(), { name: '甲'.repeat(save.ITEM_NAME_MAX) }));
+  assert.throws(() => save.addEquipment(state, { slot: 'weapon', origin: 'drop', base: [], affixes: [], name: '撿來的' }), /name/);
+  assert.throws(() => save.addEquipment(state, { slot: 'weapon', origin: 'craft', base: [], affixes: [], name: ' 有空白' }), /name/);
+});

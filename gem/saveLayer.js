@@ -19,6 +19,7 @@
  *                   quality?: 'common'                                           製作裝備的品質（craftTable.QUALITIES 的 id；掉落裝備沒有）
  *                   legendaryId?: 'omen'                                         傳說裝備的種類（legendaryTable.LEGENDARIES 的鍵；只有掉落裝備）
  *                   attackStat?: 'int'                                           武器：普攻吃 atk 或 int（沒寫＝atk；只有武器能寫）
+ *                   name?: '堅韌布甲'                                            玩家取的名字（1～ITEM_NAME_MAX 字；只有製作裝備；沒寫就用部位名）
  *                   materials?: ['fury@5', …]                                    製作時投入的 10 個刻印（分解時從這裡退回；只有製作裝備）
  *                   links:   [{ active, supports: [] }] }                        鑲在這件裝備上的寶石連結
  *               每件裝備一組連結（1 顆主動 + 3 顆輔助），槽數沒有個體差異，所以不存在裝備裡，
@@ -65,6 +66,8 @@ const PROGRESS_KEYS = ['defeatedBosses', 'unlockedRegions', 'unlockedMonsters'];
 const MIN_DIFFICULTY = 1;
 const MAX_DIFFICULTY = 15;
 const PLAYER_NAME_MAX = 12;   // 玩家名字長度上限（字元數，我定的）
+const ITEM_NAME_MAX = 12;     // 製作裝備名字長度上限（使用者決定）
+const validName = (name, max) => typeof name === 'string' && name.trim() === name && name.length > 0 && [...name].length <= max;
 const MIN_TIER = 1;
 const MAX_TIER = 5;
 const ENGRAVING_TYPE = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -241,6 +244,10 @@ function validateEquipmentItem(item, where, nextId) {
       problems.push(`${where}的 materials 必須是 ${CRAFT_INPUTS} 個「種類@階級」`);
     }
   }
+  if (item.name !== undefined) {
+    if (item.origin !== 'craft') problems.push(`${where}不是製作裝備，不能寫 name`);
+    else if (!validName(item.name, ITEM_NAME_MAX)) problems.push(`${where}的 name 必須是 1～${ITEM_NAME_MAX} 字、前後沒有空白的字串`);
+  }
   if (item.attackStat !== undefined) {
     if (item.slot !== 'weapon') problems.push(`${where}不是武器，不能寫 attackStat`);
     else if (!ATTACK_STATS.includes(item.attackStat)) problems.push(`${where}的 attackStat「${item.attackStat}」不是 ${ATTACK_STATS.join('、')} 之一`);
@@ -346,7 +353,7 @@ function validateSave(save) {
       problems.push(`settings.difficulty 必須是 ${MIN_DIFFICULTY}～${MAX_DIFFICULTY} 的整數`);
     }
     const { playerName } = save.settings;
-    if (playerName !== undefined && (typeof playerName !== 'string' || !playerName.trim() || [...playerName].length > PLAYER_NAME_MAX)) {
+    if (playerName !== undefined && !validName(playerName, PLAYER_NAME_MAX)) {
       problems.push(`settings.playerName 必須是 1～${PLAYER_NAME_MAX} 字的非空字串`);
     }
   }
@@ -530,12 +537,16 @@ function addLegendary(save, legendaryId, difficulty, rng = Math.random) {
  * @param {string} slot weapon／helmet／armor／boots
  * @param {{ type: string, tier: number }[]} engravings 剛好 10 個
  * @param {() => number} [rng]
- * @param {{ attackStat?: 'atk'|'int' }} [options] 武器的普攻屬性（玩家製作時選，預設 atk）；其他部位不能寫
+ * @param {{ attackStat?: 'atk'|'int', name?: string }} [options] attackStat：武器的普攻屬性（玩家製作時選，預設 atk）；其他部位不能寫。
+ *   name：玩家取的名字（去掉前後空白；空的就不存，顯示時用部位名；超過 ITEM_NAME_MAX 字丟 SaveError）
  */
-function craftEquipment(save, slot, engravings, rng = Math.random, { attackStat } = {}) {
+function craftEquipment(save, slot, engravings, rng = Math.random, { attackStat, name } = {}) {
   if (!SLOTS.includes(slot)) throw new SaveError(`部位「${slot}」不是 ${SLOTS.join('、')} 之一`);
   if (attackStat !== undefined && slot !== 'weapon') throw new SaveError('只有武器能選普攻屬性（attackStat）');
   if (attackStat !== undefined && !ATTACK_STATS.includes(attackStat)) throw new SaveError(`普攻屬性必須是 ${ATTACK_STATS.join('、')} 之一`);
+  if (name !== undefined && typeof name !== 'string') throw new SaveError('裝備名字必須是字串');
+  const itemName = (name ?? '').trim();
+  if ([...itemName].length > ITEM_NAME_MAX) throw new SaveError(`裝備名字最多 ${ITEM_NAME_MAX} 個字`);
   if (!Array.isArray(engravings)) throw new SaveError('製作的刻印必須是陣列');
   const keys = engravings.map(entry => stackKey(entry?.type, entry?.tier));
   let crafted;
@@ -550,7 +561,7 @@ function craftEquipment(save, slot, engravings, rng = Math.random, { attackStat 
     for (const [key, count] of Object.entries(need)) takeFromStack(draft.engravings, key, count, `刻印「${key}」`);
     const id = `eq${draft.meta.nextId++}`;
     draft.equipment.push({ id, slot, origin: 'craft', base: crafted.base, affixes: crafted.affixes, castWeight: crafted.castWeight, quality: crafted.quality,
-      ...(slot === 'weapon' ? { attackStat: attackStat ?? 'atk' } : {}), materials: keys, links: [] });
+      ...(slot === 'weapon' ? { attackStat: attackStat ?? 'atk' } : {}), ...(itemName ? { name: itemName } : {}), materials: keys, links: [] });
     return { id, quality: crafted.quality };
   });
 }
@@ -905,7 +916,7 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 }
 
 module.exports = {
-  SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, MIGRATIONS, SaveError,
+  SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
   addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip,
   setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
