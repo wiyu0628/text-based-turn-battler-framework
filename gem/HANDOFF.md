@@ -17,7 +17,7 @@ node gem/gems-ui-build.js
 node gem/game-build.js                                  # 正式遊戲介面
 ```
 
-**預期**：`npm test` 652 項全過；`gem/` 內 `castWeight.test.js` 22、`gems.test.js` 94、`ailment.test.js` 14、`spRegen.test.js` 3、`deft.test.js` 3、`energy.test.js` 6、`difficulty.test.js` 2、`monsters.test.js` 9、`bosses.test.js` 3、`game.test.js` 8、`statLayer.test.js` 42、`spell.test.js` 12、`saveLayer.test.js` 47、`affixTable.test.js` 12、`equipment.test.js` 12、`combine.test.js` 8、`dropTable.test.js` 9、`legendary.test.js` 9、`craft.test.js` 16、`engrave.test.js` 12；`tests/uncritable.test.js` 8、`tests/ignoreDefenseRatio.test.js` 5、`tests/hitFormula.test.js` 4；UI 打包成功（15 個模組）。
+**預期**：`npm test` 653 項全過；`gem/` 內 `castWeight.test.js` 22、`gems.test.js` 94、`ailment.test.js` 14、`spRegen.test.js` 3、`deft.test.js` 3、`energy.test.js` 6、`difficulty.test.js` 2、`monsters.test.js` 9、`bosses.test.js` 3、`game.test.js` 8、`statLayer.test.js` 42、`spell.test.js` 12、`saveLayer.test.js` 47、`affixTable.test.js` 12、`equipment.test.js` 12、`combine.test.js` 8、`dropTable.test.js` 9、`legendary.test.js` 9、`craft.test.js` 16、`engrave.test.js` 12；`tests/uncritable.test.js` 8、`tests/ignoreDefenseRatio.test.js` 5、`tests/hitFormula.test.js` 4；UI 打包成功（15 個模組）。
 
 **如果結果不同，先判斷是哪一種情況：**
 
@@ -60,11 +60,12 @@ node gem/game-build.js                                  # 正式遊戲介面
 | `skill-balance.js` | **主動寶石平衡**（3-G-4）：`node gem/skill-balance.js [寶石,…] [情境,…] [階級] [難度]`，同裝備同難度下，各情境（base／ruins／sewer／boss）勝率 50% 時的敵方強度倍率 k（約 45 秒） |
 | `difficulty-check.js` | 驗證難度縮放：`node gem/difficulty-check.js [phys\|spell] [場數] [ruins\|sewer]`，每個難度拿上一階／這一階整套的勝率；不寫地區＝基準怪（約 10～30 秒） |
 | `affix-budget.js` | 預算驗證腳本：`node gem/affix-budget.js`（舊版固定基底）或 `--craft`（基底改用製作，配置見 `CRAFT_MIX`）（repo 根目錄；約 2 分鐘；隨機取行，種子固定所以可重現）。用真正的編譯器接線跑「滿裝 vs 空手」涵蓋倍率；每套配置隨機抽 30 組裝備，約 1.5 分鐘 |
-| `gems.test.js`、`statLayer.test.js`、`castWeight.test.js`、`spell.test.js`、`saveLayer.test.js`、`affixTable.test.js`、`equipment.test.js`、`combine.test.js`、`dropTable.test.js`、`craft.test.js`、`engrave.test.js`、`ailment.test.js`、`legendary.test.js`、`spRegen.test.js`、`deft.test.js`、`energy.test.js`、`difficulty.test.js`、`monsters.test.js`、`bosses.test.js`、`game.test.js` | 94／42／22／12／47／12／12／8／9／16／12／14／9／3／3／6／2／9／3／10 項測試 |
+| `gems.test.js`、`statLayer.test.js`、`castWeight.test.js`、`spell.test.js`、`saveLayer.test.js`、`affixTable.test.js`、`equipment.test.js`、`combine.test.js`、`dropTable.test.js`、`craft.test.js`、`engrave.test.js`、`ailment.test.js`、`legendary.test.js`、`spRegen.test.js`、`deft.test.js`、`energy.test.js`、`difficulty.test.js`、`monsters.test.js`、`bosses.test.js`、`game.test.js` | 94／42／22／12／47／12／12／8／9／16／12／14／9／3／3／6／2／9／3／11 項測試 |
 | `gems-quickstart.js` | `node gem/gems-quickstart.js [主動寶石] [輔助寶石…]`（會印出空訊息的 BUFF_APPLY 行，使用者說不用處理） |
 | `gems-balance.js` | 平衡模擬腳本（選項：`--battles --turns --cast --sp --attack-sp --active --exclude-active --exclude-support --lock --max-supports --top --csv`） |
 | `game.js` | **遊戲層接線**（3-H）：`createNewGame`、`heroStats`、`buildHero`、`prepareBattle`、`runBattle`、`replayBattle`、`battleText`、`regionPreview`；介面只呼叫它 |
 | `game.template.html`、`game-build.js`、`game.html` | **正式遊戲介面**（3-H）：`node gem/game-build.js` 產生單一檔案 `game.html`（約 406 KB、25 個模組），瀏覽器直接開，存檔在 localStorage |
+| `data-sheet.js` | **數值表匯出**（後台核對用，不放進網頁）：`node gem/data-sheet.js > data-sheet.json`，從資料表直接算出角色、難度與掉落、地區、怪物（各難度實際值）、怪物技能與特性、Boss、刻印（刻到裝備的範圍、製作時的貢獻）、製作、主動／輔助寶石、異常、傳說裝備、能量共 15 張表 |
 | `game-ui-check.js` | 介面流程檢查（jsdom，**不是 repo 依賴**）：`JSDOM_DIR=/tmp/jsd node gem/game-ui-check.js` |
 | `gems-ui.template.html`、`gems-ui-build.js` | 產生 `gems-ui.html`（單一檔案，瀏覽器直接開）。寶石或編譯器改了就重新 `node gem/gems-ui-build.js` |
 | `gems-ui.html` | 打包產物 |
@@ -365,7 +366,7 @@ node gem/game-build.js                                  # 正式遊戲介面
    - 角色：`HERO_BASE`（生命 3000、SP 240、攻擊／智力 150、防禦 50、速度 100、爆擊 10%、施放率 35%；**沒有等級**）× 穿戴中的屬性加成；技能來自穿著裝備的連結（`compileEquipped`）；普攻吃武器的 `attackStat`；命中一律 `contest`；最多 40 回合。
    - **一顆種子拆成三條亂數**：組敵人（seed）、戰鬥（seed + 1）、掉落（seed + 2）。同一份存檔＋同一顆種子 = 同一場戰鬥；**紀錄存戰鬥前的存檔快照**，所以換了裝備之後重播仍然一樣。
    - 打贏：`rollDrops`（稀有／菁英額外刻印）→ `grantDrops`（含能量、傳說裝備）；**王戰比照菁英多 1 個刻印**（我決定），再 `recordBossVictory`。打輸或平手什麼都沒有、存檔不變。
-   - **新手武器（我決定，佔位）**：`createNewGame()` = 開局主動寶石＋一把穿上的新手武器（ATK／INT +20、權重 100、普攻吃攻擊、沒有 materials 所以不能分解、可以刻刻印）。理由：寶石要鑲在裝備上，而製作要先湊 10 個刻印，沒有它開局送的主動寶石用不到。
+   - **新手武器**：`createNewGame()` = 開局主動寶石＋**新手劍（普攻屬性攻擊，穿上）與新手法杖（普攻屬性智力）**（使用者決定：兩把都沒有加成、權重 100、沒有 materials 所以不能分解、可以刻刻印；`game.STARTER_WEAPONS`，名字存在 `name`）。舊存檔裡那把「新手武器」（ATK／INT +20）不會被改掉。
 3. **驗證**：`game.test.js` 8 項（同種子同戰報、重播逐行相同、勝利掉落與能量、敗北不變、王首次獎勵一次、目標檢查…）；`game-ui-check.js` 用 jsdom 跑一遍：連寶石 → 難度 1 打 25 場（全勝、36 個刻印）→ 重播 → 製作 → 分解刻印 → 刻印 → 清除 → 穿上 → 分解模式分解裝備 → 打王 → 切難度 → 存檔寫入，沒有錯誤。另外檢查了傳說裝備卡片、寶石頁的「裝備額外給」與紀錄碼往返。
 4. **第一輪修改（使用者）**：
    - 玩家可以改名：側欄名字欄位＋「確認」（沒有還原），空的就報錯；預設名從「勇者」改為「**玩家**」。存在 `settings.playerName`（選填、最多 12 字，我定的；舊存檔不需要遷移），`saveLayer.setPlayerName`、`game.playerName`。戰報用這個名字（重播用快照裡的名字）。
@@ -381,7 +382,18 @@ node gem/game-build.js                                  # 正式遊戲介面
    - 寶石連結不合法時的提示出現兩次：原因是 `SaveError.message` 本身已含問題清單，介面又把 `problems` 再接一次，外加跳一次提示。改成只在那一欄顯示一次、不跳提示，訊息裡的寶石 id 換成名稱。
    - `GameUI.forceState(save)` 只給 `game-ui-check.js` 塞測試狀態用。
 6. **深色模式（使用者要求）**：頁首「深色模式／淺色模式」按鈕一鍵切換；選擇存在 localStorage `tbtf-game-theme`（和遊戲存檔分開，匯出／重新開始不影響）；沒選過就跟系統設定（`prefers-color-scheme`）；在 `<head>` 先套上，避免閃一下淺色。所有顏色都改成 CSS 變數，`:root[data-theme="dark"]` 換一組；主要文字對比 12.4、次要 5.6、我方／敵方戰報 7.5／7.2（只有數量 0 的格子刻意偏暗）。
-7. **還沒做／已知限制**：**沒在真正的瀏覽器看過**（版面、手機寬度未確認；深色模式只在 jsdom 檢查過切換）；手機版面；新手武器與王戰掉落是我的決定；戰鬥紀錄只留最近 20 場；舊的 `gems-ui.html` 仍在（測試用，沒有刪）。
+7. **戰鬥與戰報（使用者要求）**：
+   - **共用 10 秒冷卻**：任何一場戰鬥（地區、Boss、再打一場）開打後 10 秒內不能再開打；重播不算。開打時間存在 localStorage `tbtf-game-battle-cd`（不在存檔裡），重新整理也跳不過；記錄的時間在未來超過 10 秒（改過系統時間）就當作沒有冷卻。開打按鈕冷卻中停用並顯示倒數秒數（每 0.25 秒更新按鈕，不重畫整頁），硬呼叫 `startBattle` 會提示還要幾秒。冷卻只在介面層，`game.runBattle` 本身沒有限制。
+   - 開場只顯示敵人血量（彈窗副標題「敵人：名字（HP N）」；`prepareBattle` 回傳 `opening`）。
+   - 戰報顏色不分敵我：普攻 = 一般文字色（淺色黑、深色白）、技能（淺色 #14807a，對比 4.8；深色 #4fd1c5）、會心一擊加粗、恢復（HEAL／HOT／SP 回復／休息）綠色、持續傷害（BUFF_EFFECT DOT）#f56262、閃避（MISS）淺灰。
+   - 結束時框架的「戰鬥結束，獲勝方: …」換成獲勝方血量（`game.endSummary`：勝利 → 玩家剩餘 HP；敗北 → 還站著的敵人；平手 → 雙方）。下載戰報也一樣（`battleText(logs, header, summary)`）。框架的戰報字串沒有改。
+   - 速度：慢 250、中 150、快 80 毫秒／行、立即。**立即**一次顯示全部、不捲到底（停在開頭）。速度選項打完也一直在（修正：之前選了立即，結束後速度選項消失就改不回來）。
+   - 結束後的刻印、輔助寶石、傳說裝備、首次擊敗的主動寶石都可以點開看資料（刻印 = 刻到裝備時的數值範圍）。
+8. **手機版面（第一版）**：同一個檔案，寬度 760px 以下套手機樣式（`@media`）：頁首不固定、分三列（標題＋能量／功能按鈕／四個分頁平分）；單欄；角色面板放在最上面、**預設收起**只顯示一行摘要（生命／攻擊／智力／防禦／速度），按「展開屬性」看全部（`ui.heroOpen`）；工坊第二層分頁平分寬度；按鈕與輸入框加高（觸控 36px 以上、輸入框 16px 字避免 iOS 自動放大）；戰鬥彈窗全螢幕、速度選項獨立一列；確認框與資料框置中；處理瀏海與底部安全區（`viewport-fit=cover`、`env(safe-area-inset-*)`）。
+   - 驗證：用 Chrome（headless，Playwright）實際截圖看過 1280×800 與 390×844、360×740，淺色與深色都看過；沒有橫向捲動、沒有頁面錯誤。**實機（iOS Safari、Android）沒測過**，長按看刻印數值只在 jsdom 測過。
+9. **第三輪修改（使用者）**：新手武器拆成新手劍／新手法杖（見上）；角色面板「普攻」改為「**普攻屬性**」，值寫「攻擊／智力」（拿掉「吃」，製作與裝備卡片也一樣）；工坊**換第二層分頁時清掉所有選擇**（製作材料、合成、刻印、分解），另外每次重畫都會丟掉背包已經不夠的選擇，數量不會再出現負數；頁首的「刷怪打王」先拿掉（等有正式名字再放回；瀏覽器分頁標題 `<title>` 還是刷怪打王）。
+10. **頭像（使用者決定：不放進存檔，位置照我建議，先試戰報開頭也顯示）**：角色面板名字左邊的圓形頭像，點一下選本機圖片（`accept="image/*"`）；用 canvas 置中裁切、縮成 128×128 JPEG（約數 KB），存在 localStorage `tbtf-game-avatar`，不放進存檔、不上傳；已有頭像時點一下可以預覽、更換或移除；沒有頭像顯示名字第一個字。戰鬥彈窗開頭顯示頭像＋玩家名字＋敵人血量（重播的名字用紀錄快照，頭像用目前的）。用 headless Chrome 實際選檔測過（電腦與手機寬度）。
+11. **還沒做／已知限制**：**沒在真正的瀏覽器看過**（已用 headless Chrome 截圖檢查；實機未測）；手機版面；新手武器與王戰掉落是我的決定；戰鬥紀錄只留最近 20 場；舊的 `gems-ui.html` 仍在（測試用，沒有刪）。
 
 ## 4. 被否決或放棄的方案
 

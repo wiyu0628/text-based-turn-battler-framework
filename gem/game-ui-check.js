@@ -20,6 +20,7 @@ const $ = s => w.document.querySelector(s);
 const $$ = s => [...w.document.querySelectorAll(s)];
 const text = () => w.document.getElementById('main').textContent;
 const btn = label => $$('button').find(b => b.textContent.trim().startsWith(label));
+const noCd = () => w.localStorage.setItem('tbtf-game-battle-cd', '0');
 const click = el => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
 const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.Event('change', { bubbles: true })); };
 (async () => {
@@ -36,7 +37,36 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   // 冒險：打 25 場難度 1
   click($$('#nav button').find(b => b.textContent === '冒險')); await sleep(50);
   let wins = 0;
-  for (let i = 0; i < 25; i++) {
+  // 冷卻：打一場之後 10 秒內不能再打
+  click(btn('出發'));
+  for (let k = 0; k < 50 && !$('#battle-modal').classList.contains('open'); k++) await sleep(20);
+  console.log('開場敵人血量：', $('#battle-sub').textContent);
+  await sleep(300);
+  const again = $$('#battle-footer button').find(b => b.textContent.startsWith('再打一場'));
+  console.log('播放中的速度選項：', $$('#battle-footer button').slice(0, 4).map(b => b.textContent).join('/'));
+  click($$('#battle-footer button').find(b => b.textContent === '跳到結尾')); await sleep(10);
+  const cdBtn = $$('#battle-footer button').find(b => b.textContent.startsWith('再打一場'));
+  console.log('結束後速度選項：', $$('#battle-footer button').slice(0, 4).map(b => b.textContent).join('/'), '再打一場：', cdBtn.textContent, '停用', cdBtn.disabled);
+  const lastLine = $$('#battle-log div').pop();
+  console.log('最後一行：', lastLine.textContent, lastLine.className, '有獲勝方字樣：', $('#battle-log').textContent.includes('獲勝方'));
+  const classes = {}; for (const d of $$('#battle-log div')) classes[d.className] = (classes[d.className] || 0) + 1;
+  console.log('戰報顏色分類：', JSON.stringify(classes));
+  console.log('會心加粗：', $$('#battle-log div.crit').length, $$('#battle-log div.crit').every(d => d.textContent.includes('會心')));
+  const missLine = $$('#battle-log div.miss')[0], skillLine = $$('#battle-log div.skill')[0];
+  console.log('例：', missLine && missLine.textContent, '|', skillLine && skillLine.textContent);
+  await ui.startBattle({ kind: 'region', id: 'ruins', difficulty: 1 }); await sleep(10);
+  console.log('冷卻中再打：', $('#toast').textContent);
+  // 掉落可以點
+  const chip = $$('#battle-result .chip.drop')[0];
+  if (chip) { click(chip); await sleep(10); console.log('點掉落：', $('#info-title').textContent, '|', $('#info-body').textContent.slice(0, 40)); click($('#info-close')); }
+  // 立即：不捲到底
+  click($$('#battle-footer button').find(b => b.textContent === '立即')); await sleep(10);
+  click($$('#battle-footer button').find(b => b.textContent === '重播')); await sleep(30);
+  console.log('立即重播：結果已顯示', !!$('#battle-result').textContent, '捲動位置', $('#battle-modal .body').scrollTop, '速度選項還在', $$('#battle-footer button').some(b => b.textContent === '慢'));
+  click($$('#battle-footer button').find(b => b.textContent === '中')); await sleep(10);
+  click($$('#battle-footer button').find(b => b.textContent === '關閉'));
+  for (let i = 0; i < 24; i++) {
+    noCd(); await sleep(260);
     click(btn('出發'));
     for (let k = 0; k < 50 && !$('#battle-modal').classList.contains('open'); k++) await sleep(20);
     if (!$('#battle-modal').classList.contains('open')) { console.log('彈窗沒出現', errors); process.exit(1); }
@@ -48,6 +78,7 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
     click($$('#battle-footer button').find(b => b.textContent === '關閉'));
   }
   const engr = Object.values(ui.state.engravings).reduce((a, b) => a + b, 0);
+  noCd();
   console.log('25 場：勝', wins, '刻印', engr, '能量', ui.state.energy, '紀錄', JSON.parse(w.localStorage.getItem('tbtf-game-history')).length);
   // 重播第一筆紀錄
   click(btn('重播')); await sleep(30);
@@ -64,6 +95,15 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   $$('table.bag td')[1].dispatchEvent(new w.MouseEvent('contextmenu', { bubbles: true, cancelable: true })); await sleep(10);
   console.log('右鍵數值：', $('#info-modal').classList.contains('open'), $('#info-title').textContent, '|', $('#info-body').textContent.slice(0, 60));
   click($('#info-close'));
+  // 換分頁會清掉選擇，不會出現負數
+  for (let i = 0; i < 10; i++) { const cell = $$('table.bag td.pick')[0]; if (!cell) break; click(cell); await sleep(5); }
+  await sub('刻印合成');
+  for (let i = 0; i < 3; i++) { const c = $$('table.bag td.pick')[0]; if (c) { click(c); await sleep(5); } }
+  await sub('製作裝備');
+  console.log('換分頁後：製作材料', $$('.chips')[0].children.length, '負數格', $$('table.bag td').filter(td => td.textContent.startsWith('-')).length);
+  await sub('刻印合成');
+  console.log('換回合成：已選', $$('.chips')[0].children.length);
+  await sub('製作裝備');
   // 製作 1 件武器
   for (let i = 0; i < 10; i++) { const cell = $$('table.bag td.pick')[0]; if (!cell) break; click(cell); await sleep(5); }
   console.log('材料數：', $$('.chips')[0].children.length, '沒有預覽：', !text().includes('預覽'));
@@ -119,6 +159,7 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   if (salv) { click(salv); await yes(); console.log('分解裝備：', $('#toast').textContent, '件數', ui.state.equipment.length); }
   // 王
   click($$('#nav button').find(b => b.textContent === '冒險')); await sleep(50);
+  noCd(); await sleep(260);
   click(btn('挑戰'));
   for (let k = 0; k < 50 && !$('#battle-modal').classList.contains('open'); k++) await sleep(20);
   click($$('#battle-footer button').find(b => b.textContent === '跳到結尾')); await sleep(10);
@@ -133,6 +174,7 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   console.log('空名字：', $('#toast').textContent, $('#toast').className, ui.state.settings.playerName);
   $('#player-name').value = ' 阿明 '; click(btn('確認')); await sleep(30);
   console.log('改名：', $('#toast').textContent, ui.state.settings.playerName);
+  noCd(); await sleep(260);
   click(btn('出發'));
   for (let k = 0; k < 50 && !$('#battle-modal').classList.contains('open'); k++) await sleep(20);
   click($$('#battle-footer button').find(b => b.textContent === '跳到結尾')); await sleep(10);

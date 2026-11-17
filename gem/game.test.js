@@ -8,9 +8,15 @@ const messages = logs => logs.map(log => log.message);
 const newGame = () => game.createNewGame({ now: '2026-01-01T00:00:00Z' });
 const withWhirlwind = () => { const state = newGame(); return save.setLinks(state, state.equipped.weapon, [{ active: 'whirlwind', supports: [] }]); };
 
-test('a new game has the starting active gems and a worn starter weapon that can hold links', () => {
+test('a new game has the starting active gems and two starter weapons (sword worn) that can hold links', () => {
   const state = newGame();
   const weapon = state.equipment.find(item => item.id === state.equipped.weapon);
+  assert.deepEqual(state.equipment.map(item => [item.name, item.attackStat, item.base.length]), [['新手劍', 'atk', 0], ['新手法杖', 'int', 0]]);
+  assert.equal(weapon.name, '新手劍');
+  for (const item of state.equipment) assert.throws(() => save.salvageEquipment(state, item.id), /不能分解/);
+  const staff = save.equip(state, state.equipment[1].id);
+  assert.equal(save.compileEquipped(staff).normalAttackStat, 'int');
+  assert.deepEqual(game.heroStats(staff), game.heroStats(state));                    // 加成都是 0
   assert.equal(weapon.slot, 'weapon');
   assert.equal(weapon.materials, undefined);                                         // 不能分解
   assert.throws(() => save.salvageEquipment(state, weapon.id), /不能分解/);
@@ -23,7 +29,7 @@ test('a new game has the starting active gems and a worn starter weapon that can
 test('hero stats = base × worn bonuses; skills come from the worn links', () => {
   const state = withWhirlwind();
   const stats = game.heroStats(state);
-  assert.equal(stats.atk, game.HERO_BASE.atk + 20);
+  assert.equal(stats.atk, game.HERO_BASE.atk);                                       // 新手武器沒有加成
   const { hero, loadout } = game.buildHero(state);
   assert.deepEqual(hero.skills.map(s => s.id), ['whirlwind']);
   assert.equal(loadout.normalAttackStat, 'atk');
@@ -114,4 +120,23 @@ test('player name: default 玩家, rename trims, empty or too long is refused, b
 
 test('strength level 1～5 starts at difficulty 1, 4, 7, 10, 13', () => {
   assert.deepEqual([1, 3, 4, 6, 7, 10, 12, 13, 15].map(game.strengthLevel), [1, 1, 2, 2, 3, 4, 4, 5, 5]);
+});
+
+test('opening shows enemy HP; the end summary replaces the BATTLE_END line with the winner HP', () => {
+  const state = withWhirlwind();
+  const result = game.runBattle(state, ruins(1), 7);
+  assert.equal(result.opening.length, result.enemies.length);
+  for (const e of result.opening) assert.ok(e.hp > 0 && e.hp === e.maxHp);
+  const hero = result.final.find(e => e.team === 'A');
+  if (result.victory) assert.equal(result.summary, `勝利，剩餘 HP：${hero.name} ${hero.hp} / ${hero.maxHp}`);
+  const text = game.battleText(result.logs, 'x', result.summary);
+  assert.ok(!text.includes('戰鬥結束，獲勝方'));
+  assert.ok(text.endsWith(result.summary));
+  assert.equal(game.battleText(result.logs, 'x').includes('戰鬥結束，獲勝方'), true);
+  const replay = game.replayBattle(result.record);
+  assert.deepEqual(replay.final, result.final);
+  assert.equal(replay.summary, result.summary);
+  const final = [{ team: 'A', name: '玩家', hp: 0, maxHp: 3000, alive: false }, { team: 'B', name: '野犬', hp: 120, maxHp: 900, alive: true }, { team: 'B', name: '地精', hp: 0, maxHp: 500, alive: false }];
+  assert.equal(game.endSummary('TEAM_B', final), '敗北，敵方剩餘 HP：野犬 120 / 900');
+  assert.equal(game.endSummary('DRAW', [{ ...final[0], hp: 5, alive: true }, final[1]]), '平手，剩餘 HP：玩家 5 / 3000｜敵方 野犬 120 / 900');
 });
