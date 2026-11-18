@@ -22,7 +22,7 @@ test('a new game has the starting active gems and two starter weapons (sword wor
   assert.throws(() => save.salvageEquipment(state, weapon.id), /不能分解/);
   assert.deepEqual(state.gems, { magicmissile: 1, whirlwind: 1, rend: 1 });
   const linked = withWhirlwind();
-  assert.equal(linked.gems.whirlwind, undefined);                                     // 鑲上去了
+  assert.equal(linked.gems.whirlwind, 1);                                             // 主動寶石擁有制：鑲上去不扣
   assert.deepEqual(save.validateSave(linked), []);
 });
 
@@ -139,4 +139,43 @@ test('opening shows enemy HP; the end summary replaces the BATTLE_END line with 
   const final = [{ team: 'A', name: '玩家', hp: 0, maxHp: 3000, alive: false }, { team: 'B', name: '野犬', hp: 120, maxHp: 900, alive: true }, { team: 'B', name: '地精', hp: 0, maxHp: 500, alive: false }];
   assert.equal(game.endSummary('TEAM_B', final), '敗北，敵方剩餘 HP：野犬 120 / 900');
   assert.equal(game.endSummary('DRAW', [{ ...final[0], hp: 5, alive: true }, final[1]]), '平手，剩餘 HP：玩家 5 / 3000｜敵方 野犬 120 / 900');
+});
+
+test('gems come off automatically: unequip and swapping return them to the bag; old saves are tidied', () => {
+  const state = withWhirlwind();
+  const sword = state.equipped.weapon, staff = state.equipment.find(item => item.id !== sword).id;
+  const off = save.unequip(state, 'weapon');
+  assert.deepEqual(off.equipment.find(item => item.id === sword).links, []);
+  assert.equal(off.gems.whirlwind, 1);
+  const swapped = save.equip(state, staff);
+  assert.deepEqual(swapped.equipment.find(item => item.id === sword).links, []);
+  assert.equal(swapped.gems.whirlwind, 1);
+  assert.equal(save.equip(state, sword).equipment.find(item => item.id === sword).links.length, 1);   // 同一件再穿不會卸
+  // 舊存檔：沒穿的裝備還鑲著寶石
+  const stuck = save.setLinks(swapped, sword, [{ active: 'whirlwind', supports: [] }]);
+  const tidy = save.releaseUnwornLinks(stuck);
+  assert.equal(tidy.gems.whirlwind, 1);
+  assert.deepEqual(tidy.equipment.find(item => item.id === sword).links, []);
+  assert.strictEqual(save.releaseUnwornLinks(tidy), tidy);
+});
+
+test('active gems are owned, not counted: one gem links to any number of items; unowned ones are refused; v2 saves migrate', () => {
+  const state = game.createNewGame();
+  const [sword, staff] = state.equipment.map(item => item.id);
+  const both = save.setLinks(save.setLinks(state, sword, [{ active: 'whirlwind', supports: [] }]), staff, [{ active: 'whirlwind', supports: [] }]);
+  assert.equal(both.gems.whirlwind, 1);
+  assert.deepEqual(both.equipment.map(item => item.links[0].active), ['whirlwind', 'whirlwind']);
+  // 換下時不留在裝備上（使用者決定）；主動寶石還是擁有
+  const swapped = save.equip(both, staff);
+  assert.deepEqual(swapped.equipment.find(item => item.id === sword).links, []);
+  assert.equal(swapped.gems.whirlwind, 1);
+  assert.throws(() => save.setLinks(state, sword, [{ active: 'pursuit', supports: [] }]), /還沒有主動寶石/);
+  assert.equal(save.addGems(state, 'rend', 3).gems.rend, 1);                          // 拿到幾顆都只記成擁有
+  assert.ok(save.validateSave({ ...state, gems: { ...state.gems, rend: 2 } }).some(p => /擁有制/.test(p)));
+  assert.ok(save.validateSave({ ...both, gems: { magicmissile: 1, rend: 1 } }).some(p => /還沒擁有/.test(p)));
+  // v2 舊存檔：鑲在裝備上的主動寶石不在背包裡、背包可能有 2 顆
+  const v2 = { ...both, version: 2, gems: { magicmissile: 2, rend: 1 } };
+  const upgraded = save.importSave(JSON.stringify(v2));
+  assert.equal(upgraded.version, save.SAVE_VERSION);
+  assert.deepEqual(upgraded.gems, { magicmissile: 1, rend: 1, whirlwind: 1 });
 });

@@ -53,7 +53,7 @@ const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 2;
+const SAVE_VERSION = 3;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -89,6 +89,9 @@ class SaveError extends Error {
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isCount = value => Number.isInteger(value) && value >= 1;
+// 主動寶石是「擁有制」（使用者決定）：背包數量只會是 1（擁有）或沒有；鑲上去不扣背包，同一顆可以鑲在任意多件裝備上
+// （穿戴中的裝備仍然同一種主動寶石只能有一顆生效，見 compileEquipped）。輔助寶石照舊一顆一顆算，鑲上去會從背包扣。
+const isActiveGem = id => Object.hasOwn(ACTIVE_GEMS, id);
 const isGemId = id => Object.hasOwn(ACTIVE_GEMS, id) || Object.hasOwn(SUPPORT_GEMS, id);
 
 // ── 建立 ─────────────────────────────────────────────────────
@@ -299,6 +302,14 @@ function validateSave(save) {
   }
 
   problems.push(...validateStacks(save.gems, 'gems', id => (isGemId(id) ? null : '不是已知的寶石')));
+  if (isObject(save.gems)) {
+    for (const [id, count] of Object.entries(save.gems)) if (isActiveGem(id) && count > 1) problems.push(`主動寶石「${id}」是擁有制，數量只能是 1（收到 ${count}）`);
+    for (const item of Array.isArray(save.equipment) ? save.equipment : []) {
+      for (const link of Array.isArray(item?.links) ? item.links : []) {
+        if (isActiveGem(link?.active) && !(save.gems[link.active] > 0)) problems.push(`裝備 ${item.id} 鑲著還沒擁有的主動寶石「${link.active}」`);
+      }
+    }
+  }
   problems.push(...validateStacks(save.engravings, 'engravings', key => (ENGRAVING_KEY.test(key) ? null : `格式必須是「種類@階級」，階級 ${MIN_TIER}～${MAX_TIER}`)));
 
   const itemProblems = [];
@@ -367,7 +378,15 @@ function validateSave(save) {
 // 每一步只升一版，必須把 version 設成原本加一；讀檔時會一路升到 SAVE_VERSION。
 const MIGRATIONS = {
   // v1 → v2：新增能量槽，舊存檔從 0 開始
-  1: save => ({ ...save, version: 2, energy: 0 })
+  1: save => ({ ...save, version: 2, energy: 0 }),
+  // v2 → v3：主動寶石改成擁有制——背包有或鑲在任何裝備上的主動寶石都記成擁有 1 顆
+  2: save => {
+    const gems = { ...save.gems };
+    const owned = new Set(Object.keys(gems).filter(id => isActiveGem(id) && gems[id] > 0));
+    for (const item of save.equipment ?? []) for (const link of item.links ?? []) if (isActiveGem(link.active)) owned.add(link.active);
+    for (const id of owned) gems[id] = 1;
+    return { ...save, version: 3, gems };
+  }
 };
 
 function migrateSave(raw, migrations = MIGRATIONS, target = SAVE_VERSION) {
@@ -438,10 +457,16 @@ function requireGem(gemId) {
   if (!isGemId(gemId)) throw new SaveError(`「${gemId}」不是已知的寶石`);
 }
 
+/** 放進背包：主動寶石是擁有制，拿到幾顆都只記成擁有（1）。 */
+function giveGem(draft, gemId, count) {
+  if (isActiveGem(gemId)) draft.gems[gemId] = 1;
+  else addToStack(draft.gems, gemId, count);
+}
+
 function addGems(save, gemId, count = 1) {
   requireCount(count);
   requireGem(gemId);
-  return mutate(save, draft => addToStack(draft.gems, gemId, count));
+  return mutate(save, draft => giveGem(draft, gemId, count));
 }
 
 function removeGems(save, gemId, count = 1) {
@@ -694,10 +719,10 @@ function findItem(draft, id) {
   return item;
 }
 
+/** 連結會佔用背包的寶石數量：只算輔助寶石（主動寶石是擁有制，不扣背包）。 */
 function linkGemCounts(links) {
   const counts = {};
   for (const link of links) {
-    addToStack(counts, link.active, 1);
     for (const support of link.supports ?? []) addToStack(counts, support, 1);
   }
   return counts;
@@ -722,6 +747,9 @@ function setLinks(save, id, links) {
   if (!Array.isArray(links)) throw new SaveError('links 必須是陣列');
   const shapeProblems = validateLinks(links, '新的連結', findItem(save, id));
   if (shapeProblems.length) throw new SaveError('連結不合法', shapeProblems);
+  for (const link of links) {
+    if (isActiveGem(link?.active) && !(save.gems[link.active] > 0)) throw new SaveError(`還沒有主動寶石「${link.active}」`);
+  }
   return mutate(save, draft => {
     const item = findItem(draft, id);
     for (const [gemId, count] of Object.entries(linkGemCounts(item.links))) addToStack(draft.gems, gemId, count);
@@ -731,16 +759,35 @@ function setLinks(save, id, links) {
   });
 }
 
+// 換下的裝備自動卸下寶石（使用者決定）：寶石退回背包、連結清空，不會卡在沒穿的裝備上。
+function releaseLinks(draft, itemId) {
+  const item = itemId ? draft.equipment.find(x => x.id === itemId) : null;
+  if (!item || !item.links?.length) return;
+  for (const [gemId, count] of Object.entries(linkGemCounts(item.links))) addToStack(draft.gems, gemId, count);
+  item.links = [];
+}
+
+/** 穿上：同部位原本穿著的那件換下，它的寶石退回背包。 */
 function equip(save, id) {
   return mutate(save, draft => {
     const item = findItem(draft, id);
+    const previous = draft.equipped[item.slot];
+    if (previous && previous !== id) releaseLinks(draft, previous);
     draft.equipped[item.slot] = id;
   });
 }
 
+/** 脫下：寶石退回背包。 */
 function unequip(save, slot) {
   if (!SLOTS.includes(slot)) throw new SaveError(`未知的部位「${slot}」`);
-  return mutate(save, draft => { draft.equipped[slot] = null; });
+  return mutate(save, draft => { releaseLinks(draft, draft.equipped[slot]); draft.equipped[slot] = null; });
+}
+
+/** 舊存檔整理：沒穿著的裝備上還鑲著的寶石全部退回背包（讀檔後呼叫；沒有要整理的就回傳原存檔）。 */
+function releaseUnwornLinks(save) {
+  const worn = new Set(Object.values(save.equipped).filter(Boolean));
+  if (!save.equipment.some(item => !worn.has(item.id) && item.links?.length)) return save;
+  return mutate(save, draft => { for (const item of draft.equipment) if (!worn.has(item.id)) releaseLinks(draft, item.id); });
 }
 
 function setDifficulty(save, difficulty) {
@@ -785,7 +832,7 @@ function recordBossVictory(save, bossId) {
     draft.progress.defeatedBosses.push(bossId);
     const gems = [...(boss.rewards?.gems ?? [])];
     const unlockRegions = (boss.rewards?.unlockRegions ?? []).filter(id => !draft.progress.unlockedRegions.includes(id));
-    for (const gemId of gems) addToStack(draft.gems, gemId, 1);
+    for (const gemId of gems) giveGem(draft, gemId, 1);
     draft.progress.unlockedRegions.push(...unlockRegions);
     return { firstClear: true, rewards: { gems, unlockRegions } };
   });
@@ -918,7 +965,7 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
-  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip,
+  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
   setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };

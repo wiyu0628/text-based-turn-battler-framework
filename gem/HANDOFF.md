@@ -1,6 +1,6 @@
-# 交接文件：刷怪打王遊戲 ＋ PoE 式技能串接寶石（第五版）
+# 交接文件：刷怪打王遊戲 ＋ PoE 式技能串接寶石（第六版，2026-11-18 整理）
 
-本文件取代第四版交接文件。放在 `gem/HANDOFF.md`，提交進 repo 後，新對話 clone 就能直接讀到；也可以直接貼進或上傳到新對話。
+本文件取代先前各版交接文件。第 3 節依「版」記錄決策的來龍去脈；**現況以第 5 節（尚未解決）與第 9 節（待辦）為準**。放在 `gem/HANDOFF.md`，提交進 repo 後，新對話 clone 就能直接讀到；也可以直接貼進或上傳到新對話。
 
 ## 0. 新對話開始時請先做（Claude 用 bash 執行）
 
@@ -17,7 +17,7 @@ node gem/gems-ui-build.js
 node gem/game-build.js                                  # 正式遊戲介面
 ```
 
-**預期**：`npm test` 653 項全過；`gem/` 內 `castWeight.test.js` 22、`gems.test.js` 94、`ailment.test.js` 14、`spRegen.test.js` 3、`deft.test.js` 3、`energy.test.js` 6、`difficulty.test.js` 2、`monsters.test.js` 9、`bosses.test.js` 3、`game.test.js` 8、`statLayer.test.js` 42、`spell.test.js` 12、`saveLayer.test.js` 47、`affixTable.test.js` 12、`equipment.test.js` 12、`combine.test.js` 8、`dropTable.test.js` 9、`legendary.test.js` 9、`craft.test.js` 16、`engrave.test.js` 12；`tests/uncritable.test.js` 8、`tests/ignoreDefenseRatio.test.js` 5、`tests/hitFormula.test.js` 4；UI 打包成功（15 個模組）。
+**預期**：`npm test` 655 項全過；`gem/` 內各測試檔：affixTable 12、ailment 14、bosses 3、castWeight 22、combine 8、craft 17、deft 3、difficulty 2、dropTable 9、energy 6、engrave 12、equipment 12、game 13、gems 94、legendary 9、monsters 9、saveLayer 47、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 435 KB、25 個模組）。
 
 **如果結果不同，先判斷是哪一種情況：**
 
@@ -34,7 +34,7 @@ node gem/game-build.js                                  # 正式遊戲介面
 - 沙盒 shell 是 sh：不能用 `<( )`，需要時改用暫存檔或 `bash -c '...'`。框架檔是 CRLF，讀檔或比對前先 `tr -d '\r'`。Node v22。`cut -c` 會把中文字截壞，要截斷請用別的方法。
 - 上傳目錄 `/mnt/user-data/uploads` 是唯讀，要修改先 `cp`。舊對話的 outputs 在新對話看不到。**沙盒曾在對話中途重置**（工作目錄消失）：重新 clone，再從 outputs 還原已交付的檔案。
 - **上一輪對話裡，沙盒的檔案曾兩次在我沒有動手的情況下變得不一樣**。結論：不要憑記憶判斷檔案狀態，以 repo 與測試結果為準，每次先驗證再動手。
-- 驗證 UI 的方法：`mkdir /tmp/jsd && cd /tmp/jsd && npm install jsdom`，用 jsdom 載入 `gems-ui.html`；jsdom 沒有 structuredClone，UI 已內建替代版。也可以用 node 的 `vm` 載入打包後的 bundle，確認匯出函式。
+- 驗證 UI 的方法：①流程：`mkdir /tmp/jsd && cd /tmp/jsd && npm install jsdom`，再 `JSDOM_DIR=/tmp/jsd node gem/game-ui-check.js`（正式介面；舊的 `gems-ui.html` 也能用 jsdom 載入）；②畫面：沙盒有 `/usr/bin/google-chrome` 與 Python Playwright，可用 `executable_path='/usr/bin/google-chrome'` 開 `file://…/gem/game.html` 截圖（電腦 1280×800、手機 390×844／360×740，淺色與深色）。jsdom 沒有 structuredClone，UI 已內建替代版。也可以用 node 的 `vm` 載入打包後的 bundle，確認匯出函式。
 - **驗證「沒用到新機制的戰鬥不變」的方法**：`git archive HEAD | tar -x -C /tmp/orig` 取出原版，用同一支固定種子腳本（`createSeededRandom`）跑兩份，比對戰報 md5；範例裡 `boss-fight`、`control`、`party-support`、`replay` 可重現，其餘用了未固定種子的亂數。
 
 ## 1. 現有檔案（repo 的 `gem/` 資料夾，不要重貼內容）
@@ -46,7 +46,7 @@ node gem/game-build.js                                  # 正式遊戲介面
 | `gems.js` | 資料與規則說明（v12）：5 顆主動寶石、12 顆輔助寶石、異常效果登錄表 `AILMENTS`、GROUPS、MAX_SUPPORTS = 3、權重常數。**檔頭註解是寶石規則的權威來源（含「物理與法術」一節），設計新寶石前先讀。** |
 | `gemCompiler.js` | 編譯器（第五版新增 `options.equipment`：裝備的物理／法術傷害提高與常駐減傷）：compileSkill、compileLoadout、buildGrantPassives、buildChargeResolver、buildWeightResolver、combineResolvers、describeSupport、validateGemData、GemLinkError |
 | `statLayer.js` | 數值加成層（純函式）：applyStatBonuses、explainStatBonuses、describeStatBonus、statModifier、validateBonuses、validateBuffBonuses、STAT_DEFS |
-| `saveLayer.js` | **存檔層**（見第 3-C 節）：存檔結構與驗證、版本遷移、背包與裝備操作、匯出匯入、儲存介面；第五版新增 `equippedEffects`、`compileEquipped` 與 `scope: 'effect'` 詞綴 |
+| `saveLayer.js` | **存檔層**（見第 3-C 節）：存檔結構與驗證、版本遷移、背包與裝備操作、匯出匯入、儲存介面；第五版新增 `equippedEffects`、`compileEquipped` 與 `scope: 'effect'` 詞綴。**目前存檔版本 3**（v2 加能量、v3 主動寶石擁有制）；`settings.playerName`、製作裝備的 `name` 是選填欄位 |
 | `affixTable.js` | **刻印詞綴表**（第 3-D 節）：8 種刻印、階級縮放、裝備基底、擲值函式 `rollEngraving`／`rollBase`、合成結果 `rollCombine`（3-D-7）、`sumEffectAffixes`；純資料＋函式，不依賴框架 |
 | `dropTable.js` | **掉落表**（3-D-8）：各難度刻印階級權重 `TIER_WEIGHTS`、刻印數量、輔助寶石與傳說裝備機率；`dropRates(難度)`、`rollDrops(難度, rng)`。存檔層 `grantDrops(save, drops)` 把刻印與寶石放進背包 |
 | `craftTable.js` | **裝備製作表**（3-D-9）：10 個刻印 → 基底（刻印偏向 × 階級 × 品質 × 部位倍率）與施放權重；`rollCraft`、`rawBase`、`rollQuality`。存檔層 `craftEquipment(save, slot, engravings, rng)` |
@@ -67,7 +67,7 @@ node gem/game-build.js                                  # 正式遊戲介面
 | `game.template.html`、`game-build.js`、`game.html` | **正式遊戲介面**（3-H）：`node gem/game-build.js` 產生單一檔案 `game.html`（約 406 KB、25 個模組），瀏覽器直接開，存檔在 localStorage |
 | `data-sheet.js` | **數值表匯出**（後台核對用，不放進網頁）：`node gem/data-sheet.js > data-sheet.json`，從資料表直接算出角色、難度與掉落、地區、怪物（各難度實際值）、怪物技能與特性、Boss、刻印（刻到裝備的範圍、製作時的貢獻）、製作、主動／輔助寶石、異常、傳說裝備、能量共 15 張表 |
 | `game-ui-check.js` | 介面流程檢查（jsdom，**不是 repo 依賴**）：`JSDOM_DIR=/tmp/jsd node gem/game-ui-check.js` |
-| `gems-ui.template.html`、`gems-ui-build.js` | 產生 `gems-ui.html`（單一檔案，瀏覽器直接開）。寶石或編譯器改了就重新 `node gem/gems-ui-build.js` |
+| `gems-ui.template.html`、`gems-ui-build.js` | **舊的寶石測試頁**（正式介面是 `game.html`，這個留著測試用）：產生 `gems-ui.html`（單一檔案，瀏覽器直接開）。寶石或編譯器改了就重新 `node gem/gems-ui-build.js` |
 | `gems-ui.html` | 打包產物 |
 | `../tests/uncritable.test.js`、`../tests/ignoreDefenseRatio.test.js`、`../tests/hitFormula.test.js` | 框架層新機制的測試（8 項、5 項、4 項） |
 
@@ -393,7 +393,10 @@ node gem/game-build.js                                  # 正式遊戲介面
    - 驗證：用 Chrome（headless，Playwright）實際截圖看過 1280×800 與 390×844、360×740，淺色與深色都看過；沒有橫向捲動、沒有頁面錯誤。**實機（iOS Safari、Android）沒測過**，長按看刻印數值只在 jsdom 測過。
 9. **第三輪修改（使用者）**：新手武器拆成新手劍／新手法杖（見上）；角色面板「普攻」改為「**普攻屬性**」，值寫「攻擊／智力」（拿掉「吃」，製作與裝備卡片也一樣）；工坊**換第二層分頁時清掉所有選擇**（製作材料、合成、刻印、分解），另外每次重畫都會丟掉背包已經不夠的選擇，數量不會再出現負數；頁首的「刷怪打王」先拿掉（等有正式名字再放回；瀏覽器分頁標題 `<title>` 還是刷怪打王）。
 10. **頭像（使用者決定：不放進存檔，位置照我建議，先試戰報開頭也顯示）**：角色面板名字左邊的圓形頭像，點一下選本機圖片（`accept="image/*"`）；用 canvas 置中裁切、縮成 128×128 JPEG（約數 KB），存在 localStorage `tbtf-game-avatar`，不放進存檔、不上傳；已有頭像時點一下可以預覽、更換或移除；沒有頭像顯示名字第一個字。戰鬥彈窗開頭顯示頭像＋玩家名字＋敵人血量（重播的名字用紀錄快照，頭像用目前的）。用 headless Chrome 實際選檔測過（電腦與手機寬度）。
-11. **還沒做／已知限制**：**沒在真正的瀏覽器看過**（已用 headless Chrome 截圖檢查；實機未測）；手機版面；新手武器與王戰掉落是我的決定；戰鬥紀錄只留最近 20 場；舊的 `gems-ui.html` 仍在（測試用，沒有刪）。
+11. **換下裝備自動卸下寶石（使用者決定）**：`unequip` 與 `equip`（同部位換成另一件時，原本那件）會把寶石退回背包、連結清空；同一件再穿不會卸。舊存檔裡沒穿著卻還鑲著寶石的裝備，讀檔時 `releaseUnwornLinks` 一次退回並提示。
+12. **主動寶石擁有制（使用者選做法 1，存檔 v3）**：主動寶石拿到一次就永久擁有，背包數量只會是 1；鑲上去不扣背包，同一顆可以同時鑲在任意多件裝備上；穿戴中的裝備同一種主動寶石仍只能有一顆（編譯規則沒改）。換下裝備時連結照樣清空（使用者決定不留在裝備上），輔助寶石照舊一顆一顆算、會退回背包。`addGems`／Boss 獎勵拿到幾顆都記成 1；驗證：主動寶石數量 > 1、或裝備鑲著沒擁有的主動寶石都算不合法；`MIGRATIONS[2]`：v2 存檔裡背包有或鑲在任何裝備上的主動寶石都記成擁有 1。介面：寶石頁改成「已擁有的主動寶石」、選單不再顯示數量。
+13. **頭像讀不到的修正**：使用者手機上兩個瀏覽器都顯示「讀不到這張圖片」，但那張圖是一般 JPEG（798×798），在 Chrome 重現不了。最可能是開啟方式（例如在 App 裡開本機 HTML）擋掉 `blob:` 網址：改成先用 `createImageBitmap(file)`，不行再用 `FileReader` 轉 `data:` 網址，完全不用 `URL.createObjectURL`；錯誤訊息會帶檔案類型。用 headless Chrome（手機模擬）以使用者那張圖測過三條路：正常、沒有 createImageBitmap、沒有 createImageBitmap 也不能用 blob——都成功。實機仍待使用者確認。
+14. **已知限制**：只用電腦上的 headless Chrome 截圖檢查過，**手機實機沒測過**（長按看刻印數值、選頭像要使用者回報）；新手武器與王戰掉落（比照菁英 +1 刻印）是我的決定；戰鬥紀錄只留最近 20 場；舊的 `gems-ui.html` 仍在（測試用，沒有刪）；頁首標題「刷怪打王」先拿掉，`<title>` 還是刷怪打王。
 
 ## 4. 被否決或放棄的方案
 
@@ -424,30 +427,34 @@ node gem/game-build.js                                  # 正式遊戲介面
 
 ## 5. 尚未解決的問題
 
-**需要使用者決定或補充：**
-1. ~~玩家等級~~：已決定不做（3-D-1）。
-2. **爆擊強化連到法術**：目前連得上但沒有效果（有測試記錄這個行為）。要禁止連結（像汲取限非法術那樣），還是保留？
-3. **各主動技能有獨立爆擊率**：可行性已確認（尚未決定要不要做）。不動 `src/` 的做法：在技能開頭掛一個只撐這次施放的 STAT Buff；**加算**與現有規則相容（實測：角色 10% ＋ 技能 25% → 36.2%），**取代**也做得到（實測 25.5%）但會違反無序規則；限制是整招共用一個值、多段無法各自不同。要動 `src/` 的做法：`DAMAGE` 段加 `critBonus`，`Formulas.isCritical` 多收一個參數（約三行、不多擲骰）。
-4. **合成裝備的詞綴、飾品的被動、各部位的專用刻印**：使用者設計中；之後不足的由我協助設計。
-5. **刻印取得與合成**：掉落表（3-D-8）與裝備製作（3-D-9）已完成，數字佔位；刻印刻到裝備上也已完成（3-D-10）；製作詞綴已有第一條（3-E-5），**之後要加更多種類**；**清除重刻要不要做**；`origin: 'drop'` 之後是否改名為傳說；刻印之間的合成已完成（3-D-7）；各部位專用刻印（目前 8 種刻印對所有部位通用）；存檔裡 `scope: 'gems'` 詞綴的 `kind`。異常傷害／持續時間（製作詞綴）與命中／閃避（靈巧刻印）已完成。**詞綴表與接線已完成，見 3-D。**
-6. **難度 1～15 的縮放公式**：防禦減傷是 `300/(def+300)`，縮放過陡會讓曲線失控，要先算過。
-7. **怪物如何選招與新技能**：框架預設每個行動槽先抽 `skillCastRate`（35%），再從可用技能均等抽。怪物若用法術要有 `int`。
-8. **掉落表要用實際刷取速度驗證**（等合成裝備規則定了再模擬「湊滿一套要幾場」）；傳說裝備系統已完成（3-F），**之後要加更多傳說裝備（含其他部位）**；**王的額外獎勵、存檔最終位置**（目前暫定瀏覽器 localStorage，adapter 可換）。
-9. **輔助寶石是否也能改權重**，以及**主動寶石放進輔助槽時的編譯行為**（存檔層已留好 `SLOT_RULES`，編譯器端等設計）。
-10. 武器決定普攻屬性已完成（3-F-3）；**怪物的物理與法術數值怎麼配**（遊戲層設計）。
-11. **`damageFactor` 不含裝備**：UI 想顯示最終倍率要自己把裝備提高加進加算區；要不要把它併進編譯結果待定。裝備傷害提高目前只影響寶石技能、不影響普攻（普攻與武器如何決定吃 atk／int 屬於第 10 項）。
-12. **平衡數字還沒用真實怪物驗證**：5 倍目標是用「hp 與 atk 同比例放大的怪」量的；實際怪物的 SP、疲勞、技能組成會改變結果。第三階段做完掉落表、第四階段做怪物時要再跑一次 `affix-budget.js`。
-13. **版本與 tag**：`CHANGELOG.md` 有 1.0.57（`uncritable`）、1.0.58（穿甲比例）、1.0.59（對抗式命中）三條，依 `AGENTS.md` 流程 commit 後要各打 tag `v1.0.N`；目前都還沒打，也沒補 `examples/`。
+**等使用者設計或決定（遊戲內容）：**
+1. **Boss**：守門者是佔位（`bosses.js` 的 `placeholder: true`），使用者要自己設計、可能整個換掉；**首次擊敗的額外獎勵**未定（介面寫「勝利可以開啟新地圖（尚未實裝）」，機制 `rewards.unlockRegions` 已備好，地區標 `locked: true` 才需要解鎖）；Boss 平衡等設計定了再調（單隻 Boss 偏向單體技能，可讓 Boss 帶小怪平衡）。
+2. **地區**：目前廢都、地下水道兩區；之後會再加（第三區可能由打 Boss 解鎖）。
+3. **傳說裝備**：只有報喪法杖（武器），之後要加更多、含其他部位。
+4. **飾品欄位**：先不加，暫時用製作詞綴代替；構想是戰鬥中觸發的效果（3-F-8）。
+5. **製作詞綴**：目前三種（異常傷害增加、異常持續時間、行動回復 SP），之後要再加。
+6. **重複的輔助寶石**：其他用途還在考慮。
+7. **怪物的物理與法術數值怎麼配**（遊戲層設計）。
 
+**可選、還沒決定要不要做：**
+8. **各主動技能有獨立爆擊率**：可行性已確認。不動 `src/` 的做法：在技能開頭掛一個只撐這次施放的 STAT Buff；**加算**與現有規則相容（實測：角色 10% ＋ 技能 25% → 36.2%）。
+9. **連擊寶石**（單體技能額外釋放兩次、各 30% 傷害；無序規則下需重新設計，目前沒有「複製傷害段」的 op）、**觸發類寶石**（暴擊時施放；形式是施放者身上的被動 ＋ `trigger`）。
+10. **輔助寶石是否也能改權重**，以及**主動寶石放進輔助槽時的編譯行為**（存檔層已留好 `SLOT_RULES`，編譯器端等設計）。
+11. **`damageFactor` 不含裝備**：介面想顯示最終倍率要自己把裝備提高加進加算區；要不要併進編譯結果待定。裝備傷害提高目前只影響寶石技能、不影響普攻。
+
+**我這邊待處理：**
+12. **平衡重測**：改過數值後還沒重跑整體模擬（`--cast=0.35`、更多場數）；等 Boss 與更多內容定了，重跑難度曲線（`difficulty-check.js`）、刷取節奏（`grind-sim.js`）、預算（`affix-budget.js --craft`）。
+13. **版本與 tag**：`CHANGELOG.md` 有 1.0.57（`uncritable`）、1.0.58（穿甲比例）、1.0.59（對抗式命中），依 `AGENTS.md` 要各打 tag `v1.0.N`，目前都還沒打（使用者本機做），也沒補 `examples/`。
+14. **手機實機確認**：長按看刻印數值、選頭像（已改用 `createImageBitmap`／`FileReader`，見 3-H-13）。
+
+**已處理、留作紀錄：** 玩家等級不做（3-D-1）；爆擊強化禁止連法術（3-G-4）；清除刻印做了、代價是能量（3-F-6）；部位專用刻印（3-F-7）；難度縮放（3-G-1）；怪物選招與新技能依難度解鎖（3-G-2）；掉落表用刷取模擬驗證過（3-F-9、3-F-10）；武器決定普攻屬性（3-F-3）；手機版面與深色模式（3-H）；主動寶石擁有制（3-H-12）。
 
 **技術上已知的限制與風險：**
 - 權重或蓄力換招的那一槽，**隊友的 `ALLY_SKILL_SELECT` 被動不會被詢問**（引擎在換招時跳過它）。單角色戰鬥不受影響，做隊伍玩法時要回頭看。
-- 被動沒傳給 Entity（汲取、機率附加）、`loadout.resolver` 沒傳（蓄力與權重有守衛會報錯；其他無法偵測）、`applyStatBonuses` 沒套用，都會失效。
+- 被動沒傳給 Entity（汲取、機率附加）、`loadout.resolver` 沒傳（蓄力與權重有守衛會報錯；其他無法偵測）、`applyStatBonuses` 沒套用，都會失效（`game.buildHero` 已正確接好）。
 - 邊角情況（未處理）：蓄力標記被消耗後角色恐慌，釋放那次浪費；撒手鐧插隊與蓄力並存時同顆外殼重複放只有一次釋放；HP 起始就低於門檻時，撒手鐧在第一次 HP 變動時觸發。
-- **偶發測試失敗（未查明）**：2026-11-17 跑 `npm test` 時出現過 1 次 `# fail 1`，之後連跑 50 次以上都沒重現，沒抓到是哪一項。新增的 gem 測試都用固定種子；懷疑是某個依機率的既有測試。再出現時把完整輸出存下來（`npm test > /tmp/run.txt 2>&1`，看 `not ok`）。
-- 所有數值都是佔位；使用者改過數值後**還沒重跑平衡模擬**（需用 `--cast=0.35` 與更多場數）。
-- UI 只用 jsdom 驗證過，沒在真正的瀏覽器看過（手機寬度、深色模式未確認）；UI 目前沒有權重欄位。UI 是測試版，不要投入過多。
-- 尚未做、設計已保留：**連擊寶石**（單體技能額外釋放兩次、各 30% 傷害；無序規則下需重新設計，目前沒有「複製傷害段」的 op）、**觸發類寶石**（暴擊時施放；形式是施放者身上的被動 + `triggerCast`，被觸發的技能不扣 SP、傷害降低）。正式寶石也尚未使用 `proc` 與 `castCondition`。
+- **偶發測試失敗（未查明）**：2026-11-17 跑 `npm test` 時出現過 1 次 `# fail 1`，之後連跑 50 次以上都沒重現，沒抓到是哪一項。新增的 gem 測試都用固定種子；懷疑是某個依機率的既有測試。再出現時先記下是哪一項。
+- 戰鬥冷卻（10 秒）只在介面層，`game.runBattle` 本身沒有限制；匯出／匯入存檔不會繞過（冷卻不在存檔裡），但清掉瀏覽器資料可以。
 
 ## 6. 重要限制與偏好
 
@@ -468,7 +475,7 @@ node gem/game-build.js                                  # 正式遊戲介面
 - **先驗證再下結論**，用實際執行的結果說話；不確定的事要明說（沒在真瀏覽器看過就要講）。發現自己先前說錯要直接更正。
 - **重大決定先討論再實作**；使用者會明確說「請使用 A」或「先不要…」，不要擅自擴充範圍。
 - 設計偏好：資料驅動、不寫死寶石名稱、無順序（PoE 式）、玩家容易理解（加算與乘算分開描述）、新機制優先做成可選模組、核心保持乾淨。
-- 交付：使用者手動複製、提交（沙盒 push 不了，已實測）；檔案多時給 patch ＋「檔案 → 資料夾」對照表，使用者匯入後用 `git fetch` 逐檔核對；不要重貼已完成的檔案內容。使用者確認匯入無誤後，不必再讀匯出檔案。
+- 交付（2026-11-17 起的做法）：每次給**累積 zip**（`git diff --name-only origin/main HEAD` 的所有檔案，保留 `gem/` 路徑），先解到乾淨的 `git archive origin/main` 上跑 `npm test` 驗證；**另外單獨附一份 `game.html`**，使用者可以直接開來測。使用者說「已更新」後 `git fetch` 核對遠端與本機完全一致，再 `git reset --hard origin/main` 對齊。數值表放在 Sheets 成品「數值表（後台核對用）」，不放進網頁（`gem/data-sheet.js` 重新產生資料）。更早的做法：使用者手動複製、提交（沙盒 push 不了，已實測）；檔案多時給 patch ＋「檔案 → 資料夾」對照表，使用者匯入後用 `git fetch` 逐檔核對；不要重貼已完成的檔案內容。使用者確認匯入無誤後，不必再讀匯出檔案。
 
 ## 7. 框架的關鍵事實（實作時要記得）
 
@@ -485,10 +492,9 @@ node gem/game-build.js                                  # 正式遊戲介面
 
 ## 8. 新對話建議的第一步
 
-1. 完成第 0 節的 clone 與驗證，確認狀態。
-2. 讀 `gem/gems.js` 檔頭註解與 `AGENTS.md`；要碰存檔時再讀 `gem/saveLayer.js` 檔頭。
-3. 向使用者回報驗證結果，確認下一步（依第 3-B-8 節，是第三階段：**刻印 → 裝備 → 掉落表**）。詞綴表、裝備基底與編譯器／戰鬥接線已完成（3-D）；刻印合成（3-D-7）、掉落表（3-D-8）、裝備製作（3-D-9）、刻印刻到裝備（3-D-10）、傳說裝備與普攻屬性（3-F）也已完成；接下來照下面的「待辦順序」第 3 項開始。
-4. 若使用者想先處理小項目：爆擊強化連到法術要不要禁止（第 5 節 2）、各技能獨立爆擊率（第 5 節 3）、補打 tag（第 5 節 11）。
+1. 完成第 0 節的 clone 與驗證，確認狀態；`git log` 看最新是否已含主動寶石擁有制（存檔 v3）。
+2. 讀 `gem/gems.js` 檔頭註解與 `AGENTS.md`；要碰存檔時讀 `gem/saveLayer.js` 檔頭；要改介面讀 `gem/game.js` 與 `gem/game.template.html`（改完 `node gem/game-build.js`）。
+3. 向使用者回報驗證結果，問下一步。目前主線在等使用者設計 Boss、新地區與獎勵（第 5 節 1～7）；我這邊可做的是第 5 節 12～14。
 
 ## 9. 待辦順序（使用者核定的第一版，2026-11-16；「輪」≈ 一次決定＋實作＋交付）
 
@@ -507,7 +513,9 @@ node gem/game-build.js                                  # 正式遊戲介面
 10. ✅ 王的架構與佔位王（3-G-3）；**王的內容與額外獎勵等使用者設計**
 
 **第五階段：介面與平衡**
-11. 正式遊戲介面（進行中）：✅ 第一版（3-H，電腦版面）；手機版面、真瀏覽器檢查待做
+11. ✅ 正式遊戲介面（3-H）：冒險／戰鬥彈窗與回放／工坊／裝備／寶石、深色模式、手機版面、頭像、戰鬥冷卻；手機實機待使用者回報
 12. ✅ 整體平衡第一輪（3-G-4）：主動與輔助寶石、報喪法杖已調；佈局與撒手鐧不改、爆擊強化禁止連法術、水道群攻接受現狀。王的平衡等使用者設計王
 
-**隨時可插入（選做）**：爆擊強化連到法術要不要禁止；各技能獨立爆擊率；UI 最終倍率含裝備；輔助寶石改權重與主動寶石進輔助槽；連擊、觸發類寶石；補打 tag `v1.0.57`／`v1.0.58`／`v1.0.59`（使用者本機）；隊伍玩法的已知限制。
+**下一階段（等使用者）**：Boss 設計與首次擊敗獎勵 → 新地區 → 更多傳說裝備與製作詞綴 → 平衡重測。
+
+**隨時可插入（選做）**：各技能獨立爆擊率；介面最終倍率含裝備；輔助寶石改權重與主動寶石進輔助槽；連擊、觸發類寶石；補打 tag `v1.0.57`／`v1.0.58`／`v1.0.59`（使用者本機）；隊伍玩法的已知限制。

@@ -31,12 +31,11 @@ test('a win gives energy by the opened tier of the difficulty, without rolling',
 
 // ── 存檔 ──────────────────────────────────────────────────
 
-test('new saves start at 0 energy; v1 saves migrate to v2 with 0 energy; bad energy is rejected', () => {
-  assert.equal(save.SAVE_VERSION, 2);
+test('new saves start at 0 energy; v1 saves migrate up with 0 energy; bad energy is rejected', () => {
   assert.equal(fresh().energy, 0);
   const { energy, ...v1 } = { ...fresh(), version: 1 };
   const upgraded = save.importSave(JSON.stringify(v1));
-  assert.equal(upgraded.version, 2);
+  assert.equal(upgraded.version, save.SAVE_VERSION);
   assert.equal(upgraded.energy, 0);
   for (const bad of [-1, 501, 1.5, '3', undefined]) assert.ok(save.validateSave({ ...fresh(), energy: bad }).some(p => /energy/.test(p)), String(bad));
 });

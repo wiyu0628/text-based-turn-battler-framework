@@ -145,13 +145,13 @@ test('新增裝備：影響寶石的詞綴（scope gems）可以存', () => {
 
 // ── 寶石鑲嵌 ─────────────────────────────────────────────────
 
-test('鑲嵌：寶石從背包移到裝備，換連結時舊寶石退回背包', () => {
+test('鑲嵌：輔助寶石從背包移到裝備、主動寶石是擁有制不扣背包，換連結時舊的輔助寶石退回背包', () => {
   const { state, id } = stocked({ magicmissile: 1, whirlwind: 1, heavy: 1, critup: 1 });
   const first = setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy'] }]);
-  assert.deepEqual(first.gems, { whirlwind: 1, critup: 1 });
+  assert.deepEqual(first.gems, { magicmissile: 1, whirlwind: 1, critup: 1 });
   assert.deepEqual(first.equipment[0].links, [{ active: 'magicmissile', supports: ['heavy'] }]);
   const second = setLinks(first, id, [{ active: 'whirlwind', supports: ['critup'] }]);
-  assert.deepEqual(second.gems, { magicmissile: 1, heavy: 1 });
+  assert.deepEqual(second.gems, { magicmissile: 1, whirlwind: 1, heavy: 1 });
   assert.deepEqual(second.equipment[0].links, [{ active: 'whirlwind', supports: ['critup'] }]);
   assert.deepEqual(setLinks(second, id, []).gems, { magicmissile: 1, whirlwind: 1, heavy: 1, critup: 1 });
 });
@@ -160,7 +160,7 @@ test('鑲嵌：重設同樣的連結不會多扣寶石', () => {
   const { state, id } = stocked({ magicmissile: 1, heavy: 1 });
   const once = setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy'] }]);
   const again = setLinks(once, id, [{ active: 'magicmissile', supports: ['heavy'] }]);
-  assert.deepEqual(again.gems, {});
+  assert.deepEqual(again.gems, { magicmissile: 1 });
   assert.deepEqual(again.equipment[0].links, once.equipment[0].links);
 });
 
@@ -173,7 +173,7 @@ test('鑲嵌：背包的寶石不夠就失敗，原存檔完全不變', () => {
 });
 
 test('鑲嵌：寶石規則（互斥、輔助槽上限、組數上限、未知寶石、連結上寫權重）都會擋', () => {
-  const { state, id } = stocked({ magicmissile: 2, heavy: 2, lean: 1, amp: 1, wide: 1, pierce: 1 });
+  const { state, id } = stocked({ magicmissile: 1, heavy: 2, lean: 1, amp: 1, wide: 1, pierce: 1 });
   assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'lean'] }]), /互斥/);
   assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp', 'wide', 'pierce'] }]), /輔助槽上限/);
   assert.throws(() => setLinks(state, id, [{ active: 'magicmissile' }, { active: 'whirlwind' }]), /最多 1 組/);
@@ -218,7 +218,7 @@ test('驗證：存檔裡連結上寫了 weight（舊格式）會被指出', () =
 test('連結規則：驗證與鑲嵌都透過 SLOT_RULES 詢問，改規則就能放寬（之後主動寶石進輔助槽用）', () => {
   const original = { ...SLOT_RULES };
   try {
-    const { state, id } = stocked({ magicmissile: 2, heavy: 1, amp: 1, wide: 1 });
+    const { state, id } = stocked({ magicmissile: 1, heavy: 1, amp: 1, wide: 1 });
     // 輔助槽縮成 2 格
     SLOT_RULES.supportSlotCount = () => 2;
     assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp', 'wide'] }]), /輔助槽上限 2/);

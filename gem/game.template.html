@@ -318,25 +318,44 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   function pickAvatar() {
     const input = $('avatar-input');
     input.value = '';
-    input.onchange = () => {
+    input.onchange = async () => {
       const file = input.files[0];
       if (!file) return;
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        const side = Math.min(img.naturalWidth, img.naturalHeight);
+      try {
+        const source = await decodeImage(file);
+        const w = source.naturalWidth ?? source.width, hgt = source.naturalHeight ?? source.height;
+        const side = Math.min(w, hgt);
         const canvas = document.createElement('canvas');
         canvas.width = canvas.height = AVATAR_SIZE;
-        canvas.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
-        URL.revokeObjectURL(url);
+        canvas.getContext('2d').drawImage(source, (w - side) / 2, (hgt - side) / 2, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+        if (source.close) source.close();
         setAvatar(canvas.toDataURL('image/jpeg', 0.85));
         $('info-modal').classList.remove('open');
         toast('頭像已更新');
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); toast('讀不到這張圖片（格式不支援？）', true); };
-      img.src = url;
+      } catch (error) {
+        toast(`讀不到這張圖片（${file.type || '未知格式'}）`, true);
+      }
     };
     input.click();
+  }
+  // 解碼圖片：先用 createImageBitmap（不需要網址），不行再用 FileReader 轉成 data: 網址。
+  // 不用 URL.createObjectURL：有些環境（例如在 App 裡開啟的本機 HTML）擋掉 blob: 網址，圖片會讀不到。
+  async function decodeImage(file) {
+    if (window.createImageBitmap) {
+      try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) { /* 改用下面的方法 */ }
+    }
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('decode'));
+      img.src = dataUrl;
+    });
   }
   function openAvatarMenu() {
     if (!avatar) return pickAvatar();
@@ -825,8 +844,11 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
           ? h('button', { class: 'small danger', disabled: !item.materials, title: item.materials ? null : '只有用刻印製作的裝備能分解',
             text: item.materials ? `分解（退回 ${craft.SALVAGE_RETURN} 個刻印）` : '不能分解',
             onclick: async () => { if (await ask(`分解 ${itemName(item)}？會隨機退回 ${craft.SALVAGE_RETURN} 個當初投入的刻印，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => '退回：' + v.returned.map(engravingLabel).join('、')); } })
-          : worn ? h('button', { class: 'small', text: '脫下', onclick: () => apply(s => S.unequip(s, item.slot)) })
-            : h('button', { class: 'small primary', text: '穿上', onclick: () => apply(s => S.equip(s, item.id)) })));
+          : worn ? h('button', { class: 'small', text: '脫下', onclick: () => apply(s => S.unequip(s, item.slot), item.links?.length ? '已脫下，寶石退回背包' : null) })
+            : h('button', { class: 'small primary', text: '穿上', onclick: () => {
+              const old = state.equipment.find(x => x.id === state.equipped[item.slot]);
+              apply(s => S.equip(s, item.id), old?.links?.length ? `已換上，${itemName(old)}的寶石退回背包` : null);
+            } })));
   }
   function renderEquipment() {
     const bySlot = slot => state.equipment.filter(item => item.slot === slot).sort((a, b) => (state.equipped[slot] === b.id) - (state.equipped[slot] === a.id));
@@ -847,7 +869,8 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     const link = (item.links || [])[0] || { active: null, supports: [] };
     const draft = ui[`link_${slot}`] && ui[`link_${slot}`].itemId === id ? ui[`link_${slot}`] : { itemId: id, active: link.active, supports: [...(link.supports || [])] };
     ui[`link_${slot}`] = draft;
-    const has = gemId => (state.gems[gemId] ?? 0) + ((link.active === gemId ? 1 : 0) + (link.supports || []).filter(g => g === gemId).length);
+    // 主動寶石擁有制：有就能選；輔助寶石算背包＋這件已鑲的
+    const has = gemId => G.ACTIVE_GEMS[gemId] ? (state.gems[gemId] ?? 0) : (state.gems[gemId] ?? 0) + (link.supports || []).filter(g => g === gemId).length;
     const activeOptions = Object.keys(G.ACTIVE_GEMS).filter(g => has(g) > 0);
     const supportOptions = Object.keys(G.SUPPORT_GEMS).filter(g => has(g) > 0);
     const granted = legendary.mechanicsOf(item).filter(m => m.type === 'grantSupport').map(m => gemName(m.gem));
@@ -855,7 +878,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
       h('h3', {}, SLOT_NAMES[slot], h('span', { class: 'muted', style: 'font-weight:normal', text: `　${itemName(item)}　權重 ${item.castWeight}` })),
       h('div', { class: 'stack' },
         h('label', {}, '主動寶石', h('select', { onchange: ev => { draft.active = ev.target.value || null; if (!draft.active) draft.supports = []; } },
-          h('option', { value: '', text: '（不放）' }), activeOptions.map(g => h('option', { value: g, selected: g === draft.active, text: `${gemName(g)}（有 ${has(g)}）` })))),
+          h('option', { value: '', text: '（不放）' }), activeOptions.map(g => h('option', { value: g, selected: g === draft.active, text: gemName(g) })))),
         Array.from({ length: G.MAX_SUPPORTS }, (_, i) => h('label', {}, `輔助 ${i + 1}`, h('select', { onchange: ev => { draft.supports[i] = ev.target.value || null; } },
           h('option', { value: '', text: '（不放）' }), supportOptions.map(g => h('option', { value: g, selected: g === draft.supports[i], text: `${gemName(g)}（有 ${has(g)}）` }))))),
         granted.length ? h('div', { class: 'muted', style: 'font-size:12px', text: `裝備額外給：${granted.join('、')}（不佔位）` }) : null,
@@ -885,7 +908,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     const supports = owned.filter(([id]) => G.SUPPORT_GEMS[id]);
     return [h('div', { class: 'grid4' }, Object.keys(SLOT_NAMES).map(linkEditor)),
       h('div', { class: 'grid2' },
-        h('div', { class: 'panel' }, h('h2', { text: '背包：主動寶石' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有（鑲在裝備上的不算）' })),
+        h('div', { class: 'panel' }, h('h2', { text: '已擁有的主動寶石' }), h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: '擁有一次就能鑲在任意多件裝備上；穿在身上的裝備裡同一種只能有一顆。' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id]) => h('li', {}, h('strong', { text: gemName(id) }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有' })),
         h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), h('div', { class: 'muted', style: 'font-size:12px', text: compiler.describeSupport(G.SUPPORT_GEMS[id]).lines.map(l => l.text).join('；') })))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' })))];
   }
 
@@ -942,6 +965,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     loadHistory();
     try { state = await store.load(); } catch (error) { toast('讀檔失敗：' + error.message + '（沒有覆蓋舊存檔）', true); }
     if (!state) state = await store.save(game.createNewGame());
+    else { const tidy = S.releaseUnwornLinks(state); if (tidy !== state) { state = await store.save(tidy); toast('沒穿著的裝備上的寶石已退回背包'); } }
     render();
     window.GameUI = { get state() { return state; }, forceState: next => { state = next; render(); }, render, startBattle, openRecord, closeBattle, setTab: t => { tab = t; render(); }, ui };
   })();
