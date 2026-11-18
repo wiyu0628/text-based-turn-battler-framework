@@ -110,7 +110,8 @@
   .gem-list li { margin-bottom: 4px; }
 
   .modal-back { position: fixed; inset: 0; background: var(--backdrop); display: none; align-items: center; justify-content: center; z-index: 20; }
-  #ask-modal, #info-modal { z-index: 25; }
+  #info-modal { z-index: 25; }
+  #ask-modal { z-index: 30; }   /* 確認框要蓋在資料框（例如匯入存檔）上面 */
   .modal-back.open { display: flex; }
   .modal { background: var(--panel); border-radius: 12px; width: min(820px, 94vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px var(--shadow); }
   .modal header { position: static; border-radius: 12px 12px 0 0; }
@@ -146,6 +147,7 @@
   .stepper strong { font-size: 20px; min-width: 2ch; text-align: center; font-variant-numeric: tabular-nums; }
   .stepper button { width: 36px; font-size: 16px; padding: 3px 0; }
   .modal.small { width: min(420px, 92vw); }
+  .export-text { width: 100%; box-sizing: border-box; font-family: ui-monospace, Menlo, monospace; font-size: 12px; resize: vertical; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); color: var(--ink); }
   .name-row { display: flex; gap: 6px; margin-bottom: 10px; }
   .name-row { align-items: center; }
   .name-row input { flex: 1; min-width: 0; font-weight: 600; }
@@ -7088,6 +7090,27 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  // 匯出：跳出文字框（複製／下載）。Artifact 的頁框會擋下載，複製一定能用；本機開也一樣能用，格式兩邊互通。
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* 改用選取複製 */ }
+    try {
+      const ta = h('textarea', { style: 'position:fixed;opacity:0;top:0;left:0' });
+      ta.value = text; document.body.append(ta); ta.select();
+      const ok = document.execCommand('copy'); ta.remove(); return ok;
+    } catch (e) { return false; }
+  }
+  function showText(title, text, { filename = null, type = 'text/plain', hint = '' } = {}) {
+    const area = h('textarea', { class: 'export-text', readonly: true, rows: 8 });
+    area.value = text;
+    area.addEventListener('focus', () => area.select());
+    showInfo(title, [
+      hint ? h('p', { class: 'muted', style: 'margin:0 0 6px;font-size:12px', text: hint }) : null,
+      area,
+      h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' },
+        h('button', { class: 'primary', text: '複製', onclick: async () => { const ok = await copyText(text); toast(ok ? '已複製' : '無法自動複製，請長按文字框全選後複製', !ok); } }),
+        filename ? h('button', { text: '下載檔案', onclick: () => { try { download(filename, text, type); } catch (e) { toast('這個環境不能下載，請用複製', true); } } }) : null)
+    ].filter(Boolean));
+  }
   const pct = x => `${Math.round(x * 1000) / 10}%`;
   // 確認框：不用瀏覽器的 confirm()（有些環境會擋掉，按了沒反應）
   function ask(message, yes = '確定') {
@@ -7201,7 +7224,13 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   const STORAGE_KEY = 'tbtf-game-save';
   const HISTORY_KEY = 'tbtf-game-history';
   const HISTORY_MAX = 20;
-  const store = S.createSaveStore(S.createLocalStorageAdapter(window.localStorage, STORAGE_KEY));
+  // 瀏覽器儲存不能用（有些頁框會擋）就改存在記憶體：能玩，但關掉頁面就沒了，所以提醒玩家匯出存檔
+  let storageOk = true;
+  function pickAdapter() {
+    try { const ls = window.localStorage; ls.setItem('tbtf-game-probe', '1'); ls.removeItem('tbtf-game-probe'); return S.createLocalStorageAdapter(ls, STORAGE_KEY); }
+    catch (e) { storageOk = false; return S.createMemoryAdapter(); }
+  }
+  const store = S.createSaveStore(pickAdapter());
   let state = null;
   let tab = 'adventure';
   let history = [];
@@ -7282,14 +7311,14 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
         battleButton(b.available ? '挑戰' : '尚未開放', { kind: 'boss', id: b.id }, { disabled: !b.available })))));
     const historyPanel = h('div', { class: 'panel' }, h('h2', { text: '戰鬥紀錄' }),
       h('div', { class: 'row', style: 'margin-bottom:8px' },
-        h('button', { class: 'small', text: '匯入紀錄檔重播', onclick: () => pickFile(text => openRecord(JSON.parse(text))) }),
-        h('input', { id: 'record-code', placeholder: '貼上紀錄碼', style: 'flex:1;min-width:160px' }),
-        h('button', { class: 'small', text: '用紀錄碼重播', onclick: () => { try { openRecord(decodeRecord($('record-code').value.trim())); } catch (e) { toast('紀錄碼不正確', true); } } })),
+        h('button', { class: 'small', text: '匯入紀錄檔重播', onclick: () => pickFile(text => openRecord(parseRecord(text))) }),
+        h('input', { id: 'record-code', placeholder: '貼上紀錄碼或紀錄內容', style: 'flex:1;min-width:160px' }),
+        h('button', { class: 'small', text: '用紀錄碼重播', onclick: () => { try { openRecord(parseRecord($('record-code').value)); } catch (e) { toast('紀錄碼不正確', true); } } })),
       history.length ? h('div', { class: 'stack' }, history.map((entry, i) => h('div', { class: 'boss' },
         h('div', {}, h('strong', { text: entry.title }), h('span', { class: entry.victory ? '' : 'muted', text: `　${entry.victory ? '勝利' : '敗北'}　${entry.turns} 回合` }),
           h('div', { class: 'muted', style: 'font-size:12px', text: `${new Date(entry.record.at).toLocaleString()}　種子 ${entry.record.seed}` })),
         h('div', { class: 'row' }, h('button', { class: 'small', text: '重播', onclick: () => openRecord(entry.record, entry.title) }),
-          h('button', { class: 'small', text: '下載紀錄', onclick: () => download(`battle-${entry.record.seed}.json`, JSON.stringify(entry.record), 'application/json') }))))) : h('div', { class: 'muted', text: '還沒有紀錄' }));
+          h('button', { class: 'small', text: '匯出紀錄', onclick: () => showRecord(entry.record) }))))) : h('div', { class: 'muted', text: '還沒有紀錄' }));
     return [diffPanel, h('div', { class: 'grid2' }, regionCards), bossPanel, historyPanel];
   }
 
@@ -7350,6 +7379,14 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     let replay;
     try { replay = game.replayBattle(record); } catch (error) { toast('無法重播：' + error.message, true); return; }
     showBattle((title || targetTitle(record.target)) + '（重播）', { ...replay, record }, { live: false });
+  }
+  // 紀錄：紀錄碼（base64）或 JSON 都能匯入，本機版與 Artifact 版互通
+  function parseRecord(text) {
+    const t = String(text).trim();
+    return t.startsWith('{') ? JSON.parse(t) : decodeRecord(t);
+  }
+  function showRecord(record) {
+    showText('戰鬥紀錄碼', encodeRecord(record), { filename: `battle-${record.seed}.json`, hint: '在冒險頁的「貼上紀錄碼」貼上即可重播；本機開的 game.html 與 Artifact 版都能用。' });
   }
   function encodeRecord(record) { return btoa(unescape(encodeURIComponent(JSON.stringify(record)))); }
   function decodeRecord(code) { return JSON.parse(decodeURIComponent(escape(atob(code)))); }
@@ -7448,12 +7485,9 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     } else {
       const text = () => game.battleText(p.result.logs, `${p.title}　種子 ${p.result.record.seed}`, p.result.summary);
       buttons.push(h('button', { class: 'small', text: '重播', onclick: () => openRecord(p.result.record, p.title.replace('（重播）', '')) }));
-      buttons.push(h('button', { class: 'small', text: '下載戰報', onclick: () => download(`battle-${p.result.record.seed}.txt`, text()) }));
-      buttons.push(h('button', { class: 'small', text: '下載紀錄', onclick: () => download(`battle-${p.result.record.seed}.json`, JSON.stringify(p.result.record), 'application/json') }));
-      buttons.push(h('button', { class: 'small', text: '複製紀錄碼', onclick: async () => {
-        const code = encodeRecord(p.result.record);
-        try { await navigator.clipboard.writeText(code); toast('紀錄碼已複製'); } catch (e) { download(`battle-${p.result.record.seed}.code.txt`, code); toast('無法複製，已改成下載'); }
-      } }));
+      buttons.push(h('button', { class: 'small', text: '匯出戰報', onclick: () => showText('戰報', text(), { filename: `battle-${p.result.record.seed}.txt` }) }));
+      buttons.push(h('button', { class: 'small', text: '匯出紀錄', onclick: () => showRecord(p.result.record) }));
+      buttons.push(h('button', { class: 'small', text: '複製紀錄碼', onclick: async () => { const ok = await copyText(encodeRecord(p.result.record)); if (ok) toast('紀錄碼已複製'); else showRecord(p.result.record); } }));
       if (p.live) buttons.push(battleButton('再打一場', p.result.record.target));
     }
     buttons.push(h('button', { text: '關閉', onclick: closeBattle }));
@@ -7732,14 +7766,29 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   }
 
   document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => { tab = b.dataset.tab; render(); }));
-  $('export-save').addEventListener('click', () => download(`save-${new Date().toISOString().slice(0, 10)}.json`, S.exportSave(state), 'application/json'));
-  $('import-save').addEventListener('click', () => pickFile(async text => {
-    const next = S.importSave(text);
+  // 存檔匯出／匯入：文字（JSON）與檔案兩種方式，本機版與 Artifact 版互通（同一個格式；頭像、戰鬥紀錄、主題不在存檔裡）
+  $('export-save').addEventListener('click', () => showText('匯出存檔', S.exportSave(state), {
+    filename: `save-${new Date().toISOString().slice(0, 10)}.json`, type: 'application/json',
+    hint: '複製這段文字，到另一邊（本機 game.html 或 Artifact 版）按「匯入存檔」貼上。也可以下載成檔案（Artifact 裡不能下載）。' }));
+  async function importSaveText(text) {
+    let next;
+    try { next = S.importSave(String(text).trim()); } catch (e) { toast('存檔內容不正確：' + e.message, true); return; }
     if (!(await ask('匯入會取代目前的存檔，確定？', '匯入'))) return;
     state = await store.save(next);
+    $('info-modal').classList.remove('open');
     toast('已匯入存檔');
     render();
-  }));
+  }
+  $('import-save').addEventListener('click', () => {
+    const area = h('textarea', { class: 'export-text', rows: 8, placeholder: '貼上匯出的存檔文字' });
+    showInfo('匯入存檔', [
+      h('p', { class: 'muted', style: 'margin:0 0 6px;font-size:12px', text: '貼上存檔文字，或選擇存檔檔案（.json）。匯入會取代目前的存檔。' }),
+      area,
+      h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' },
+        h('button', { text: '選擇檔案', onclick: () => pickFile(text => importSaveText(text)) }),
+        h('button', { class: 'primary', text: '匯入', onclick: () => { if (area.value.trim()) importSaveText(area.value); else toast('請先貼上存檔文字', true); } }))
+    ]);
+  });
   $('reset-save').addEventListener('click', async () => {
     if (!(await ask('重新開始會清掉目前的存檔（戰鬥紀錄保留）。建議先匯出存檔。確定？', '重新開始'))) return;
     state = await store.save(game.createNewGame());
@@ -7768,6 +7817,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     loadHistory();
     try { state = await store.load(); } catch (error) { toast('讀檔失敗：' + error.message + '（沒有覆蓋舊存檔）', true); }
     if (!state) state = await store.save(game.createNewGame());
+    if (!storageOk) setTimeout(() => toast('這裡不能使用瀏覽器儲存，關掉頁面存檔就會消失；請記得匯出存檔', true), 600);
     else { const tidy = S.releaseUnwornLinks(state); if (tidy !== state) { state = await store.save(tidy); toast('沒穿著的裝備上的寶石已退回背包'); } }
     render();
     window.GameUI = { get state() { return state; }, forceState: next => { state = next; render(); }, render, startBattle, openRecord, closeBattle, setTab: t => { tab = t; render(); }, ui };
