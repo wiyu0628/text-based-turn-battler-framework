@@ -99,7 +99,7 @@ test('equipment ailment duration adds slots to bleed but not to the lingering bl
 });
 
 test('rend links with physical supports and rejects spell-only ones; charge release keeps the bleed', () => {
-  for (const support of ['heavy', 'amp', 'wide', 'pierce', 'leech', 'critup', 'layout', 'trump']) assert.doesNotThrow(() => compileSkill('rend', [support]), support);
+  for (const support of ['heavy', 'amp', 'pierce', 'leech', 'critup', 'layout', 'trump']) assert.doesNotThrow(() => compileSkill('rend', [support]), support);
   assert.throws(() => compileSkill('rend', ['shock']), /spell/);
   const charged = compileSkill('rend', ['charge']);
   assert.ok(damageAction(charged).gemAilments);

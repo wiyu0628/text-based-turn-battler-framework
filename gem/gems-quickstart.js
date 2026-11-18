@@ -1,6 +1,6 @@
 // 寶石版快速開始：與 quickstart.js 完全相同，只有「new Skill 的部分」改成由寶石編譯。
 // 執行：node gem/gems-quickstart.js                     （預設：魔法飛彈 連結 強力 + 感電）
-//       node gem/gems-quickstart.js wide lean           （自訂輔助寶石，預設主動寶石是魔法飛彈）
+//       node gem/gems-quickstart.js pierce lean        （自訂輔助寶石，預設主動寶石是魔法飛彈）
 //       node gem/gems-quickstart.js whirlwind leech     （第一個參數若是主動寶石 id，就改用它）
 const { Entity, Skill, BattleEngine } = require('../src'); // 你的專案裡寫 require('text-based-turn-battler-framework')
 const { compileLoadout, GemLinkError } = require('./gemCompiler');

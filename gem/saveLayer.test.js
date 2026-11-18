@@ -173,9 +173,9 @@ test('鑲嵌：背包的寶石不夠就失敗，原存檔完全不變', () => {
 });
 
 test('鑲嵌：寶石規則（互斥、輔助槽上限、組數上限、未知寶石、連結上寫權重）都會擋', () => {
-  const { state, id } = stocked({ magicmissile: 1, heavy: 2, lean: 1, amp: 1, wide: 1, pierce: 1 });
+  const { state, id } = stocked({ magicmissile: 1, heavy: 2, lean: 1, amp: 1, charge: 1, pierce: 1 });
   assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'lean'] }]), /互斥/);
-  assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp', 'wide', 'pierce'] }]), /輔助槽上限/);
+  assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp', 'charge', 'pierce'] }]), /輔助槽上限/);
   assert.throws(() => setLinks(state, id, [{ active: 'magicmissile' }, { active: 'whirlwind' }]), /最多 1 組/);
   assert.throws(() => setLinks(state, id, [{ active: 'nope' }]), /nope/);
   assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['nope'] }]), /nope/);
@@ -218,10 +218,10 @@ test('驗證：存檔裡連結上寫了 weight（舊格式）會被指出', () =
 test('連結規則：驗證與鑲嵌都透過 SLOT_RULES 詢問，改規則就能放寬（之後主動寶石進輔助槽用）', () => {
   const original = { ...SLOT_RULES };
   try {
-    const { state, id } = stocked({ magicmissile: 1, heavy: 1, amp: 1, wide: 1 });
+    const { state, id } = stocked({ magicmissile: 1, heavy: 1, amp: 1, pierce: 1 });
     // 輔助槽縮成 2 格
     SLOT_RULES.supportSlotCount = () => 2;
-    assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp', 'wide'] }]), /輔助槽上限 2/);
+    assert.throws(() => setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp', 'pierce'] }]), /輔助槽上限 2/);
     assert.ok(setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp'] }]));
     SLOT_RULES.supportSlotCount = original.supportSlotCount;
     // 某顆寶石不准放進輔助槽
@@ -403,6 +403,26 @@ test('遷移：缺升級函式、或升級函式沒把 version 加一，都報�
   const v = SAVE_VERSION;
   assert.throws(() => migrateSave(fresh(), {}, v + 1), new RegExp(`找不到從存檔版本 ${v}`));
   assert.throws(() => migrateSave(fresh(), { [v]: old => ({ ...old }) }, v + 1), new RegExp(`沒有把 version 設成 ${v + 1}`));
+});
+
+test('遷移 v3 → v4：背包與裝備上的擴散（wide）都刪掉，其他寶石與連結不變', () => {
+  const { state, id } = stocked({ magicmissile: 1, heavy: 1, amp: 1 });
+  const linked = equip(setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy', 'amp'] }]), id);
+  // 擴散已經不是正式寶石，只能手動做出 v3 存檔：背包 2 顆、裝備上 1 顆
+  const v3 = structuredClone(linked);
+  v3.version = 3;
+  v3.gems.wide = 2;
+  v3.equipment[0].links[0].supports = ['heavy', 'wide', 'amp'];
+  deepFreeze(v3);
+  const upgraded = importSave(JSON.stringify(v3));
+  assert.equal(upgraded.version, SAVE_VERSION);
+  assert.equal(upgraded.gems.wide, undefined);
+  assert.deepEqual(upgraded.gems, linked.gems);
+  assert.deepEqual(upgraded.equipment[0].links, [{ active: 'magicmissile', supports: ['heavy', 'amp'] }]);
+  assert.equal(upgraded.equipped.weapon, id);
+  assert.equal(v3.gems.wide, 2);                       // 不改傳入的物件
+  // 沒有擴散的 v3 存檔：只有版本號變
+  assert.deepEqual(migrateSave({ ...linked, version: 3 }), linked);
 });
 
 // ── 匯出與匯入 ───────────────────────────────────────────────

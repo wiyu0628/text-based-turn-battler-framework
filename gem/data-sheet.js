@@ -52,7 +52,7 @@ add('難度', '難度縮放與掉落', '怪物 HP／攻擊／智力 × 倍率；
 add('地區', '地區', `每場隻數在範圍內；稀有怪 ${pct(M.RARE_CHANCE)}、沒出稀有時菁英 ${pct(M.ELITE_CHANCE)}（各最多一隻、不同時出現），其餘依預算補普通怪。`,
   ['地區 id', '名稱', '每場隻數', '強度預算', '怪物（依出現難度）'],
   Object.values(M.REGIONS).map(r => [r.id, r.name, `${r.count[0]}～${r.count[1]}`, r.budget,
-    r.monsters.map(id => `${M.MONSTERS[id].name}（難度 ${M.MONSTERS[id].from}～）`).join('、')]));
+    r.monsters.map(id => `${M.MONSTERS[id].name}（難度 ${M.MONSTERS[id].from}～${M.MONSTERS[id].maxPerEncounter ? `，每場最多 ${M.MONSTERS[id].maxPerEncounter} 隻` : ''}）`).join('、')]));
 
 // ── 怪物 ──
 const rarity = def => def.rarity === 'rare' ? '稀有' : def.rarity === 'elite' ? '菁英' : '普通';

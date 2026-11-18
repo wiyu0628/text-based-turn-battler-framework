@@ -21,6 +21,7 @@
  *   shield  { target: 'allySingle'|'allyAll', ratio, duration, name }               護盾 = 施放者最大生命 × ratio
  *   heal    { target: 'allySingle'|'allyAll'|'self', power }                         回復 = 施放者能力值 × power
  *   共通：id、name、from（從第幾難度開始會用）、spCost。法術怪（spell: true）的傷害吃 int、不可暴擊、不可反擊。
+ *   maxPerEncounter（選填，普通怪）：同一場最多出現幾隻；沒寫就不限。
  *   特性 traits：split（血量第一次低於一半時分裂）、ambush（第一個行動槽攻擊力 × mult）、enrage（血量第一次低於 at 時某屬性 × mult 到戰鬥結束，王用）。
  */
 
@@ -53,7 +54,8 @@ const MONSTERS = {
     ]
   },
   doll: {
-    id: 'doll', name: '修繕人偶', from: 3, cost: 0.3, spell: true, skillCastRate: 0.5,
+    // 一場最多 1 隻（使用者決定，2026-11-19）：兩隻會互相補到 40 回合平手
+    id: 'doll', name: '修繕人偶', from: 3, cost: 0.3, spell: true, skillCastRate: 0.5, maxPerEncounter: 1,
     stats: { hp: 0.35, atk: 0, int: 0.4, def: 40, spd: 100 },
     skills: [
       { kind: 'heal', id: 'mend_ally', name: '修補', from: 3, spCost: 10, target: 'allySingle', power: 3 },
@@ -272,7 +274,9 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   const spent = () => picks.reduce((sum, def) => sum + def.cost, 0);
   const cheapest = normals.reduce((a, b) => (a.cost <= b.cost ? a : b));
   while (picks.length < max) {
-    const affordable = normals.filter(def => def.cost <= region.budget - spent() + 1e-9);
+    // maxPerEncounter（選填）：同一場最多幾隻；沒寫就不限，亂數序列與之前相同
+    const affordable = normals.filter(def => def.cost <= region.budget - spent() + 1e-9
+      && (def.maxPerEncounter == null || picks.filter(p => p === def).length < def.maxPerEncounter));
     if (!affordable.length) break;
     picks.push(affordable[Math.min(affordable.length - 1, Math.floor(rng() * affordable.length))]);
   }

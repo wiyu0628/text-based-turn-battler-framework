@@ -128,10 +128,10 @@ function simulate(difficulty = 15, runs = 300) {
     out.rows.push([scenario.name, stats(list), list]);
   }
   const gems = Object.keys(SUPPORT_GEMS);
-  const distinct12 = Object.fromEntries(gems.map(g => [g, 1]));
-  const fourLinks = { amp: 4, heavy: 4, wide: 4 };
-  out.rows.push(['輔助寶石：12 種各 1 顆', stats(Array.from({ length: runs }, (_, i) => runGems(difficulty, distinct12, 5000 + i)))]);
-  out.rows.push(['輔助寶石：4 組連結都用增幅＋強力＋擴散（各 4 顆）', stats(Array.from({ length: runs }, (_, i) => runGems(difficulty, fourLinks, 9000 + i)))]);
+  const distinctAll = Object.fromEntries(gems.map(g => [g, 1]));
+  const fourLinks = { amp: 4, heavy: 4, pierce: 4 };
+  out.rows.push([`輔助寶石：${gems.length} 種各 1 顆`, stats(Array.from({ length: runs }, (_, i) => runGems(difficulty, distinctAll, 5000 + i)))]);
+  out.rows.push(['輔助寶石：4 組連結都用增幅＋強力＋穿甲（各 4 顆）', stats(Array.from({ length: runs }, (_, i) => runGems(difficulty, fourLinks, 9000 + i)))]);
   return out;
 }
 

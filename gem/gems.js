@@ -1,7 +1,10 @@
 'use strict';
 
 /**
- * 技能串接寶石資料 v12（5 顆主動寶石 + 12 顆輔助寶石 + 互斥組 + 連結上限）
+ * 技能串接寶石資料 v13（5 顆主動寶石 + 11 顆輔助寶石 + 互斥組 + 連結上限）
+ *
+ * v13（2026-11-18）：移除擴散 wide（使用者決定）。存檔 v3 → v4 的遷移會刪掉背包與裝備上的擴散（saveLayer.js MIGRATIONS[3]）。
+ * 移除寶石時一定要同時寫存檔遷移：讀檔遇到不認得的寶石會報錯、不會自動丟掉。
  *
  * 純資料、不含函式，可直接 JSON 序列化。
  * 這份檔案只定義「寶石是什麼」；怎麼編譯成 Skill 見 gemCompiler.js。
@@ -309,21 +312,6 @@ const SUPPORT_GEMS = {
     addTags: [],
     effects: [
       { op: 'inc', value: 0.2 },
-    ]
-  },
-
-  // 擴散：單體傷害變全體，單目標傷害乘算下降。已是 aoe 的技能不能連結。
-  wide: {
-    id: 'wide',
-    name: '擴散',
-    requires: {
-      action: { type: 'DAMAGE', targetType: 'ENEMY_SINGLE' },
-      tags: { none: ['aoe'] }
-    },
-    addTags: ['aoe'],
-    effects: [
-      { op: 'scope', from: 'ENEMY_SINGLE', to: 'ENEMY_ALL' },
-      { op: 'more', value: -0.4 }
     ]
   },
 

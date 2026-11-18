@@ -38,6 +38,11 @@ const stackGems = {
   more2: mkGem('more2', [{ op: 'more', value: 0.2 }])
 };
 const compileWith = (links, supportGems, extra = {}) => compileSkill('magicmissile', links, { supportGems, ...extra });
+// 擴散（2026-11-18 從正式寶石移除）：留在測試裡當 scope 與 addTags 的範例，定義與移除前相同
+const spread = mkGem('spread', [{ op: 'scope', from: 'ENEMY_SINGLE', to: 'ENEMY_ALL' }, { op: 'more', value: -0.4 }], {
+  name: '擴散', requires: { action: { type: 'DAMAGE', targetType: 'ENEMY_SINGLE' }, tags: { none: ['aoe'] } }, addTags: ['aoe']
+});
+const withSpread = { ...SUPPORT_GEMS, spread };
 const powerOf = result => result.skill.actions[0].power;
 // 加算與乘算的算術測試要同時疊 4 顆小寶石，這跟連結上限無關，所以明確放寬到 4。
 const STACK_OPTIONS = { maxSupports: 4 };
@@ -68,10 +73,10 @@ test('數值結算：乘算相乘、cost 相乘後進位、SP 只寫在第一段
 });
 
 test('編譯不會改到寶石定義本身', () => {
-  const before = JSON.stringify([ACTIVE_GEMS, SUPPORT_GEMS, GROUPS]);
-  compileSkill('magicmissile', ['wide', 'pierce']);
+  const before = JSON.stringify([ACTIVE_GEMS, SUPPORT_GEMS, GROUPS, spread]);
+  compileWith(['spread', 'pierce'], withSpread);
   compileSkill('whirlwind', ['heavy', 'amp']);
-  assert.equal(JSON.stringify([ACTIVE_GEMS, SUPPORT_GEMS, GROUPS]), before);
+  assert.equal(JSON.stringify([ACTIVE_GEMS, SUPPORT_GEMS, GROUPS, spread]), before);
 });
 
 // ── 加算（inc）與乘算（more）──────────────────────────────────
@@ -268,7 +273,7 @@ test('條件會擋下不合法的連結，且錯誤帶有寶石 id 與原因', (
     error => error instanceof GemLinkError && error.gemId === gemId && error.reason.length > 0);
   rejects('magicmissile', ['leech'], 'leech');           // 汲取：僅限非法術
   rejects('whirlwind', ['shock'], 'shock');          // 感電：僅限法術
-  rejects('whirlwind', ['wide'], 'wide');            // 擴散：已是 aoe
+  rejects('magicmissile', ['focus'], 'focus');       // 聚焦：限全體
   rejects('mend', ['heavy'], 'heavy');               // 治療沒有傷害段
   rejects('mend', ['amp'], 'amp');
   rejects('magicmissile', ['heavy', 'heavy'], 'heavy');  // 不能連結兩次
@@ -277,17 +282,17 @@ test('條件會擋下不合法的連結，且錯誤帶有寶石 id 與原因', (
 
 test('條件只看主動寶石原本的樣子，其他輔助寶石改了什麼都不影響它', () => {
   const gems = {
-    ...SUPPORT_GEMS,
+    ...withSpread,
     needAoe: mkGem('needAoe', [{ op: 'more', value: 0.1 }], { requires: { tags: { all: ['aoe'] } } })
   };
   // 擴散會讓魔法飛彈多一個 aoe 標籤，但 needAoe 看的是魔法飛彈原本的標籤，所以不論順序都不成立。
-  for (const links of [['wide', 'needAoe'], ['needAoe', 'wide']]) {
+  for (const links of [['spread', 'needAoe'], ['needAoe', 'spread']]) {
     assert.throws(() => compileWith(links, gems), error => error.gemId === 'needAoe');
   }
   // 同樣的條件對本來就有 aoe 的旋風斬成立。
   assert.doesNotThrow(() => compileSkill('whirlwind', ['needAoe'], { supportGems: gems }));
   // addTags 仍會寫進編譯出的技能（給執行期用），只是不會被其他寶石的條件看到。
-  assert.ok(compileSkill('magicmissile', ['wide']).skill.tags.includes('aoe'));
+  assert.ok(compileWith(['spread'], withSpread).skill.tags.includes('aoe'));
 });
 
 // ── 順序無關 ────────────────────────────────────────────────
@@ -381,7 +386,7 @@ test('順序無關：追加段落的先後依寶石 id 字母順序，與插槽�
 
 test('追加的傷害段：吃到加算與乘算的數值加成，但不受 scope 與旗標影響', () => {
   const extra = mkGem('extra', [{ op: 'appendAction', action: { type: 'DAMAGE', power: 0.5, targetType: 'ENEMY_SINGLE' } }]);
-  const gems = { ...SUPPORT_GEMS, extra };
+  const gems = { ...withSpread, extra };
   for (const links of permutationsOf(['extra', 'heavy', 'pierce'])) {
     const { skill } = compileWith(links, gems);
     assert.equal(skill.actions[0].ignoreDefense, 0.5);         // 原本的傷害段吃到穿甲
@@ -389,7 +394,7 @@ test('追加的傷害段：吃到加算與乘算的數值加成，但不受 scop
     assert.equal(skill.actions[0].power, round(1.5 * 1.3 * moreOf('pierce')));   // 原本的傷害段：1.5 × 強力 × 穿甲的乘算（平衡後穿甲沒有減傷）
     assert.equal(skill.actions[1].power, round(0.5 * 1.3 * moreOf('pierce')));               // 追加的：0.5 × 強力 × 穿甲的乘算
   }
-  assert.equal(compileWith(['extra', 'wide'], gems).skill.actions[1].targetType, 'ENEMY_SINGLE'); // 擴散改不到它
+  assert.equal(compileWith(['extra', 'spread'], gems).skill.actions[1].targetType, 'ENEMY_SINGLE'); // 擴散改不到它
 });
 
 // ── 玩家看的說明 ────────────────────────────────────────────
@@ -425,15 +430,15 @@ test('說明：每一顆正式寶石都能產生說明，且文字由數值自�
     assert.ok(lines.length >= gem.effects.length, gem.id);
     assert.ok(lines.every(line => line.text && !line.text.includes('undefined')), gem.id);
   }
-  assert.ok(describeSupport(SUPPORT_GEMS.wide).lines.some(line => line.text === '攻擊對象由單一敵人改為全體敵人'));
+  assert.ok(describeSupport(spread).lines.some(line => line.text === '攻擊對象由單一敵人改為全體敵人'));
   assert.ok(describeSupport(SUPPORT_GEMS.pierce).lines.some(line => line.text === '無視目標 50% 的防禦'));
   assert.ok(describeSupport(SUPPORT_GEMS.leech).lines.some(line => line.text === '造成實際傷害的 20% 回復自身生命'));
 });
 
 // ── 各寶石在真實執行下的效果 ──────────────────────────────────
 
-test('擴散：單體技能一次打到全部敵人', () => {
-  const { skill } = compileSkill('magicmissile', ['wide']);
+test('scope：單體技能一次打到全部敵人（以測試用的擴散為例）', () => {
+  const { skill } = compileWith(['spread'], withSpread);
   const hero = makeHero([skill]);
   const foes = [makeFoe('a'), makeFoe('b'), makeFoe('c')];
   skill.execute(hero, [hero], foes, logger(), null);
@@ -637,11 +642,11 @@ test('標籤衝突：一顆加上、一顆移除同一個標籤，整組拒絕�
       { type: 'DAMAGE', targetType: 'ENEMY_SINGLE' }, { type: 'DAMAGE', targetType: 'ENEMY_ALL' }
     ] }
   };
-  const gems = { wide: SUPPORT_GEMS.wide, focus: SUPPORT_GEMS.focus };
-  // wide 要求技能原本沒有 aoe，mix 沒有，所以兩顆條件都過；wide 加 aoe、focus 移除 aoe → 衝突。
-  for (const order of [['wide', 'focus'], ['focus', 'wide']]) {
+  const gems = { spread, focus: SUPPORT_GEMS.focus };
+  // spread 要求技能原本沒有 aoe，mix 沒有，所以兩顆條件都過；spread 加 aoe、focus 移除 aoe → 衝突。
+  for (const order of [['spread', 'focus'], ['focus', 'spread']]) {
     assert.throws(() => compileSkill('mix', order, { activeGems: active, supportGems: gems }),
-      error => error instanceof GemLinkError && [error.gemId, error.conflictsWith].sort().join() === 'focus,wide');
+      error => error instanceof GemLinkError && [error.gemId, error.conflictsWith].sort().join() === 'focus,spread');
   }
 });
 

@@ -45,7 +45,7 @@ test('法術寶石的資料：魔法飛彈讀智力、不可暴擊、不可反�
 });
 
 test('編譯後的技能保留這些設定，連結輔助寶石也不會弄丟', () => {
-  for (const supports of [[], ['heavy', 'pierce', 'amp'], ['wide', 'shock']]) {   // 爆擊強化已禁止連到法術，見下
+  for (const supports of [[], ['heavy', 'pierce', 'amp'], ['lean', 'shock']]) {   // 爆擊強化已禁止連到法術，見下
     const [first] = spell(supports).actions.filter(action => action.type === 'DAMAGE');
     assert.equal(first.stat, 'int');
     assert.equal(first.uncritable, true);

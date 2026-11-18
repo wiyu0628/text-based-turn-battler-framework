@@ -17,7 +17,7 @@ node gem/gems-ui-build.js
 node gem/game-build.js                                  # 正式遊戲介面
 ```
 
-**預期**：`npm test` 655 項全過；`gem/` 內各測試檔：affixTable 12、ailment 14、bosses 3、castWeight 22、combine 8、craft 17、deft 3、difficulty 2、dropTable 9、energy 6、engrave 12、equipment 12、game 13、gems 94、legendary 9、monsters 9、saveLayer 47、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 435 KB、25 個模組）。
+**預期**：`npm test` 657 項全過；`gem/` 內各測試檔：affixTable 12、ailment 14、bosses 3、castWeight 22、combine 8、craft 17、deft 3、difficulty 2、dropTable 9、energy 6、engrave 12、equipment 12、game 13、gems 94、legendary 9、monsters 10、saveLayer 48、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 440 KB、25 個模組）。
 
 **如果結果不同，先判斷是哪一種情況：**
 
@@ -43,10 +43,10 @@ node gem/game-build.js                                  # 正式遊戲介面
 
 | 檔案 | 作用 |
 |---|---|
-| `gems.js` | 資料與規則說明（v12）：5 顆主動寶石、12 顆輔助寶石、異常效果登錄表 `AILMENTS`、GROUPS、MAX_SUPPORTS = 3、權重常數。**檔頭註解是寶石規則的權威來源（含「物理與法術」一節），設計新寶石前先讀。** |
+| `gems.js` | 資料與規則說明（v13）：5 顆主動寶石、11 顆輔助寶石（v13 移除擴散）、異常效果登錄表 `AILMENTS`、GROUPS、MAX_SUPPORTS = 3、權重常數。**檔頭註解是寶石規則的權威來源（含「物理與法術」一節），設計新寶石前先讀。** |
 | `gemCompiler.js` | 編譯器（第五版新增 `options.equipment`：裝備的物理／法術傷害提高與常駐減傷）：compileSkill、compileLoadout、buildGrantPassives、buildChargeResolver、buildWeightResolver、combineResolvers、describeSupport、validateGemData、GemLinkError |
 | `statLayer.js` | 數值加成層（純函式）：applyStatBonuses、explainStatBonuses、describeStatBonus、statModifier、validateBonuses、validateBuffBonuses、STAT_DEFS |
-| `saveLayer.js` | **存檔層**（見第 3-C 節）：存檔結構與驗證、版本遷移、背包與裝備操作、匯出匯入、儲存介面；第五版新增 `equippedEffects`、`compileEquipped` 與 `scope: 'effect'` 詞綴。**目前存檔版本 3**（v2 加能量、v3 主動寶石擁有制）；`settings.playerName`、製作裝備的 `name` 是選填欄位 |
+| `saveLayer.js` | **存檔層**（見第 3-C 節）：存檔結構與驗證、版本遷移、背包與裝備操作、匯出匯入、儲存介面；第五版新增 `equippedEffects`、`compileEquipped` 與 `scope: 'effect'` 詞綴。**目前存檔版本 4**（v2 加能量、v3 主動寶石擁有制、v4 刪除擴散）；`settings.playerName`、製作裝備的 `name` 是選填欄位 |
 | `affixTable.js` | **刻印詞綴表**（第 3-D 節）：8 種刻印、階級縮放、裝備基底、擲值函式 `rollEngraving`／`rollBase`、合成結果 `rollCombine`（3-D-7）、`sumEffectAffixes`；純資料＋函式，不依賴框架 |
 | `dropTable.js` | **掉落表**（3-D-8）：各難度刻印階級權重 `TIER_WEIGHTS`、刻印數量、輔助寶石與傳說裝備機率；`dropRates(難度)`、`rollDrops(難度, rng)`。存檔層 `grantDrops(save, drops)` 把刻印與寶石放進背包 |
 | `craftTable.js` | **裝備製作表**（3-D-9）：10 個刻印 → 基底（刻印偏向 × 階級 × 品質 × 部位倍率）與施放權重；`rollCraft`、`rawBase`、`rollQuality`。存檔層 `craftEquipment(save, slot, engravings, rng)` |
@@ -74,7 +74,7 @@ node gem/game-build.js                                  # 正式遊戲介面
 
 **目前的寶石**（數值皆為佔位）：
 - 主動：magicmissile 魔法飛彈（**法術**：吃智力、不可暴擊、不可反擊；SP 10、單體）、whirlwind 旋風斬（**物理**：吃攻擊力、可暴擊；全體、SP 12；**平衡後倍率 0.9 → 1.2 → 1.0**）、**rend 撕裂**（物理、單體、**SP 14**〔平衡後：10 → 16 → 14〕、120%，命中附加裂傷）、**pursuit 追刃**（物理、單體、SP 15、90%，命中附加殘刃）（兩者見 3-E）、mend 治癒術（法術、治療，回復量讀智力；SP 8）。治癒術沒有傷害段，所以只能連佈局與撒手鐧。
-- 輔助：heavy 強力、lean 節能（互斥組 economy）、amp 增幅、wide 擴散、**pierce 穿甲**（`ignoreDefense: 0.5`，無視一半防禦，傷害 −10%）、shock 感電（限法術）、focus 聚焦（限全體）、charge 蓄力、layout 佈局、trump 撒手鐧、leech 汲取（限非法術）、critup 爆擊強化（使用時爆擊率 +15%，只撐這次施放；**沒有提示文字**）。連到法術沒有效果（法術不擲爆擊骰）。
+- 輔助：heavy 強力、lean 節能（互斥組 economy）、amp 增幅、~~wide 擴散~~（2026-11-18 移除）、**pierce 穿甲**（`ignoreDefense: 0.5`，無視一半防禦，傷害 −10%）、shock 感電（限法術）、focus 聚焦（限全體）、charge 蓄力、layout 佈局、trump 撒手鐧、leech 汲取（限非法術）、critup 爆擊強化（使用時爆擊率 +15%，只撐這次施放；**沒有提示文字**）。連到法術沒有效果（法術不擲爆擊骰）。
 - 機制已實作但沒有正式寶石使用：`proc`（機率附加）、`castCondition`（施放條件）。
 
 ## 2. 目標
@@ -441,8 +441,8 @@ node gem/game-build.js                                  # 正式遊戲介面
 **使用者備忘錄（2026-11-18，待設計或決定；內容製作在新對話進行，見 `gem/CONTENT-HANDOFF.md`）：**
 15. **修改寶石文本**：哪幾顆、哪裡要改（說明文字、戰報句子）待使用者指定。說明文字由 `describeSupport` 依 effects 自動產生，戰報句子在寶石的 `text`。
 16. **水道加一隻強怪、改隨機出怪方式**：強怪的概念（類型、物理／法術、出現難度）待定；現在 `rollEncounter` 是在預算內「從付得起的普通怪均等抽」，便宜的怪容易塞滿名額——新方式（權重、每種上限等）待定。
-17. **多隻修繕人偶同時出現太強**：「修補」是智力 ×300% 的單體治療（難度 7 起還有加固、13 起緊急修復），會互相補。可選：調低倍率、一場最多一隻、治療冷卻或不能補自己（可混用），待使用者選，我可以先模擬比較。
-18. **移除擴散（wide）**：存檔裡已有的擴散要刪除還是換成別顆待定（需要存檔遷移）；`gems.test.js` 等約 10 處拿擴散當 `scope` 的測試範例，要改用別的寫法。擴散沒有互斥組（和聚焦是靠 requires 互不相容，不是互斥組）。
+17. ✅ **多隻修繕人偶同時出現太強（2026-11-19）**：模擬（廢都，40 回合）發現問題只在「兩隻人偶同一場」：兩隻互補、幾乎沒輸出，大多 40 回合平手，難度 9 以上拿這一階整套也只有 0～37%；調低倍率（2、1.5）、冷卻 2 槽、不能補自己都救不了（難度 7 起有加固、13 起有緊急修復）。**使用者選「一場最多 1 隻」**，倍率維持 3：怪物資料新增選填欄位 `maxPerEncounter`（`rollEncounter` 補普通怪時跳過已達上限的；沒寫就不限、亂數序列不變），人偶設 1。之後廢都 `difficulty-check.js`（每格約 120 場）：物理 入段拿上一階 95～100%、段末只拿上一階 73～78%、段末拿這一階 93～99%；法術 94～100%／74～78%／97～100%（比原本 82～92%／86～89% 容易一些）。1 隻人偶的那場仍是廢都的難點（拿上一階約五五波）。
+18. ✅ **移除擴散（wide，2026-11-18）**：使用者決定已有的**直接刪除**。存檔 **v4**：`MIGRATIONS[3]` 刪掉背包與所有裝備連結裡的擴散（有遷移測試）。測試裡拿擴散當 `scope` 範例的地方改用 `gems.test.js` 裡的測試用寶石 `spread`（定義與原本的擴散相同）；其他測試換成穿甲、蓄力、節能。輔助寶石變 11 種，掉落平均分給 11 種（同一顆種子掉的寶石會和之前不同）。**舊的戰鬥紀錄**如果快照裡有擴散，重播時會先遷移、刪掉擴散，所以重播結果會和當時不同。
 19. **新增寶石**（主動或輔助）與傳說武器、新地區：設計待使用者（與上面 2、3、9 合併看）。
 20. **輔助寶石掉落率改回 15%？** 目前 30%（3-F-10 使用者調高）；和第 6 條「重複寶石的用途」綁在一起決定。
 21. **怪物防禦隨難度成長**：現在怪物防禦是固定值，穿甲（無視 50% 防禦）在高難度沒有變更有用。成長曲線、要不要同時調低 HP 倍率待決定；我可以擬兩三種曲線連同穿甲效果比較。

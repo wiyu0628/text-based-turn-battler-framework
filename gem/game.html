@@ -3262,7 +3262,10 @@ module.exports = { STAT_DEFS, BONUS_OPS, validateBonuses, validateBuffBonuses, s
 'use strict';
 
 /**
- * 技能串接寶石資料 v12（5 顆主動寶石 + 12 顆輔助寶石 + 互斥組 + 連結上限）
+ * 技能串接寶石資料 v13（5 顆主動寶石 + 11 顆輔助寶石 + 互斥組 + 連結上限）
+ *
+ * v13（2026-11-18）：移除擴散 wide（使用者決定）。存檔 v3 → v4 的遷移會刪掉背包與裝備上的擴散（saveLayer.js MIGRATIONS[3]）。
+ * 移除寶石時一定要同時寫存檔遷移：讀檔遇到不認得的寶石會報錯、不會自動丟掉。
  *
  * 純資料、不含函式，可直接 JSON 序列化。
  * 這份檔案只定義「寶石是什麼」；怎麼編譯成 Skill 見 gemCompiler.js。
@@ -3570,21 +3573,6 @@ const SUPPORT_GEMS = {
     addTags: [],
     effects: [
       { op: 'inc', value: 0.2 },
-    ]
-  },
-
-  // 擴散：單體傷害變全體，單目標傷害乘算下降。已是 aoe 的技能不能連結。
-  wide: {
-    id: 'wide',
-    name: '擴散',
-    requires: {
-      action: { type: 'DAMAGE', targetType: 'ENEMY_SINGLE' },
-      tags: { none: ['aoe'] }
-    },
-    addTags: ['aoe'],
-    effects: [
-      { op: 'scope', from: 'ENEMY_SINGLE', to: 'ENEMY_ALL' },
-      { op: 'more', value: -0.4 }
     ]
   },
 
@@ -5515,6 +5503,7 @@ module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICUL
  *   shield  { target: 'allySingle'|'allyAll', ratio, duration, name }               護盾 = 施放者最大生命 × ratio
  *   heal    { target: 'allySingle'|'allyAll'|'self', power }                         回復 = 施放者能力值 × power
  *   共通：id、name、from（從第幾難度開始會用）、spCost。法術怪（spell: true）的傷害吃 int、不可暴擊、不可反擊。
+ *   maxPerEncounter（選填，普通怪）：同一場最多出現幾隻；沒寫就不限。
  *   特性 traits：split（血量第一次低於一半時分裂）、ambush（第一個行動槽攻擊力 × mult）、enrage（血量第一次低於 at 時某屬性 × mult 到戰鬥結束，王用）。
  */
 
@@ -5547,7 +5536,8 @@ const MONSTERS = {
     ]
   },
   doll: {
-    id: 'doll', name: '修繕人偶', from: 3, cost: 0.3, spell: true, skillCastRate: 0.5,
+    // 一場最多 1 隻（使用者決定，2026-11-19）：兩隻會互相補到 40 回合平手
+    id: 'doll', name: '修繕人偶', from: 3, cost: 0.3, spell: true, skillCastRate: 0.5, maxPerEncounter: 1,
     stats: { hp: 0.35, atk: 0, int: 0.4, def: 40, spd: 100 },
     skills: [
       { kind: 'heal', id: 'mend_ally', name: '修補', from: 3, spCost: 10, target: 'allySingle', power: 3 },
@@ -5766,7 +5756,9 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   const spent = () => picks.reduce((sum, def) => sum + def.cost, 0);
   const cheapest = normals.reduce((a, b) => (a.cost <= b.cost ? a : b));
   while (picks.length < max) {
-    const affordable = normals.filter(def => def.cost <= region.budget - spent() + 1e-9);
+    // maxPerEncounter（選填）：同一場最多幾隻；沒寫就不限，亂數序列與之前相同
+    const affordable = normals.filter(def => def.cost <= region.budget - spent() + 1e-9
+      && (def.maxPerEncounter == null || picks.filter(p => p === def).length < def.maxPerEncounter));
     if (!affordable.length) break;
     picks.push(affordable[Math.min(affordable.length - 1, Math.floor(rng() * affordable.length))]);
   }
@@ -5922,7 +5914,7 @@ const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 3;
+const SAVE_VERSION = 4;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -6255,6 +6247,17 @@ const MIGRATIONS = {
     for (const item of save.equipment ?? []) for (const link of item.links ?? []) if (isActiveGem(link.active)) owned.add(link.active);
     for (const id of owned) gems[id] = 1;
     return { ...save, version: 3, gems };
+  },
+  // v3 → v4：移除擴散（wide，使用者決定直接刪除、不換成別顆）——背包裡的、鑲在裝備上的都刪掉。
+  // 寫死 id 是刻意的：這一步只描述「v4 移除了哪些寶石」，之後再移除別顆要另寫一步。
+  3: save => {
+    const removed = new Set(['wide']);
+    const gems = Object.fromEntries(Object.entries(save.gems ?? {}).filter(([id]) => !removed.has(id)));
+    const equipment = (save.equipment ?? []).map(item => ({
+      ...item,
+      links: (item.links ?? []).map(link => ({ ...link, supports: (link.supports ?? []).filter(id => !removed.has(id)) }))
+    }));
+    return { ...save, version: 4, gems, equipment };
   }
 };
 

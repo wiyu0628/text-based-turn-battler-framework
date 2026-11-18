@@ -61,6 +61,24 @@ test('encounters respect the count range and normalize total strength to the reg
   }
 });
 
+test('maxPerEncounter caps how many of one monster appear (doll: at most 1 per encounter)', () => {
+  assert.equal(MONSTERS.doll.maxPerEncounter, 1);
+  const rng = createSeededRandom(11);
+  let withDoll = 0;
+  for (const d of [3, 7, 15]) {
+    for (let i = 0; i < 2000; i++) {
+      const { info } = rollEncounter('ruins', d, rng);
+      const dolls = info.ids.filter(id => id === 'doll').length;
+      assert.ok(dolls <= 1, `d${d} dolls=${dolls}`);
+      if (dolls) withDoll++;
+    }
+  }
+  assert.ok(withDoll > 0);   // 人偶仍會出現
+  // 沒寫 maxPerEncounter 的怪不受限：水道的老鼠仍可多隻
+  const sewer = createSeededRandom(12);
+  assert.ok(Array.from({ length: 500 }, () => rollEncounter('sewer', 1, sewer).info.ids.filter(id => id === 'rat').length).some(n => n >= 2));
+});
+
 test('rare appears about 3%, elite about 15% once unlocked, never together; duplicate names get letters', () => {
   const rng = createSeededRandom(9);
   let rare = 0, elite = 0, both = 0;

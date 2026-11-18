@@ -85,11 +85,11 @@ test('granted amp supports the gem on the weapon without taking a link slot; ski
   assert.deepEqual(granted.grantedSupports, ['amp']);
   assert.equal(granted.skill.actions[0].power, 1.8);                                  // 1.5 × 1.2
   assert.equal(one([{ active: 'magicmissile', supports: ['amp'], grantedSupports: ['amp'] }]).skill.id, 'magicmissile+amp');
-  assert.equal(one([{ active: 'magicmissile', supports: ['heavy', 'shock', 'wide'], grantedSupports: ['amp'] }]).skill.id, 'magicmissile+amp+heavy+shock+wide');
+  assert.equal(one([{ active: 'magicmissile', supports: ['heavy', 'shock', 'pierce'], grantedSupports: ['amp'] }]).skill.id, 'magicmissile+amp+heavy+pierce+shock');
   const mend = one([{ active: 'mend', grantedSupports: ['amp'] }]);
   assert.equal(mend.skill.id, 'mend');
   assert.deepEqual(mend.grantedSupports, []);
-  assert.throws(() => compileLoadout([{ active: 'magicmissile', supports: ['heavy', 'shock', 'wide', 'lean'] }]), /最多連結 3 顆/);
+  assert.throws(() => compileLoadout([{ active: 'magicmissile', supports: ['heavy', 'shock', 'pierce', 'lean'] }]), /最多連結 3 顆/);
   assert.throws(() => compileLoadout([{ active: 'magicmissile', grantedSupports: ['nope'] }]), /nope|不存在/);
 });
 
