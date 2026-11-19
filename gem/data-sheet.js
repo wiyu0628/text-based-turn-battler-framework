@@ -167,8 +167,8 @@ add('異常', '異常狀態', '持續時間以中招者的行動槽計；重複�
 add('傳說裝備', '傳說裝備', '只能掉落，不能刻刻印、沒有製作詞綴、不能分解。數值依掉落難度的最高刻印階縮放，再擲 0.7～1（標「固定區間」的不縮放）。施放權重 60～120。',
   ['id', '名稱', '部位', '普攻屬性', '基底（上限）', '獨有詞綴（上限）', '機制'],
   Object.values(L.LEGENDARIES).map(l => [l.id, l.name, SLOT[l.slot], l.attackStat === 'int' ? '智力' : '攻擊',
-    l.base.map(b => `${statName(b.stat)} +${b.max}`).join('、'), l.unique.map(u => u.range ? `${statName(u.stat)} ${pct(u.range[0])}～${pct(u.range[1])}（固定區間）` : ['cri', 'criDmg'].includes(u.stat) ? `${statName(u.stat)} +${pct(u.max)}` : `${statName(u.stat)}${u.op === 'inc' ? '提高 ' + pct(u.max) : ' +' + u.max}`).join('、'),
-    l.mechanics.map(m => describeMechanic(m, id => G.SUPPORT_GEMS[id]?.name ?? id)).join('；')]));
+    l.base.map(b => `${statName(b.stat)} +${b.max}`).join('、'), l.unique.map(u => u.scope === 'effect' ? `${{ summonHp: '召喚物生命', physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷' }[u.kind] ?? u.kind} +${pct(u.max)}` : u.range ? `${statName(u.stat)} ${pct(u.range[0])}～${pct(u.range[1])}（固定區間）` : ['cri', 'criDmg'].includes(u.stat) ? `${statName(u.stat)} +${pct(u.max)}` : `${statName(u.stat)}${u.op === 'inc' ? '提高 ' + pct(u.max) : ' +' + u.max}`).join('、'),
+    l.mechanics.map(m => describeMechanic(m, id => G.SUPPORT_GEMS[id]?.name ?? id).replace('獲得護盾', m.type === 'spShield' ? `獲得護盾（智力 × SP × ${m.ratio}）` : '獲得護盾') + (m.type === 'phantom' ? `（幻影屬性 × 玩家：${['hp', 'spd', 'atk', 'int', 'def'].map(k => `${statName(k)} ${m.ratios?.[k] ?? (k === 'spd' ? 1 : m.ratio)}`).join('、')}；生命再乘 1 + 召喚物生命）` : '')).join('；')]));   // 後台多寫護盾倍率；玩家說明不寫
 
 // ── 能量 ──
 add('能量', '能量', `上限 ${E.ENERGY_CAP}，超過的部分作廢。勝利能量依該難度的最高刻印階。`,

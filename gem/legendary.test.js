@@ -234,3 +234,57 @@ test('魔力循環法球：施放技能依實際扣的 SP 得到護盾（取較�
   assert.ok(save.compileEquipped(state).passives.some(p => p.id === 'legend_shieldBreakSp'));
   assert.equal(save.compileEquipped(state).normalAttackStat, 'int');
 });
+
+// ── 幻影戰斧（phantom），2026-11-19 ────────────────────────────────
+
+function phantomFight(t, { active = 'rend', heroHp = 1e6, chase = true, summonHp = 0, turns = 2 } = {}) {
+  t.mock.method(Formulas, 'isHit', () => true);
+  t.mock.method(Formulas, 'isCritical', () => false);
+  const spec = LEGENDARIES.phantomaxe.mechanics[0];
+  const loadout = compileLoadout([{ active, phantomChase: chase }], { equipment: { summonHp }, mechanics: [spec] });
+  const hero = new Entity({ id: 'h', name: '勇者', team: 'A', normalAttack: new Skill({ id: 'na', name: 'na', actions: [{ type: 'DAMAGE' }] }),
+    skills: loadout.skills, passives: loadout.passives, stats: { hp: heroHp, maxHp: heroHp, sp: 200, maxSp: 200, atk: 100, int: 50, def: 40, spd: 200, cri: 0.1, skillCastRate: 1 } });
+  const foes = ['a', 'b'].map(id => new Entity({ id, name: `怪${id}`, team: 'B', normalAttack: new Skill({ id: `f${id}`, name: 'f', actions: [{ type: 'DAMAGE' }] }), stats: { hp: 1e6, maxHp: 1e6, sp: 0, atk: 500, def: 0, spd: 150 } }));
+  const engine = new BattleEngine([hero], foes, { maxTurns: turns, rng: createSeededRandom(3), skillSelectionResolver: loadout.resolver });
+  const result = engine.start();
+  return { hero, engine, result, spec, logs: result.logs.filter(l => l.message) };
+}
+
+test('幻影戰斧：開戰召喚幻影（屬性 × ratio，生命再乘 1 + 召喚物生命），平常自己普攻', t => {
+  const { hero, engine, spec, logs } = phantomFight(t, { summonHp: 0.4 });
+  const phantom = engine.teamA.find(e => e.gemPhantom === true);
+  assert.ok(phantom);
+  assert.equal(logs[1].message, '勇者揮動斧頭，一道幻影浮現在勇者的身後。');
+  assert.equal(phantom.name, '勇者的幻影');
+  const ratio = key => spec.ratios?.[key] ?? (key === 'spd' ? 1 : spec.ratio);
+  assert.equal(phantom.stats.maxHp, Math.round(1e6 * ratio('hp') * 1.4));
+  assert.equal(phantom.stats.atk, Math.round(100 * ratio('atk')));
+  assert.equal(phantom.stats.def, Math.round(40 * ratio('def')));
+  assert.equal(phantom.stats.spd, Math.round(200 * ratio('spd')));
+  assert.deepEqual([ratio('hp'), ratio('spd'), ratio('atk'), ratio('int'), ratio('def')], [0.5, 0.5, 0.3, 0.3, 0.3]);   // 使用者定案
+  assert.equal(phantom.summonerId, hero.id);
+  assert.ok(logs.some(l => l.actorId === phantom.id && l.message.startsWith('勇者的幻影 攻擊')), '自己普攻');
+});
+
+test('幻影戰斧：裝備的主動寶石施放後幻影追擊——單體跟同一個目標；沒有 phantomChase 的連結不追擊', t => {
+  const { logs } = phantomFight(t);
+  const pairs = [];
+  logs.forEach((log, i) => { if (log.message.startsWith('勇者 使出撕裂')) pairs.push([log, logs.slice(i + 1).find(l => l.message.startsWith('勇者的幻影 隨之追擊'))]); });
+  assert.ok(pairs.length > 0);
+  for (const [cast, chase] of pairs) assert.equal(chase.targetId, cast.targetId);
+  t.mock.restoreAll();
+  assert.equal(phantomFight(t, { chase: false }).logs.filter(l => l.message.includes('隨之追擊')).length, 0);
+});
+
+test('幻影戰斧：自己倒下時幻影一起消失，勝負只看自己；穿上時接好', t => {
+  const { result, engine } = phantomFight(t, { heroHp: 600, turns: 10 });
+  assert.equal(result.winner, 'TEAM_B');
+  assert.equal(engine.teamA.find(e => e.gemPhantom === true).isAlive, false);
+  let state = save.addGems(fresh(), 'rend', 1);
+  const added = save.addLegendary(state, 'phantomaxe', 15, () => 0.9999999);
+  state = save.equip(save.setLinks(added.save, added.id, [{ active: 'rend', supports: [] }]), added.id);
+  assert.equal(save.equippedLinks(state)[0].phantomChase, true);
+  assert.deepEqual(save.equippedMechanics(state).map(m => m.type), ['phantom']);
+  assert.equal(save.equippedEffects(state).summonHp, LEGENDARIES.phantomaxe.unique[1].max);
+  assert.ok(save.compileEquipped(state).passives.some(p => p.id === 'legend_phantom'));
+});

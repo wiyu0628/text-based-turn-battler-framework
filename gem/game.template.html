@@ -399,7 +399,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   const QUALITY = Object.fromEntries(craft.QUALITIES.map(q => [q.id, q]));
   const KINDS = Object.keys(affix.ENGRAVING_TYPES);
   const kindName = kind => affix.ENGRAVING_TYPES[kind]?.name ?? kind;
-  const EFFECT_NAMES = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '每個行動槽回復 SP' };
+  const EFFECT_NAMES = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '每個行動槽回復 SP', summonHp: '召喚物生命' };
   function describeAffix(a) {
     if (a.scope === 'wearer') return statLayer.describeStatBonus(a).text;
     if (a.scope === 'effect') {
@@ -431,7 +431,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   let state = null;
   let tab = 'adventure';
   let history = [];
-  const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], salvage: { kind: null, tier: 1, count: 1 },
+  const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], convertPicks: [], salvage: { kind: null, tier: 1, count: 1 },
     workshopTab: 'craft', engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, linkErrors: {} };
 
   function loadHistory() {
@@ -940,10 +940,22 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     const owned = Object.entries(state.gems).filter(([, n]) => n > 0);
     const actives = owned.filter(([id]) => G.ACTIVE_GEMS[id]);
     const supports = owned.filter(([id]) => G.SUPPORT_GEMS[id]);
+    // 轉換的選擇：背包已經不夠的丟掉（例如剛鑲上去）
+    const left = Object.fromEntries(supports);
+    ui.convertPicks = ui.convertPicks.filter(id => (left[id] = (left[id] ?? 0) - 1) >= 0);
+    const cp = ui.convertPicks;
     return [h('div', { class: 'grid4' }, Object.keys(SLOT_NAMES).map(linkEditor)),
       h('div', { class: 'grid2' },
         h('div', { class: 'panel' }, h('h2', { text: '已擁有的主動寶石' }), h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: '擁有一次就能鑲在任意多件裝備上；穿在身上的裝備裡同一種只能有一顆。' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id]) => h('li', {}, h('strong', { text: gemName(id) }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有' })),
-        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), ...compiler.describePlayer(G.SUPPORT_GEMS[id]).map(text => h('div', { class: 'muted', style: 'font-size:12px', text }))))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' })))];
+        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {},
+          h('strong', { text: `${gemName(id)} ×${n}` }),
+          h('button', { class: 'small', style: 'margin-left:6px', disabled: cp.length >= S.GEM_CONVERT_INPUTS || cp.filter(x => x === id).length >= n, text: '放入轉換', onclick: () => { ui.convertPicks.push(id); render(); } }),
+          ...compiler.describePlayer(G.SUPPORT_GEMS[id]).map(text => h('div', { class: 'muted', style: 'font-size:12px', text }))))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' }),
+          h('h2', { style: 'margin-top:12px', text: `寶石轉換（${S.GEM_CONVERT_INPUTS} → 1）` }),
+          h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: `投入 ${S.GEM_CONVERT_INPUTS} 顆輔助寶石（可同種、可混），從你還沒有的種類隨機換 1 顆；全部都有時，從投入以外的種類隨機。（${cp.length} / ${S.GEM_CONVERT_INPUTS}，點已放入的可移除）` }),
+          h('div', {}, cp.map((id, i) => h('button', { class: 'small', style: 'margin:0 4px 4px 0', text: `${gemName(id)} ✕`, onclick: () => { ui.convertPicks.splice(i, 1); render(); } }))),
+          h('button', { class: 'primary', disabled: cp.length !== S.GEM_CONVERT_INPUTS, text: '轉換', onclick: () => apply(s => S.convertGems(s, cp),
+            v => { ui.convertPicks = []; return `轉換出 ${gemName(v.gemId)}${v.fromMissing ? '（你還沒有的種類）' : ''}`; }) })))];
   }
 
   // ── 畫面 ────────────────────────────────────────────────────

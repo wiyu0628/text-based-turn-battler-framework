@@ -115,7 +115,7 @@ test('equippedEffects sums equipped items only, with reduction capped', () => {
   assert.ok(Math.abs(fx.physDmg - 2 * lineMax('fury', 1)) < 1e-9);                          // 兩個猛攻的物理傷害
   assert.ok(Math.abs(fx.reduction - (lineMax('vital', 2) + lineMax('bulwark', 2))) < 1e-9);  // 堅韌 + 鐵壁的減傷
   assert.equal(fx.spellDmg, 0);
-  assert.deepEqual(save.equippedEffects(fresh()), { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 });
+  assert.deepEqual(save.equippedEffects(fresh()), { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0, summonHp: 0 });
 });
 
 test('compileEquipped wires links, damage bonus and reduction in one step', () => {

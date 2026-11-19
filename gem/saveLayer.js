@@ -497,6 +497,36 @@ function removeGems(save, gemId, count = 1) {
   return mutate(save, draft => takeFromStack(draft.gems, gemId, count, `寶石「${gemId}」`));
 }
 
+/** 寶石轉換一次要投入幾顆輔助寶石（使用者 2026-11-19：重複寶石的用途，3 換 1）。 */
+const GEM_CONVERT_INPUTS = 3;
+
+/**
+ * 寶石轉換：投入 GEM_CONVERT_INPUTS 顆輔助寶石（可以同種、可以混），換 1 顆輔助寶石。
+ * 給的種類從「還沒有的種類」平均抽（背包裡 0 顆、也沒鑲在任何裝備上）；全部都有時，從投入以外的種類抽；
+ * 投入涵蓋所有種類時才從全部種類抽。只用 1 個亂數。回傳 { save, gemId, fromMissing }。
+ */
+function convertGems(save, gemIds, rng = Math.random) {
+  if (!Array.isArray(gemIds) || gemIds.length !== GEM_CONVERT_INPUTS) throw new SaveError(`寶石轉換要投入 ${GEM_CONVERT_INPUTS} 顆輔助寶石`);
+  for (const id of gemIds) {
+    requireGem(id);
+    if (!Object.hasOwn(SUPPORT_GEMS, id)) throw new SaveError(`「${id}」是主動寶石，不能拿來轉換`);
+  }
+  const need = {};
+  for (const id of gemIds) need[id] = (need[id] ?? 0) + 1;
+  const socketed = {};
+  for (const item of save.equipment ?? []) for (const link of item.links ?? []) for (const id of link.supports ?? []) socketed[id] = (socketed[id] ?? 0) + 1;
+  const all = Object.keys(SUPPORT_GEMS);
+  const missing = all.filter(id => !(save.gems?.[id] > 0) && !(socketed[id] > 0));
+  const notInput = all.filter(id => !need[id]);
+  const pool = missing.length ? missing : notInput.length ? notInput : all;
+  const gemId = pool[Math.min(pool.length - 1, Math.floor(rng() * pool.length))];
+  return mutate(save, draft => {
+    for (const [id, count] of Object.entries(need)) takeFromStack(draft.gems, id, count, `寶石「${id}」`);
+    addToStack(draft.gems, gemId, 1);
+    return { gemId, fromMissing: missing.length > 0 };
+  });
+}
+
 function addEngraving(save, type, tier, count = 1) {
   requireCount(count);
   const key = stackKey(type, tier);
@@ -906,7 +936,7 @@ function compileEquipped(save, options = {}) {
 
 /** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */
 function equippedMechanics(save) {
-  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => m.type === 'spShield' || m.type === 'shieldBreakSp');
+  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom'].includes(m.type));
 }
 
 /** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */
@@ -927,11 +957,13 @@ function equippedLinks(save) {
     const granted = mechanics.filter(m => m.type === 'grantSupport').map(m => m.gem);
     const deathCast = mechanics.find(m => m.type === 'castOnEnemyDeath');
     const critCast = mechanics.find(m => m.type === 'castOnCrit');
+    const phantomChase = mechanics.some(m => m.type === 'phantom');
     return normalizeLinks(item.links).map(link => ({
       ...link, weight: item.castWeight,
       ...(granted.length ? { grantedSupports: granted } : {}),
       ...(deathCast ? { castOnEnemyDeath: { text: deathCast.text } } : {}),
-      ...(critCast ? { castOnCrit: { chance: critCast.chance, text: critCast.text } } : {})
+      ...(critCast ? { castOnCrit: { chance: critCast.chance, text: critCast.text } } : {}),
+      ...(phantomChase ? { phantomChase: true } : {})
     }));
   });
 }
@@ -994,7 +1026,7 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
-  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
+  convertGems, GEM_CONVERT_INPUTS, addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
   setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedMechanics, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };

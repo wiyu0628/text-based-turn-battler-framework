@@ -3774,7 +3774,7 @@ module.exports = { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_G
  * 只依賴框架公開的 Skill，不改框架任何檔案。流程與規則見 gems.js 開頭的說明。
  * 你的專案裡把下面的 require 換成 require('text-based-turn-battler-framework')。
  */
-const { Skill, Buff, random } = require('../src');
+const { Skill, Buff, Entity, random } = require('../src');
 const { ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBuffBonuses, statModifier } = require('./statLayer');
 
@@ -4489,6 +4489,66 @@ function withSpShield(skill, spec) {
   return skill;
 }
 
+/**
+ * 幻影戰斧（phantom）：開戰時在自己這一隊召喚「幻影」——屬性照自己（含裝備與 Buff）：生命／攻擊／智力／防禦 × ratio，
+ * 生命再 ×（1 + 召喚物生命）；速度、爆擊、命中、閃避照抄。幻影平常依速度自己普攻，沒有技能。
+ * 自己倒下時幻影一起消失（isAlive 綁在召喚者身上，所以勝負只看自己）。
+ */
+function buildPhantomPassive(spec, summonHp = 0) {
+  return {
+    id: 'legend_phantom',
+    trigger: 'BATTLE_START',
+    enabled: self => self.isAlive,
+    action(self, battle, logger, engine) {
+      if (!engine || engine.result) return;
+      const base = self.getEffectiveStats?.() ?? self.stats;
+      // ratios（選填）可以每項分開：{ hp, atk, int, def, spd }；沒寫的用 ratio。spd 預設照抄（1）。
+      const ratioOf = key => spec.ratios?.[key] ?? (key === 'spd' ? 1 : spec.ratio);
+      const scale = key => Math.max(key === 'hp' ? 1 : 0, Math.round((base[key] || 0) * ratioOf(key) * (key === 'hp' ? 1 + summonHp : 1)));
+      const hp = scale('hp');
+      const stats = { hp, maxHp: hp, atk: scale('atk'), int: scale('int'), def: scale('def'), sp: 0, maxSp: 0,
+        spd: Math.max(1, Math.round(base.spd * ratioOf('spd'))), cri: base.cri, criDmg: base.criDmg, hit: base.hit ?? 0, eva: base.eva ?? 0, skillCastRate: 0 };
+      const stat = self.normalAttack?.actions?.[0]?.stat ?? 'atk';
+      const fill = template => template.replaceAll('{caster}', self.name);
+      const phantom = new Entity({ id: `${self.id}_phantom`, name: fill(spec.name ?? '{caster}的幻影'), team: self.team, stats,
+        normalAttack: new Skill({ id: 'phantom_attack', name: '幻影普攻', actions: [{ type: 'DAMAGE', stat }] }), normalAttackSpCost: 0 });
+      let alive = phantom.isAlive;
+      Object.defineProperty(phantom, 'isAlive', { get: () => alive && self.isAlive, set: value => { alive = value; }, configurable: true });
+      phantom.summonerId = self.id;
+      phantom.gemPhantom = true;
+      (self.team === 'A' ? engine.teamA : engine.teamB).push(phantom);
+      self.gemPhantom = phantom;
+      logger.addLog({ type: 'SUMMON', actorId: self.id, targetId: phantom.id, message: fill(spec.summonText ?? '{caster} 召喚了幻影！') });
+    }
+  };
+}
+
+/**
+ * 幻影追擊：這件裝備上的主動寶石施放完後，幻影插隊普攻一次。
+ * 單體技能打同一個目標（還活著的話），其他（全體、目標已倒下）隨機。
+ */
+function withPhantomChase(skill, spec) {
+  const base = skill.execute;
+  skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    const start = logger?.logs?.length ?? 0;
+    const result = base.call(this, caster, allies, enemies, logger, context, options);
+    const phantom = caster.gemPhantom;
+    const engine = context?.insertAction ? context : null;
+    if (!engine || engine.result || !phantom?.isAlive || !phantom.canAct?.()) return result;
+    const single = this.actions.some(action => action.type === 'DAMAGE' && action.targetType === 'ENEMY_SINGLE');
+    const hitLog = single ? (logger.logs ?? []).slice(start).find(log => log.actorId === caster.id && log.targetId && enemies.some(e => e.id === log.targetId)) : null;
+    const target = hitLog ? enemies.find(e => e.id === hitLog.targetId && e.isAlive) : null;
+    const chase = new Skill({ id: 'phantom_chase', name: '幻影追擊', actions: [{ type: 'DAMAGE', stat: phantom.normalAttack.actions[0].stat ?? 'atk', text: { action: expandPart(spec.chaseText ?? '{caster} 隨之追擊，') } }] });
+    if (target) {
+      const select = chase._selectTargets.bind(chase);
+      chase._selectTargets = (targetType, ...rest) => (target.isAlive && targetType === 'ENEMY_SINGLE' ? [target] : select(targetType, ...rest));
+    }
+    engine.insertAction(phantom, chase);
+    return result;
+  };
+  return skill;
+}
+
 /** 護盾破裂回 SP（shieldBreakSp）：自己受到的一擊打碎幾面盾，就回幾次 sp（任何來源的盾都算）。 */
 function buildShieldBreakSpPassive(sp) {
   return {
@@ -4953,7 +5013,7 @@ function withCritEcho(skill, critEcho) {
  * 沒給就是全部 0。回傳補齊的物件。
  */
 function checkEquipment(equipment) {
-  const result = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 };
+  const result = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0, summonHp: 0 };
   if (equipment === null || equipment === undefined) return result;
   if (typeof equipment !== 'object' || Array.isArray(equipment)) throw new Error('options.equipment 必須是物件');
   for (const key of Object.keys(equipment)) {
@@ -5156,7 +5216,8 @@ function compileLoadout(gems, options = {}) {
   const seen = new Set();
   const deathCasts = [];
   const critCasts = [];
-  for (const { active, supports = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null, castOnCrit = null } of gems) {
+  const chasers = [];
+  for (const { active, supports = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null, castOnCrit = null, phantomChase = false } of gems) {
     if (!Number.isInteger(weight) || weight < MIN_WEIGHT || weight > MAX_WEIGHT) {
       throw new GemLinkError(active, `施放權重必須是 ${MIN_WEIGHT}～${MAX_WEIGHT} 的整數（收到 ${weight}）`);
     }
@@ -5168,6 +5229,7 @@ function compileLoadout(gems, options = {}) {
     result.weight = weight;
     if (castOnEnemyDeath) deathCasts.push([result, castOnEnemyDeath.text]);
     if (castOnCrit) critCasts.push([result, castOnCrit]);
+    if (phantomChase) chasers.push(result);
     if (seen.has(result.skill.id)) {
       throw new GemLinkError(active, `配置重複：${result.skill.id} 出現兩次（同一個技能 id 無法同時存在）`);
     }
@@ -5179,6 +5241,8 @@ function compileLoadout(gems, options = {}) {
   const spShield = mechanics.find(m => m.type === 'spShield');
   if (spShield) for (const result of compiled) withSpShield(result.skill, spShield);   // 外殼（蓄力、迴響）付 SP，本體免費，不用包
   const breakSp = mechanics.filter(m => m.type === 'shieldBreakSp').reduce((sum, m) => sum + m.sp, 0);
+  const phantom = mechanics.find(m => m.type === 'phantom');
+  if (phantom) for (const result of chasers) for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withPhantomChase(skill, phantom);
   const hasCharge = compiled.some(result => result.charge);
   const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
   return {
@@ -5189,6 +5253,7 @@ function compileLoadout(gems, options = {}) {
       ...deathCasts.flatMap(([result, text]) => buildEnemyDeathCastPassives(result, text)),
       ...buildCritCastPassives(critCasts),
       ...(breakSp > 0 ? [buildShieldBreakSpPassive(breakSp)] : []),
+      ...(phantom ? [buildPhantomPassive(phantom, equip.summonHp)] : []),
       ...(equip.reduction > 0 ? [buildReductionPassive(equip.reduction)] : []),
       ...(equip.spRegen > 0 ? [buildSpRegenPassive(equip.spRegen)] : []),
       ...(hasCharge ? [buildChargeGuardPassive()] : []),

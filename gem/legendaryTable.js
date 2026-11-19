@@ -24,6 +24,10 @@
  *                                       每個行動槽最多一次，觸發出來的那次不再觸發（同迅擊以外的觸發類規則）。
  *   { type: 'spShield', ratio, duration } 角色層級：施放技能實際扣了 SP 時，得到「魔力護盾」= 智力 × 扣的 SP × ratio，
  *                                       持續 duration 個行動槽；已有魔力護盾時取較大值並重置時間。免費施放沒扣 SP 就沒有盾。
+ *   { type: 'phantom', ratio, ratios?, name?, summonText?, chaseText? } 開戰時召喚幻影（自己的生命／攻擊／智力／防禦 × ratio，
+ *                                       ratios 可以每項分開（hp／atk／int／def／spd；spd 沒寫就照抄），生命再乘 1 + 召喚物生命；
+ *                                       爆擊、命中、閃避照抄；name、summonText 裡的 {caster} 換成玩家名字）；平常依速度普攻；這件裝備上的主動寶石施放後幻影插隊追擊一次
+ *                                       （單體跟同一個目標，其他隨機）；自己倒下時幻影消失。見 gemCompiler 的 buildPhantomPassive。
  *   { type: 'shieldBreakSp', sp }       角色層級：自己的任何護盾碎掉時，每碎一面回復 sp 點 SP（不限這件裝備給的盾）。
  *
  * ── rng 呼叫順序 ──────────────────────────────────────────────
@@ -56,15 +60,17 @@ const LEGENDARIES = {
     slot: 'weapon',
     attackStat: 'atk',
     base: [{ stat: 'atk', op: 'flat', max: 532 }],
+    // 攻擊力提高 50%：2026-11-19 補強（少了刻印的攻擊力%，比同階製作武器弱）。試過速度提高 20～40%，難度 15 仍不到製作武器，改用攻擊力%（使用者）。
     unique: [
       { scope: 'wearer', stat: 'cri', op: 'flat', max: 0.2 },
-      { scope: 'wearer', stat: 'criDmg', op: 'flat', range: [-0.3, -0.2] }
+      { scope: 'wearer', stat: 'criDmg', op: 'flat', range: [-0.3, -0.2] },
+      { scope: 'wearer', stat: 'atk', op: 'inc', max: 0.5 }
     ],
     mechanics: [{ type: 'castOnCrit', chance: 0.4, text: '{caster}連攜追擊，' }]
   },
 
   // 魔力循環法球（使用者設計，2026-11-19）：靠自循環拿 SP、補一點生存。
-  // 護盾 = 智力 × 扣的 SP × 0.1（第 5 階放魔法飛彈約生命的 9%），持續 3 槽、再放取較大值並重置；任何盾碎掉回 2 SP。
+  // 護盾 = 智力 × 扣的 SP × 0.04（2026-11-19 使用者從 0.1 削弱；第 5 階放魔法飛彈約生命的 3.5%），持續 3 槽、再放取較大值並重置；任何盾碎掉回 2 SP。
   manaorb: {
     id: 'manaorb',
     name: '魔力循環法球',
@@ -73,14 +79,31 @@ const LEGENDARIES = {
     base: [{ stat: 'int', op: 'flat', max: 532 }],
     unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
     mechanics: [
-      { type: 'spShield', ratio: 0.1, duration: 3 },
+      { type: 'spShield', ratio: 0.04, duration: 3 },
       { type: 'shieldBreakSp', sp: 2 }
     ]
+  },
+
+  // 幻影戰斧（使用者設計，2026-11-19；測試召喚物機制，之後可以做召喚物主動寶石）。
+  // 基底攻擊 +532 比照其他傳說武器（使用者沒指定）；速度 +40、召喚物生命 +40%（使用者：最高考慮 40%）。
+  phantomaxe: {
+    id: 'phantomaxe',
+    name: '幻影戰斧',
+    slot: 'weapon',
+    attackStat: 'atk',
+    base: [{ stat: 'atk', op: 'flat', max: 532 }],
+    unique: [
+      { scope: 'wearer', stat: 'spd', op: 'flat', max: 40 },
+      { scope: 'effect', kind: 'summonHp', max: 0.4 }
+    ],
+    // 幻影倍率（使用者 2026-11-19 定案）：生命、速度 ×0.5，攻擊、智力、防禦 ×0.3（原設計全部 ×0.8 太強）。
+    mechanics: [{ type: 'phantom', ratio: 0.3, ratios: { hp: 0.5, spd: 0.5 }, name: '{caster}的幻影',
+      summonText: '{caster}揮動斧頭，一道幻影浮現在{caster}的身後。', chaseText: '{caster} 隨之追擊，' }]
   }
 };
 
 const LEGENDARY_WEIGHT = { low: 60, high: 120 };
-const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp'];
+const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom'];
 
 function round(stat, op, value) {
   // 只有 flat 的整數屬性取整（同 affixTable 的修正：inc 百分比不能取整）
@@ -125,6 +148,7 @@ function describeMechanic(mechanic, supportName = id => id) {
     case 'castOnCrit': return `暴擊時有 ${Math.round(mechanic.chance * 100)}% 機率釋放一次裝備的主動寶石（不耗 SP；每個行動槽最多一次）`;
     case 'spShield': return `施放技能時依消耗的 SP 獲得護盾，持續 ${mechanic.duration} 個行動槽`;
     case 'shieldBreakSp': return `護盾破裂時獲得 ${mechanic.sp} 點 SP`;
+    case 'phantom': return '開戰時召喚幻影；裝備的主動寶石會讓幻影追擊';
     default: return mechanic.type;
   }
 }

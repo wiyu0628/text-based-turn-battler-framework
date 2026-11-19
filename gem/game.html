@@ -3867,7 +3867,7 @@ module.exports = { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_G
  * 只依賴框架公開的 Skill，不改框架任何檔案。流程與規則見 gems.js 開頭的說明。
  * 你的專案裡把下面的 require 換成 require('text-based-turn-battler-framework')。
  */
-const { Skill, Buff, random } = require('../src');
+const { Skill, Buff, Entity, random } = require('../src');
 const { ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBuffBonuses, statModifier } = require('./statLayer');
 
@@ -4582,6 +4582,66 @@ function withSpShield(skill, spec) {
   return skill;
 }
 
+/**
+ * 幻影戰斧（phantom）：開戰時在自己這一隊召喚「幻影」——屬性照自己（含裝備與 Buff）：生命／攻擊／智力／防禦 × ratio，
+ * 生命再 ×（1 + 召喚物生命）；速度、爆擊、命中、閃避照抄。幻影平常依速度自己普攻，沒有技能。
+ * 自己倒下時幻影一起消失（isAlive 綁在召喚者身上，所以勝負只看自己）。
+ */
+function buildPhantomPassive(spec, summonHp = 0) {
+  return {
+    id: 'legend_phantom',
+    trigger: 'BATTLE_START',
+    enabled: self => self.isAlive,
+    action(self, battle, logger, engine) {
+      if (!engine || engine.result) return;
+      const base = self.getEffectiveStats?.() ?? self.stats;
+      // ratios（選填）可以每項分開：{ hp, atk, int, def, spd }；沒寫的用 ratio。spd 預設照抄（1）。
+      const ratioOf = key => spec.ratios?.[key] ?? (key === 'spd' ? 1 : spec.ratio);
+      const scale = key => Math.max(key === 'hp' ? 1 : 0, Math.round((base[key] || 0) * ratioOf(key) * (key === 'hp' ? 1 + summonHp : 1)));
+      const hp = scale('hp');
+      const stats = { hp, maxHp: hp, atk: scale('atk'), int: scale('int'), def: scale('def'), sp: 0, maxSp: 0,
+        spd: Math.max(1, Math.round(base.spd * ratioOf('spd'))), cri: base.cri, criDmg: base.criDmg, hit: base.hit ?? 0, eva: base.eva ?? 0, skillCastRate: 0 };
+      const stat = self.normalAttack?.actions?.[0]?.stat ?? 'atk';
+      const fill = template => template.replaceAll('{caster}', self.name);
+      const phantom = new Entity({ id: `${self.id}_phantom`, name: fill(spec.name ?? '{caster}的幻影'), team: self.team, stats,
+        normalAttack: new Skill({ id: 'phantom_attack', name: '幻影普攻', actions: [{ type: 'DAMAGE', stat }] }), normalAttackSpCost: 0 });
+      let alive = phantom.isAlive;
+      Object.defineProperty(phantom, 'isAlive', { get: () => alive && self.isAlive, set: value => { alive = value; }, configurable: true });
+      phantom.summonerId = self.id;
+      phantom.gemPhantom = true;
+      (self.team === 'A' ? engine.teamA : engine.teamB).push(phantom);
+      self.gemPhantom = phantom;
+      logger.addLog({ type: 'SUMMON', actorId: self.id, targetId: phantom.id, message: fill(spec.summonText ?? '{caster} 召喚了幻影！') });
+    }
+  };
+}
+
+/**
+ * 幻影追擊：這件裝備上的主動寶石施放完後，幻影插隊普攻一次。
+ * 單體技能打同一個目標（還活著的話），其他（全體、目標已倒下）隨機。
+ */
+function withPhantomChase(skill, spec) {
+  const base = skill.execute;
+  skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    const start = logger?.logs?.length ?? 0;
+    const result = base.call(this, caster, allies, enemies, logger, context, options);
+    const phantom = caster.gemPhantom;
+    const engine = context?.insertAction ? context : null;
+    if (!engine || engine.result || !phantom?.isAlive || !phantom.canAct?.()) return result;
+    const single = this.actions.some(action => action.type === 'DAMAGE' && action.targetType === 'ENEMY_SINGLE');
+    const hitLog = single ? (logger.logs ?? []).slice(start).find(log => log.actorId === caster.id && log.targetId && enemies.some(e => e.id === log.targetId)) : null;
+    const target = hitLog ? enemies.find(e => e.id === hitLog.targetId && e.isAlive) : null;
+    const chase = new Skill({ id: 'phantom_chase', name: '幻影追擊', actions: [{ type: 'DAMAGE', stat: phantom.normalAttack.actions[0].stat ?? 'atk', text: { action: expandPart(spec.chaseText ?? '{caster} 隨之追擊，') } }] });
+    if (target) {
+      const select = chase._selectTargets.bind(chase);
+      chase._selectTargets = (targetType, ...rest) => (target.isAlive && targetType === 'ENEMY_SINGLE' ? [target] : select(targetType, ...rest));
+    }
+    engine.insertAction(phantom, chase);
+    return result;
+  };
+  return skill;
+}
+
 /** 護盾破裂回 SP（shieldBreakSp）：自己受到的一擊打碎幾面盾，就回幾次 sp（任何來源的盾都算）。 */
 function buildShieldBreakSpPassive(sp) {
   return {
@@ -5046,7 +5106,7 @@ function withCritEcho(skill, critEcho) {
  * 沒給就是全部 0。回傳補齊的物件。
  */
 function checkEquipment(equipment) {
-  const result = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 };
+  const result = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0, summonHp: 0 };
   if (equipment === null || equipment === undefined) return result;
   if (typeof equipment !== 'object' || Array.isArray(equipment)) throw new Error('options.equipment 必須是物件');
   for (const key of Object.keys(equipment)) {
@@ -5249,7 +5309,8 @@ function compileLoadout(gems, options = {}) {
   const seen = new Set();
   const deathCasts = [];
   const critCasts = [];
-  for (const { active, supports = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null, castOnCrit = null } of gems) {
+  const chasers = [];
+  for (const { active, supports = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null, castOnCrit = null, phantomChase = false } of gems) {
     if (!Number.isInteger(weight) || weight < MIN_WEIGHT || weight > MAX_WEIGHT) {
       throw new GemLinkError(active, `施放權重必須是 ${MIN_WEIGHT}～${MAX_WEIGHT} 的整數（收到 ${weight}）`);
     }
@@ -5261,6 +5322,7 @@ function compileLoadout(gems, options = {}) {
     result.weight = weight;
     if (castOnEnemyDeath) deathCasts.push([result, castOnEnemyDeath.text]);
     if (castOnCrit) critCasts.push([result, castOnCrit]);
+    if (phantomChase) chasers.push(result);
     if (seen.has(result.skill.id)) {
       throw new GemLinkError(active, `配置重複：${result.skill.id} 出現兩次（同一個技能 id 無法同時存在）`);
     }
@@ -5272,6 +5334,8 @@ function compileLoadout(gems, options = {}) {
   const spShield = mechanics.find(m => m.type === 'spShield');
   if (spShield) for (const result of compiled) withSpShield(result.skill, spShield);   // 外殼（蓄力、迴響）付 SP，本體免費，不用包
   const breakSp = mechanics.filter(m => m.type === 'shieldBreakSp').reduce((sum, m) => sum + m.sp, 0);
+  const phantom = mechanics.find(m => m.type === 'phantom');
+  if (phantom) for (const result of chasers) for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withPhantomChase(skill, phantom);
   const hasCharge = compiled.some(result => result.charge);
   const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
   return {
@@ -5282,6 +5346,7 @@ function compileLoadout(gems, options = {}) {
       ...deathCasts.flatMap(([result, text]) => buildEnemyDeathCastPassives(result, text)),
       ...buildCritCastPassives(critCasts),
       ...(breakSp > 0 ? [buildShieldBreakSpPassive(breakSp)] : []),
+      ...(phantom ? [buildPhantomPassive(phantom, equip.summonHp)] : []),
       ...(equip.reduction > 0 ? [buildReductionPassive(equip.reduction)] : []),
       ...(equip.spRegen > 0 ? [buildSpRegenPassive(equip.spRegen)] : []),
       ...(hasCharge ? [buildChargeGuardPassive()] : []),
@@ -5387,7 +5452,7 @@ for (const type of Object.keys(ENGRAVING_TYPES)) {
 
 const ENGRAVINGS_PER_ITEM = 2;
 const LINES_PER_ENGRAVING = 3;      // 每種刻印固定的詞綴行數；刻印時落選 1 行、取 2 行
-const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg', 'ailmentDuration', 'spRegen'];
+const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg', 'ailmentDuration', 'spRegen', 'summonHp'];   // summonHp：召喚物生命增加（2026-11-19，幻影戰斧）
 const AILMENT_DURATION_CAP = 2;   // 異常持續時間加成合計上限（槽）
 
 // 裝備基底（固定值，第 5 階滿骰）。階級用同一個 TIER_SCALE；擲值同 ROLL_MIN。
@@ -5446,7 +5511,7 @@ function rollBase(slot, tier, rng = Math.random) {
 
 /** 加總詞綴裡所有 scope 'effect' 的效果（EFFECT_KINDS；減傷與異常持續時間夾在上限）。 */
 function sumEffectAffixes(affixes) {
-  const total = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 };
+  const total = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0, summonHp: 0 };
   for (const affix of affixes) if (affix.scope === 'effect' && affix.kind in total) total[affix.kind] += affix.value;
   total.reduction = Math.min(total.reduction, REDUCTION_CAP);
   total.ailmentDuration = Math.min(total.ailmentDuration, AILMENT_DURATION_CAP);
@@ -5846,6 +5911,10 @@ module.exports = { ENERGY_CAP, SALVAGE_ENERGY, CLEAR_COST, WIN_ENERGY, addEnergy
  *                                       每個行動槽最多一次，觸發出來的那次不再觸發（同迅擊以外的觸發類規則）。
  *   { type: 'spShield', ratio, duration } 角色層級：施放技能實際扣了 SP 時，得到「魔力護盾」= 智力 × 扣的 SP × ratio，
  *                                       持續 duration 個行動槽；已有魔力護盾時取較大值並重置時間。免費施放沒扣 SP 就沒有盾。
+ *   { type: 'phantom', ratio, ratios?, name?, summonText?, chaseText? } 開戰時召喚幻影（自己的生命／攻擊／智力／防禦 × ratio，
+ *                                       ratios 可以每項分開（hp／atk／int／def／spd；spd 沒寫就照抄），生命再乘 1 + 召喚物生命；
+ *                                       爆擊、命中、閃避照抄；name、summonText 裡的 {caster} 換成玩家名字）；平常依速度普攻；這件裝備上的主動寶石施放後幻影插隊追擊一次
+ *                                       （單體跟同一個目標，其他隨機）；自己倒下時幻影消失。見 gemCompiler 的 buildPhantomPassive。
  *   { type: 'shieldBreakSp', sp }       角色層級：自己的任何護盾碎掉時，每碎一面回復 sp 點 SP（不限這件裝備給的盾）。
  *
  * ── rng 呼叫順序 ──────────────────────────────────────────────
@@ -5878,15 +5947,17 @@ const LEGENDARIES = {
     slot: 'weapon',
     attackStat: 'atk',
     base: [{ stat: 'atk', op: 'flat', max: 532 }],
+    // 攻擊力提高 50%：2026-11-19 補強（少了刻印的攻擊力%，比同階製作武器弱）。試過速度提高 20～40%，難度 15 仍不到製作武器，改用攻擊力%（使用者）。
     unique: [
       { scope: 'wearer', stat: 'cri', op: 'flat', max: 0.2 },
-      { scope: 'wearer', stat: 'criDmg', op: 'flat', range: [-0.3, -0.2] }
+      { scope: 'wearer', stat: 'criDmg', op: 'flat', range: [-0.3, -0.2] },
+      { scope: 'wearer', stat: 'atk', op: 'inc', max: 0.5 }
     ],
     mechanics: [{ type: 'castOnCrit', chance: 0.4, text: '{caster}連攜追擊，' }]
   },
 
   // 魔力循環法球（使用者設計，2026-11-19）：靠自循環拿 SP、補一點生存。
-  // 護盾 = 智力 × 扣的 SP × 0.1（第 5 階放魔法飛彈約生命的 9%），持續 3 槽、再放取較大值並重置；任何盾碎掉回 2 SP。
+  // 護盾 = 智力 × 扣的 SP × 0.04（2026-11-19 使用者從 0.1 削弱；第 5 階放魔法飛彈約生命的 3.5%），持續 3 槽、再放取較大值並重置；任何盾碎掉回 2 SP。
   manaorb: {
     id: 'manaorb',
     name: '魔力循環法球',
@@ -5895,14 +5966,31 @@ const LEGENDARIES = {
     base: [{ stat: 'int', op: 'flat', max: 532 }],
     unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
     mechanics: [
-      { type: 'spShield', ratio: 0.1, duration: 3 },
+      { type: 'spShield', ratio: 0.04, duration: 3 },
       { type: 'shieldBreakSp', sp: 2 }
     ]
+  },
+
+  // 幻影戰斧（使用者設計，2026-11-19；測試召喚物機制，之後可以做召喚物主動寶石）。
+  // 基底攻擊 +532 比照其他傳說武器（使用者沒指定）；速度 +40、召喚物生命 +40%（使用者：最高考慮 40%）。
+  phantomaxe: {
+    id: 'phantomaxe',
+    name: '幻影戰斧',
+    slot: 'weapon',
+    attackStat: 'atk',
+    base: [{ stat: 'atk', op: 'flat', max: 532 }],
+    unique: [
+      { scope: 'wearer', stat: 'spd', op: 'flat', max: 40 },
+      { scope: 'effect', kind: 'summonHp', max: 0.4 }
+    ],
+    // 幻影倍率（使用者 2026-11-19 定案）：生命、速度 ×0.5，攻擊、智力、防禦 ×0.3（原設計全部 ×0.8 太強）。
+    mechanics: [{ type: 'phantom', ratio: 0.3, ratios: { hp: 0.5, spd: 0.5 }, name: '{caster}的幻影',
+      summonText: '{caster}揮動斧頭，一道幻影浮現在{caster}的身後。', chaseText: '{caster} 隨之追擊，' }]
   }
 };
 
 const LEGENDARY_WEIGHT = { low: 60, high: 120 };
-const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp'];
+const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom'];
 
 function round(stat, op, value) {
   // 只有 flat 的整數屬性取整（同 affixTable 的修正：inc 百分比不能取整）
@@ -5947,6 +6035,7 @@ function describeMechanic(mechanic, supportName = id => id) {
     case 'castOnCrit': return `暴擊時有 ${Math.round(mechanic.chance * 100)}% 機率釋放一次裝備的主動寶石（不耗 SP；每個行動槽最多一次）`;
     case 'spShield': return `施放技能時依消耗的 SP 獲得護盾，持續 ${mechanic.duration} 個行動槽`;
     case 'shieldBreakSp': return `護盾破裂時獲得 ${mechanic.sp} 點 SP`;
+    case 'phantom': return '開戰時召喚幻影；裝備的主動寶石會讓幻影追擊';
     default: return mechanic.type;
   }
 }
@@ -6925,6 +7014,36 @@ function removeGems(save, gemId, count = 1) {
   return mutate(save, draft => takeFromStack(draft.gems, gemId, count, `寶石「${gemId}」`));
 }
 
+/** 寶石轉換一次要投入幾顆輔助寶石（使用者 2026-11-19：重複寶石的用途，3 換 1）。 */
+const GEM_CONVERT_INPUTS = 3;
+
+/**
+ * 寶石轉換：投入 GEM_CONVERT_INPUTS 顆輔助寶石（可以同種、可以混），換 1 顆輔助寶石。
+ * 給的種類從「還沒有的種類」平均抽（背包裡 0 顆、也沒鑲在任何裝備上）；全部都有時，從投入以外的種類抽；
+ * 投入涵蓋所有種類時才從全部種類抽。只用 1 個亂數。回傳 { save, gemId, fromMissing }。
+ */
+function convertGems(save, gemIds, rng = Math.random) {
+  if (!Array.isArray(gemIds) || gemIds.length !== GEM_CONVERT_INPUTS) throw new SaveError(`寶石轉換要投入 ${GEM_CONVERT_INPUTS} 顆輔助寶石`);
+  for (const id of gemIds) {
+    requireGem(id);
+    if (!Object.hasOwn(SUPPORT_GEMS, id)) throw new SaveError(`「${id}」是主動寶石，不能拿來轉換`);
+  }
+  const need = {};
+  for (const id of gemIds) need[id] = (need[id] ?? 0) + 1;
+  const socketed = {};
+  for (const item of save.equipment ?? []) for (const link of item.links ?? []) for (const id of link.supports ?? []) socketed[id] = (socketed[id] ?? 0) + 1;
+  const all = Object.keys(SUPPORT_GEMS);
+  const missing = all.filter(id => !(save.gems?.[id] > 0) && !(socketed[id] > 0));
+  const notInput = all.filter(id => !need[id]);
+  const pool = missing.length ? missing : notInput.length ? notInput : all;
+  const gemId = pool[Math.min(pool.length - 1, Math.floor(rng() * pool.length))];
+  return mutate(save, draft => {
+    for (const [id, count] of Object.entries(need)) takeFromStack(draft.gems, id, count, `寶石「${id}」`);
+    addToStack(draft.gems, gemId, 1);
+    return { gemId, fromMissing: missing.length > 0 };
+  });
+}
+
 function addEngraving(save, type, tier, count = 1) {
   requireCount(count);
   const key = stackKey(type, tier);
@@ -7334,7 +7453,7 @@ function compileEquipped(save, options = {}) {
 
 /** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */
 function equippedMechanics(save) {
-  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => m.type === 'spShield' || m.type === 'shieldBreakSp');
+  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom'].includes(m.type));
 }
 
 /** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */
@@ -7355,11 +7474,13 @@ function equippedLinks(save) {
     const granted = mechanics.filter(m => m.type === 'grantSupport').map(m => m.gem);
     const deathCast = mechanics.find(m => m.type === 'castOnEnemyDeath');
     const critCast = mechanics.find(m => m.type === 'castOnCrit');
+    const phantomChase = mechanics.some(m => m.type === 'phantom');
     return normalizeLinks(item.links).map(link => ({
       ...link, weight: item.castWeight,
       ...(granted.length ? { grantedSupports: granted } : {}),
       ...(deathCast ? { castOnEnemyDeath: { text: deathCast.text } } : {}),
-      ...(critCast ? { castOnCrit: { chance: critCast.chance, text: critCast.text } } : {})
+      ...(critCast ? { castOnCrit: { chance: critCast.chance, text: critCast.text } } : {}),
+      ...(phantomChase ? { phantomChase: true } : {})
     }));
   });
 }
@@ -7422,7 +7543,7 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
-  addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
+  convertGems, GEM_CONVERT_INPUTS, addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
   setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedMechanics, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };
@@ -7790,7 +7911,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   const QUALITY = Object.fromEntries(craft.QUALITIES.map(q => [q.id, q]));
   const KINDS = Object.keys(affix.ENGRAVING_TYPES);
   const kindName = kind => affix.ENGRAVING_TYPES[kind]?.name ?? kind;
-  const EFFECT_NAMES = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '每個行動槽回復 SP' };
+  const EFFECT_NAMES = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '每個行動槽回復 SP', summonHp: '召喚物生命' };
   function describeAffix(a) {
     if (a.scope === 'wearer') return statLayer.describeStatBonus(a).text;
     if (a.scope === 'effect') {
@@ -7822,7 +7943,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   let state = null;
   let tab = 'adventure';
   let history = [];
-  const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], salvage: { kind: null, tier: 1, count: 1 },
+  const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], convertPicks: [], salvage: { kind: null, tier: 1, count: 1 },
     workshopTab: 'craft', engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, linkErrors: {} };
 
   function loadHistory() {
@@ -8331,10 +8452,22 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     const owned = Object.entries(state.gems).filter(([, n]) => n > 0);
     const actives = owned.filter(([id]) => G.ACTIVE_GEMS[id]);
     const supports = owned.filter(([id]) => G.SUPPORT_GEMS[id]);
+    // 轉換的選擇：背包已經不夠的丟掉（例如剛鑲上去）
+    const left = Object.fromEntries(supports);
+    ui.convertPicks = ui.convertPicks.filter(id => (left[id] = (left[id] ?? 0) - 1) >= 0);
+    const cp = ui.convertPicks;
     return [h('div', { class: 'grid4' }, Object.keys(SLOT_NAMES).map(linkEditor)),
       h('div', { class: 'grid2' },
         h('div', { class: 'panel' }, h('h2', { text: '已擁有的主動寶石' }), h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: '擁有一次就能鑲在任意多件裝備上；穿在身上的裝備裡同一種只能有一顆。' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id]) => h('li', {}, h('strong', { text: gemName(id) }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有' })),
-        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), ...compiler.describePlayer(G.SUPPORT_GEMS[id]).map(text => h('div', { class: 'muted', style: 'font-size:12px', text }))))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' })))];
+        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {},
+          h('strong', { text: `${gemName(id)} ×${n}` }),
+          h('button', { class: 'small', style: 'margin-left:6px', disabled: cp.length >= S.GEM_CONVERT_INPUTS || cp.filter(x => x === id).length >= n, text: '放入轉換', onclick: () => { ui.convertPicks.push(id); render(); } }),
+          ...compiler.describePlayer(G.SUPPORT_GEMS[id]).map(text => h('div', { class: 'muted', style: 'font-size:12px', text }))))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' }),
+          h('h2', { style: 'margin-top:12px', text: `寶石轉換（${S.GEM_CONVERT_INPUTS} → 1）` }),
+          h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: `投入 ${S.GEM_CONVERT_INPUTS} 顆輔助寶石（可同種、可混），從你還沒有的種類隨機換 1 顆；全部都有時，從投入以外的種類隨機。（${cp.length} / ${S.GEM_CONVERT_INPUTS}，點已放入的可移除）` }),
+          h('div', {}, cp.map((id, i) => h('button', { class: 'small', style: 'margin:0 4px 4px 0', text: `${gemName(id)} ✕`, onclick: () => { ui.convertPicks.splice(i, 1); render(); } }))),
+          h('button', { class: 'primary', disabled: cp.length !== S.GEM_CONVERT_INPUTS, text: '轉換', onclick: () => apply(s => S.convertGems(s, cp),
+            v => { ui.convertPicks = []; return `轉換出 ${gemName(v.gemId)}${v.fromMissing ? '（你還沒有的種類）' : ''}`; }) })))];
   }
 
   // ── 畫面 ────────────────────────────────────────────────────

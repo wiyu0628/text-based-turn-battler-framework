@@ -565,3 +565,41 @@ test('遷移 v5 → v6：打贏過守門者的存檔補發火焰風暴；沒打�
   const owned = structuredClone(beaten); owned.gems.firestorm = 1;
   assert.equal(save.migrateSave(owned).gems.firestorm, 1);
 });
+
+test('寶石轉換：投入 3 顆輔助寶石，從還沒有的種類（背包 0 顆、也沒鑲上）隨機給 1 顆', () => {
+  const { SUPPORT_GEMS } = require('./gems');
+  let state = save.addGems(save.addGems(save.createStarterSave(), 'heavy', 2), 'amp', 2);
+  const r = save.convertGems(state, ['heavy', 'heavy', 'amp'], () => 0);
+  assert.equal(r.save.gems.heavy ?? 0, 0);
+  assert.equal(r.save.gems.amp, 1);
+  assert.equal(r.fromMissing, true);
+  assert.ok(!['heavy', 'amp'].includes(r.gemId));
+  assert.equal(r.save.gems[r.gemId], 1);
+  const missing = Object.keys(SUPPORT_GEMS).filter(id => !['heavy', 'amp'].includes(id));
+  assert.equal(save.convertGems(state, ['heavy', 'heavy', 'amp'], () => 0.9999999).gemId, missing.at(-1));
+  // 全部都有：從投入以外的種類抽
+  let full = save.createStarterSave();
+  for (const id of Object.keys(SUPPORT_GEMS)) full = save.addGems(full, id, 3);
+  for (let i = 0; i < 20; i++) {
+    const out = save.convertGems(full, ['heavy', 'lean', 'amp'], Math.random);
+    assert.equal(out.fromMissing, false);
+    assert.ok(!['heavy', 'lean', 'amp'].includes(out.gemId));
+  }
+  // 錯誤：數量不對、主動寶石、背包不夠（原存檔不變）
+  assert.throws(() => save.convertGems(state, ['heavy', 'amp']), /要投入 3 顆/);
+  assert.throws(() => save.convertGems(state, ['heavy', 'amp', 'rend']), /主動寶石/);
+  assert.throws(() => save.convertGems(state, ['heavy', 'heavy', 'heavy']));
+  assert.equal(state.gems.heavy, 2);
+});
+
+test('寶石轉換：鑲在裝備上的種類也算「已經有」', () => {
+  const { SUPPORT_GEMS } = require('./gems');
+  const { state, id } = stocked({ magicmissile: 1, heavy: 1, amp: 3 });
+  const linked = save.setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy'] }]);   // 強力全鑲上去，背包 0
+  for (let i = 0; i < 30; i++) {
+    const out = save.convertGems(linked, ['amp', 'amp', 'amp'], Math.random);
+    assert.notEqual(out.gemId, 'heavy');
+    assert.notEqual(out.gemId, 'amp');
+  }
+  assert.ok(Object.keys(SUPPORT_GEMS).length > 2);
+});

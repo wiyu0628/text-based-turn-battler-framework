@@ -87,7 +87,7 @@ for (const type of Object.keys(ENGRAVING_TYPES)) {
 
 const ENGRAVINGS_PER_ITEM = 2;
 const LINES_PER_ENGRAVING = 3;      // 每種刻印固定的詞綴行數；刻印時落選 1 行、取 2 行
-const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg', 'ailmentDuration', 'spRegen'];
+const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg', 'ailmentDuration', 'spRegen', 'summonHp'];   // summonHp：召喚物生命增加（2026-11-19，幻影戰斧）
 const AILMENT_DURATION_CAP = 2;   // 異常持續時間加成合計上限（槽）
 
 // 裝備基底（固定值，第 5 階滿骰）。階級用同一個 TIER_SCALE；擲值同 ROLL_MIN。
@@ -146,7 +146,7 @@ function rollBase(slot, tier, rng = Math.random) {
 
 /** 加總詞綴裡所有 scope 'effect' 的效果（EFFECT_KINDS；減傷與異常持續時間夾在上限）。 */
 function sumEffectAffixes(affixes) {
-  const total = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 };
+  const total = { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0, summonHp: 0 };
   for (const affix of affixes) if (affix.scope === 'effect' && affix.kind in total) total[affix.kind] += affix.value;
   total.reduction = Math.min(total.reduction, REDUCTION_CAP);
   total.ailmentDuration = Math.min(total.ailmentDuration, AILMENT_DURATION_CAP);
