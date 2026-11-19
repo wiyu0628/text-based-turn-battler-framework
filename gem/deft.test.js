@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Entity, Skill, BattleEngine, Formulas, createSeededRandom } = require('../src');
-const { ENGRAVING_TYPES, rollEngraving } = require('./affixTable');
+const { ENGRAVING_TYPES, TIER_SCALE, rollEngraving } = require('./affixTable');
 const { applyStatBonuses, STAT_DEFS } = require('./statLayer');
 const { KIND_SHARES } = require('./craftTable');
 
@@ -10,7 +10,7 @@ test('deft engraving: hit +150, eva +50, SPD +12% (tier 5, full roll), integer f
   assert.equal(deft.name, '靈巧');
   assert.deepEqual(deft.lines.map(l => [l.stat, l.op, l.max]), [['hit', 'flat', 150], ['eva', 'flat', 50], ['spd', 'inc', 0.12]]);
   const lines = rollEngraving('deft', 3, scripted(0.99, 0.5, 0.5));   // 落選第 3 行；命中與閃避各擲 0.85
-  assert.deepEqual(lines.map(l => [l.stat, l.value]), [['hit', Math.round(150 * 0.55 * 0.85)], ['eva', Math.round(50 * 0.55 * 0.85)]]);
+  assert.deepEqual(lines.map(l => [l.stat, l.value]), [['hit', Math.round(150 * TIER_SCALE[3] * 0.85)], ['eva', Math.round(50 * TIER_SCALE[3] * 0.85)]]);
   assert.ok(KIND_SHARES.deft, '製作裝備也能投入靈巧');
 });
 function scripted(...values) { return () => (values.length ? values.shift() : 1); }

@@ -7,11 +7,11 @@ const save = require('./saveLayer');
 
 const starter = () => save.createStarterSave({ now: '2026-01-01T00:00:00Z' });
 
-test('the first boss is a placeholder at difficulty 6 that rewards pursuit', () => {
+test('the first boss is a placeholder at difficulty 6 that rewards pursuit and firestorm', () => {
   const boss = BOSSES[0];
   assert.equal(boss.difficulty, 6);
   assert.equal(boss.placeholder, true);
-  assert.deepEqual(boss.rewards.gems, ['pursuit']);
+  assert.deepEqual(boss.rewards.gems, ['pursuit', 'firestorm']);
   const { monsters, difficulty } = buildBossEncounter(boss.id);
   assert.equal(difficulty, 6);
   assert.equal(monsters.length, 1);
@@ -49,6 +49,7 @@ test('bosses unlock in order, old ones stay available; first clear gives rewards
     const first = save.recordBossVictory(state, 'gatekeeper');
     assert.equal(first.firstClear, true);
     assert.equal(first.save.gems.pursuit, 1);
+    assert.equal(first.save.gems.firestorm, 1);
     assert.equal(state.gems.pursuit, undefined);                              // 原存檔不變
     state = first.save;
     assert.deepEqual(save.bossStatus(state).map(b => b.available), [true, true]);

@@ -425,6 +425,21 @@ test('遷移 v3 → v4：背包與裝備上的擴散（wide）都刪掉，其他
   assert.deepEqual(migrateSave({ ...linked, version: 3 }), linked);
 });
 
+test('遷移 v4 → v5：背包與裝備上的乘勢（oncrit）都刪掉，其他不變', () => {
+  const { state, id } = stocked({ rend: 1, heavy: 1 });
+  const linked = equip(setLinks(state, id, [{ active: 'rend', supports: ['heavy'] }]), id);
+  const v4 = structuredClone(linked);
+  v4.version = 4;
+  v4.gems.oncrit = 1;
+  v4.equipment[0].links[0].supports = ['oncrit', 'heavy'];
+  deepFreeze(v4);
+  const upgraded = importSave(JSON.stringify(v4));
+  assert.equal(upgraded.version, SAVE_VERSION);
+  assert.deepEqual(upgraded.gems, linked.gems);
+  assert.deepEqual(upgraded.equipment[0].links, [{ active: 'rend', supports: ['heavy'] }]);
+  assert.deepEqual(migrateSave({ ...linked, version: 4 }), linked);
+});
+
 // ── 匯出與匯入 ───────────────────────────────────────────────
 
 test('匯出再匯入：內容逐項相同', () => {
@@ -540,4 +555,13 @@ test('效能：兩百件裝備連續操作不會越來越慢（同一組連結�
   }
   assert.equal(state.equipment.length, 200);
   assert.ok(Date.now() - started < 5000, `太慢：${Date.now() - started} 毫秒`);
+});
+
+test('遷移 v5 → v6：打贏過守門者的存檔補發火焰風暴；沒打贏或已經有的不動', () => {
+  const base = save.createStarterSave();
+  const beaten = { ...structuredClone(base), version: 5, progress: { ...base.progress, defeatedBosses: ['gatekeeper'] } };
+  assert.equal(save.migrateSave(beaten).gems.firestorm, 1);
+  assert.equal(save.migrateSave({ ...structuredClone(base), version: 5 }).gems.firestorm, undefined);
+  const owned = structuredClone(beaten); owned.gems.firestorm = 1;
+  assert.equal(save.migrateSave(owned).gems.firestorm, 1);
 });

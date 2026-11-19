@@ -77,7 +77,7 @@ test('boss fights use the boss difficulty and record the first clear once', () =
     assert.equal(first.victory, true);
     assert.equal(first.difficulty, 6);
     assert.equal(first.firstClear, true);
-    assert.deepEqual(first.rewards.gems, ['pursuit']);
+    assert.deepEqual(first.rewards.gems, ['pursuit', 'firestorm']);
     assert.equal(first.save.gems.pursuit, 1);
     assert.ok(first.drops.engravings.length >= 2);                                     // 王戰比照菁英多 1 個
     const again = game.runBattle(first.save, { kind: 'boss', id: 'gatekeeper' }, 10);

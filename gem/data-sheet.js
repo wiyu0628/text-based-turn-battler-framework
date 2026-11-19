@@ -13,9 +13,11 @@ const C = require('./craftTable');
 const D = require('./dropTable');
 const E = require('./energyTable');
 const L = require('./legendaryTable');
+const { describeMechanic } = L;
 const S = require('./statLayer');
-const { describeSupport } = require('./gemCompiler');
-const { strength } = require('./difficulty');
+const { describeSupport, describePlayer } = require('./gemCompiler');
+const DIFF = require('./difficulty');
+const { strength } = DIFF;
 const game = require('./game');
 
 const SHOW_DIFFS = [1, 4, 7, 10, 13, 15];
@@ -39,12 +41,12 @@ add('角色', '角色基礎屬性與新手武器', '角色沒有等級，成長�
   ]);
 
 // ── 難度 ──
-add('難度', '難度縮放與掉落', '怪物 HP／攻擊／智力 × 倍率；命中 +10 × (難度 − 1)。刻印數量與階級只在勝利時擲；稀有怪 +2 個（兩次擲階取高）、菁英怪與 Boss +1 個。',
-  ['難度', '怪物強度等級', '屬性倍率', '怪物命中加成', '最高刻印階', '1 階', '2 階', '3 階', '4 階', '5 階', '1 個刻印', '2 個刻印', '3 個刻印', '期望刻印數', '輔助寶石機率', '傳說裝備機率', '勝利能量'],
+add('難度', '難度縮放與掉落', `怪物 HP／攻擊／智力 × 倍率；命中 +${DIFF.HIT_PER_LEVEL} × (難度 − 1)、防禦 +${DIFF.DEF_PER_LEVEL} × (難度 − 1)。刻印數量與階級只在勝利時擲；稀有怪 +2 個（兩次擲階取高）、菁英怪與 Boss +1 個。`,
+  ['難度', '怪物強度等級', '屬性倍率', '怪物命中加成', '怪物防禦加成', '最高刻印階', '1 階', '2 階', '3 階', '4 階', '5 階', '1 個刻印', '2 個刻印', '3 個刻印', '期望刻印數', '輔助寶石機率', '傳說裝備機率', '勝利能量'],
   Array.from({ length: D.MAX_DIFFICULTY }, (_, i) => i + 1).map(d => {
     const rates = D.dropRates(d);
     const count = [1, 2, 3].map(n => rates.count[n] ?? 0);
-    return [d, game.strengthLevel(d), r4(strength(d)), 10 * (d - 1), D.openTier(d), ...rates.tiers.map(pct), ...count.map(pct),
+    return [d, game.strengthLevel(d), r4(strength(d)), DIFF.HIT_PER_LEVEL * (d - 1), DIFF.DEF_PER_LEVEL * (d - 1), D.openTier(d), ...rates.tiers.map(pct), ...count.map(pct),
       r2(count[0] + 2 * count[1] + 3 * count[2]), pct(rates.gem), pct(rates.legendary), D.energyForWin(d)];
   }));
 
@@ -58,7 +60,7 @@ add('地區', '地區', `每場隻數在範圍內；稀有怪 ${pct(M.RARE_CHANC
 const rarity = def => def.rarity === 'rare' ? '稀有' : def.rarity === 'elite' ? '菁英' : '普通';
 const regionOf = id => Object.values(M.REGIONS).filter(r => r.monsters.includes(id)).map(r => r.name).join('、');
 const statsAt = (def, d) => M.buildFromDef(def, d, { id: 'x' }).stats;
-add('怪物', '怪物屬性', `倍率欄以基準怪（HP ${M.BASE_MONSTER.hp}、攻擊 ${M.BASE_MONSTER.atk}、智力 ${M.BASE_MONSTER.int}）為 1；防禦／速度／閃避是固定值。後面各難度欄是單隻、預算縮放前的實際值（遭遇戰會再依預算縮放 HP 與攻擊／智力）。`,
+add('怪物', '怪物屬性', `倍率欄以基準怪（HP ${M.BASE_MONSTER.hp}、攻擊 ${M.BASE_MONSTER.atk}、智力 ${M.BASE_MONSTER.int}）為 1；防禦是難度 1 的值（每級 +${DIFF.DEF_PER_LEVEL}），速度／閃避是固定值。後面各難度欄是單隻、預算縮放前的實際值（遭遇戰會再依預算縮放 HP 與攻擊／智力）。`,
   ['地區', 'id', '名稱', '稀有度', '出現難度', '預算成本', '傷害類型', 'HP 倍率', '攻擊倍率', '智力倍率', '防禦', '速度', '閃避', 'SP', '施放率',
     ...SHOW_DIFFS.flatMap(d => [`難度${d} HP`, `難度${d} 攻擊/智力`])],
   Object.values(M.MONSTERS).map(def => [regionOf(def.id), def.id, def.name, rarity(def), def.from, def.cost, def.spell ? '法術（智力）' : '物理（攻擊）',
@@ -118,7 +120,7 @@ add('刻印製作', '刻印：製作裝備時每個刻印貢獻的基底', `一�
   Object.entries(C.KIND_SHARES).flatMap(([id, shares]) => [1, 2, 3, 4, 5].map(t => [t === 1 ? A.ENGRAVING_TYPES[id].name : '', t,
     ...C.CRAFT_STATS.map(s => shares[s] ? r2(C.STAT_UNIT[s] * shares[s] * A.TIER_SCALE[t]) : ''), C.WEIGHT.bonus[id] ? r2(C.WEIGHT.bonus[id] * A.TIER_SCALE[t]) : ''])));
 
-add('製作', '製作：品質、部位倍率、製作詞綴', `施放權重 = round(${C.WEIGHT.max} × ${A.ROLL_MIN}～1) + Σ 刻印權重加成，夾在 ${C.WEIGHT.min}～${C.WEIGHT.cap}。製作詞綴 ${C.CRAFT_AFFIX_SLOTS} 條，數值 = 上限 × 投入刻印平均階級縮放 × ${A.ROLL_MIN}～1（品質不影響）。分解製作裝備隨機退回 ${C.SALVAGE_RETURN} 個當初投入的刻印。`,
+add('製作', '製作：品質、部位倍率、製作詞綴', `施放權重 = round(${C.WEIGHT.low}～${C.WEIGHT.high} 隨機) + Σ 刻印權重加成，夾在 ${C.WEIGHT.min}～${C.WEIGHT.cap}。製作詞綴 ${C.CRAFT_AFFIX_SLOTS} 條，數值 = 上限 × 投入刻印平均階級縮放 × ${A.ROLL_MIN}～1（品質不影響）。分解製作裝備隨機退回 ${C.SALVAGE_RETURN} 個當初投入的刻印。`,
   ['類別', '項目', ...C.CRAFT_STATS.map(statName), '機率／權重', '說明'],
   [
     ...C.QUALITIES.map(q => ['品質', q.name, ...C.CRAFT_STATS.map(() => `×${q.mult}`), pct(q.chance), '']),
@@ -135,10 +137,11 @@ function activeRow(id, gem) {
     dmg.map(a => a.targetType === 'ENEMY_ALL' ? '敵方全體' : '敵方單體').join('、') || (gem.actions.some(a => a.type === 'HEAL') ? '治療' : ''),
     dmg.map(a => `${Math.round((a.power ?? 1) * 100)}%`).join('、') || gem.actions.filter(a => a.type === 'HEAL').map(a => `${Math.round((a.power ?? 1) * 100)}%`).join('、'),
     dmg.flatMap(a => (a.ailments ?? []).map(x => `${AIL[x.kind]?.name ?? x.kind}：${x.basis === 'hit' ? '命中傷害' : '攻擊力'} × ${Math.round(x.power * 100)}%，${x.duration} 槽`)).join('；'),
+    gem.critEcho ? `施放後依爆擊率再打一次 ${Math.round(gem.critEcho.power * 100)}%（不連鎖）` : '',
     gem.tags.join('、'), source];
 }
 add('主動寶石', '主動寶石', '倍率是攻擊或智力的百分比；異常傷害吃裝備的「異常傷害增加」，持續時間吃「異常持續時間」（殘刃不延長）。',
-  ['id', '名稱', '類型', 'SP', '目標', '倍率', '附加異常', '標籤', '取得'],
+  ['id', '名稱', '類型', 'SP', '目標', '倍率', '附加異常', '特殊效果', '標籤', '取得'],
   Object.entries(G.ACTIVE_GEMS).map(([id, gem]) => activeRow(id, gem)));
 const reqText = req => {
   if (!req) return '';
@@ -150,10 +153,10 @@ const reqText = req => {
   return parts.join('；');
 };
 add('輔助寶石', '輔助寶石', `每個主動寶石最多連 ${G.MAX_SUPPORTS} 顆輔助；勝利時有機率掉 1 顆（各種等機率），見「難度」頁。`,
-  ['id', '名稱', '效果', '連結限制', '互斥組'],
+  ['id', '名稱', '背包說明', '效果（詳細規則）', '連結限制', '互斥組'],
   Object.entries(G.SUPPORT_GEMS).map(([id, gem]) => {
     const lines = describeSupport(gem).lines.map(l => l.text);
-    return [id, gem.name, lines.filter(t => !t.startsWith('互斥組')).join('；'), reqText(gem.requires), lines.find(t => t.startsWith('互斥組'))?.replace(/^互斥組：/, '').replace(/（.*$/, '') ?? ''];
+    return [id, gem.name, describePlayer(gem).join(''), lines.filter(t => !t.startsWith('互斥組')).join('；'), reqText(gem.requires), lines.find(t => t.startsWith('互斥組'))?.replace(/^互斥組：/, '').replace(/（.*$/, '') ?? ''];
   }));
 add('異常', '異常狀態', '持續時間以中招者的行動槽計；重複獲得可疊加，持續時間分別計算；不會暴擊、沒有浮動。',
   ['id', '名稱', '可延長', '說明'],
@@ -161,11 +164,11 @@ add('異常', '異常狀態', '持續時間以中招者的行動槽計；重複�
    ['lingering', AIL.lingering.name, AIL.lingering.extendable === false ? '否' : '是', '命中時以這次命中傷害 × 比例算出每次傷害，之後固定']]);
 
 // ── 傳說裝備 ──
-add('傳說裝備', '傳說裝備', '只能掉落，不能刻刻印、沒有製作詞綴、不能分解。數值依掉落難度的最高刻印階縮放，再擲 0.7～1。',
+add('傳說裝備', '傳說裝備', '只能掉落，不能刻刻印、沒有製作詞綴、不能分解。數值依掉落難度的最高刻印階縮放，再擲 0.7～1（標「固定區間」的不縮放）。施放權重 60～120。',
   ['id', '名稱', '部位', '普攻屬性', '基底（上限）', '獨有詞綴（上限）', '機制'],
   Object.values(L.LEGENDARIES).map(l => [l.id, l.name, SLOT[l.slot], l.attackStat === 'int' ? '智力' : '攻擊',
-    l.base.map(b => `${statName(b.stat)} +${b.max}`).join('、'), l.unique.map(u => `${statName(u.stat)}${u.op === 'inc' ? '提高 ' + pct(u.max) : ' +' + u.max}`).join('、'),
-    l.mechanics.map(m => m.type === 'castOnEnemyDeath' ? '敵人倒下時釋放一次裝備的主動寶石（不耗 SP）' : m.type === 'grantSupport' ? `裝備的主動寶石具有「${G.SUPPORT_GEMS[m.gem]?.name ?? m.gem}」` : m.type).join('；')]));
+    l.base.map(b => `${statName(b.stat)} +${b.max}`).join('、'), l.unique.map(u => u.range ? `${statName(u.stat)} ${pct(u.range[0])}～${pct(u.range[1])}（固定區間）` : ['cri', 'criDmg'].includes(u.stat) ? `${statName(u.stat)} +${pct(u.max)}` : `${statName(u.stat)}${u.op === 'inc' ? '提高 ' + pct(u.max) : ' +' + u.max}`).join('、'),
+    l.mechanics.map(m => describeMechanic(m, id => G.SUPPORT_GEMS[id]?.name ?? id)).join('；')]));
 
 // ── 能量 ──
 add('能量', '能量', `上限 ${E.ENERGY_CAP}，超過的部分作廢。勝利能量依該難度的最高刻印階。`,

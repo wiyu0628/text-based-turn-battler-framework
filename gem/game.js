@@ -26,7 +26,7 @@ const { rollEncounter, availableMonsters, REGIONS } = require('./monsters');
 const { buildBossEncounter, findBoss } = require('./bosses');
 const { rollDrops } = require('./dropTable');
 
-const HERO_BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 100, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };
+const HERO_BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 200, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };   // 速度 2026-11-19 加倍（原本 100）
 const HERO_NAME = '玩家';   // 預設名；玩家改過名就用 settings.playerName
 const MAX_TURNS = 40;
 

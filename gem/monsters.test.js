@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Entity, Skill, BattleEngine, Formulas, createSeededRandom } = require('../src');
 const { MONSTERS, REGIONS, RARE_CHANCE, ELITE_CHANCE, buildMonster, availableMonsters, rollEncounter } = require('./monsters');
-const { strength } = require('./difficulty');
+const { strength, DEF_PER_LEVEL } = require('./difficulty');
 const { rollDrops, RARE_BONUS, ELITE_BONUS } = require('./dropTable');
 
 // ── 資料 ──────────────────────────────────────────────────
@@ -33,14 +33,15 @@ test('difficulty unlocks new monsters and new skills', () => {
 test('monster stats = base × multiplier × difficulty strength; spell monsters use int and cannot crit or be countered', () => {
   const dog = buildMonster('dog', 10);
   assert.equal(dog.stats.maxHp, Math.round(Math.round(3000 * 0.35) * strength(10)));
-  assert.equal(dog.stats.spd, 120);
+  assert.equal(dog.stats.spd, MONSTERS.dog.stats.spd);   // 速度固定值，不隨難度（2026-11-19 加倍成 240）
   assert.equal(dog.stats.hit, 90);                                  // +10 × (10 − 1)
   const circle = buildMonster('circle', 1);
   assert.equal(circle.normalAttack.actions[0].stat, 'int');
   assert.ok(circle.normalAttack.actions[0].uncritable && circle.normalAttack.actions[0].uncounterable);
   assert.ok(circle.skills[0].actions.every(a => a.stat === 'int' && a.uncritable));
   assert.equal(buildMonster('goblin', 1).stats.eva, 250);
-  assert.equal(buildMonster('golem', 7).stats.def, 200);
+  assert.equal(buildMonster('golem', 7).stats.def, 200 + DEF_PER_LEVEL * 6);          // 防禦隨難度加法成長
+  assert.equal(buildMonster('dog', 1).stats.def, 20);
 });
 
 // ── 組戰鬥 ────────────────────────────────────────────────

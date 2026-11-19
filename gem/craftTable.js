@@ -11,7 +11,8 @@
  *       階級只影響基礎數值，不影響品質機率。
  *     品質（QUALITIES）：次等 ×1（45%）、普通 ×1.15（30%）、上等 ×1.3（15%）、精良 ×1.4（8%）、頂級 ×1.5（2%）。
  *     部位倍率（SLOT_MULT）：武器偏攻智、護甲偏血防、鞋子偏速度、頭盔居中。
- *   施放權重 = round(WEIGHT.max × (ROLL_MIN～1 隨機，與詞綴相同)) + Σ 刻印的權重加成 × TIER_SCALE，夾在 10～999。
+ *   施放權重 = round(WEIGHT.low～WEIGHT.high 均勻隨機) + Σ 刻印的權重加成 × TIER_SCALE，夾在 10～999。
+ *     區間 60～120（使用者，2026-11-19；原本 100 × 0.7～1 = 70～100）。新手武器固定 100；傳說裝備同樣 60～120。
  *     目前只有疾風、精準提高權重（WEIGHT.bonus）。
  *   製作出來的裝備帶 CRAFT_AFFIX_SLOTS（1）條「製作詞綴」，放不適合做成刻印的效果（CRAFT_AFFIXES，依 weight 抽 1 種）。
  *     數值 = 上限 × 投入刻印的平均階級縮放（10 個刻印的 TIER_SCALE 平均）× (ROLL_MIN～1 隨機，與刻印詞綴相同)；品質不影響。
@@ -44,7 +45,8 @@ const CRAFT_AFFIXES = [
 const CRAFT_STATS = ['hp', 'sp', 'atk', 'int', 'def', 'spd'];
 
 // 一個第 5 階刻印「全部點數都給這個屬性」時的值（部位倍率 1、品質 ×1）
-const STAT_UNIT = { hp: 290, sp: 20, atk: 36, int: 36, def: 15, spd: 3.1 };
+// 第二版（2026-11-19，預算 ×10）：生命、攻擊、智力、防禦 × 1.9（原本 290／36／36／15），SP 與速度不變
+const STAT_UNIT = { hp: 551, sp: 20, atk: 68.4, int: 68.4, def: 28.5, spd: 6.2 };   // 速度 2026-11-19 加倍（原本 3.1）
 
 // 每種刻印的屬性偏向（加總 1）
 const KIND_SHARES = {
@@ -73,7 +75,7 @@ const QUALITIES = [
   { id: 'supreme',  name: '頂級', mult: 1.5,  chance: 0.02 }
 ];
 
-const WEIGHT = { max: 100, bonus: { gale: 6, precise: 3 }, min: 10, cap: 999 };
+const WEIGHT = { low: 60, high: 120, bonus: { gale: 6, precise: 3 }, min: 10, cap: 999 };
 
 function normalizeInputs(engravings) {
   if (!Array.isArray(engravings) || engravings.length !== CRAFT_INPUTS) {
@@ -140,7 +142,7 @@ function rollCraft(slot, engravings, rng = Math.random) {
     .map(stat => ({ stat, op: 'flat', value: Math.round(raw[stat] * quality.mult * mult[stat]) }))
     .filter(entry => entry.value > 0);
   const bonus = inputs.reduce((sum, { type, tier }) => sum + (WEIGHT.bonus[type] ?? 0) * TIER_SCALE[tier], 0);
-  const rolledWeight = WEIGHT.max * (ROLL_MIN + (1 - ROLL_MIN) * rng());
+  const rolledWeight = WEIGHT.low + (WEIGHT.high - WEIGHT.low) * rng();   // 一樣只用一個亂數，亂數序列不變
   const castWeight = Math.min(WEIGHT.cap, Math.max(WEIGHT.min, Math.round(rolledWeight + bonus)));
   return { slot, base, castWeight, quality: quality.id, affixes: rollCraftAffixes(inputs, rng) };
 }

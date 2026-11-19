@@ -31,7 +31,7 @@ const BOSSES = [
     placeholder: true,
     monsters: [{
       id: 'gatekeeper', name: '廢都守門者',
-      stats: { hp: 1.6, atk: 0.8, def: 80, spd: 85 },
+      stats: { hp: 1.6, atk: 0.8, def: 80, spd: 170 },
       skillCastRate: 0.4,
       skills: [
         { kind: 'attack', id: 'cleave', name: '重劈', from: 1, spCost: 15, power: 1.8, target: 'single' },
@@ -40,7 +40,7 @@ const BOSSES = [
       ],
       traits: [{ kind: 'enrage', at: 0.3, stat: 'atk', mult: 1.3, text: '{caster} 的眼中燃起紅光，攻勢變得更加猛烈！' }]
     }],
-    rewards: { gems: ['pursuit'], unlockRegions: [] }
+    rewards: { gems: ['pursuit', 'firestorm'], unlockRegions: [] }
   }
 ];
 

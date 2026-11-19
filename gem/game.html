@@ -3262,7 +3262,20 @@ module.exports = { STAT_DEFS, BONUS_OPS, validateBonuses, validateBuffBonuses, s
 'use strict';
 
 /**
- * 技能串接寶石資料 v13（5 顆主動寶石 + 11 顆輔助寶石 + 互斥組 + 連結上限）
+ * 技能串接寶石資料 v18（6 顆主動寶石 + 17 顆輔助寶石 + 互斥組 + 連結上限）
+ *
+ * v18（2026-11-19）：新增主動寶石火焰風暴 firestorm（critEcho：依爆擊率額外釋放 50%，打 Boss 取得）、
+ *   輔助寶石迴響 echo（wrap kind 'echo'：開啟後每回合開始自動釋放），使用者設計。
+ *
+ * v17（2026-11-19）：新增追擊 followup（grant kind comboCast：普攻 3 連擊以上時免費施放），使用者設計。
+ *
+ * v16（2026-11-19）：新增法術會心 spellcrit（op critAsDamage）、暴怒 rage（op condInc）、吸魔 drain（reaction drainSp），使用者設計。
+ *
+ * v15（2026-11-19）：連擊改名迅擊（id multistrike 不變）；移除乘勢 oncrit（存檔 v4 → v5 刪除）；
+ *   每顆寶石加上 desc（背包說明第二行，使用者指定句子；{佔位} 由 effects 算出，見 gemCompiler.describePlayer）。
+ *
+ * v14（2026-11-19）：新增連擊 multistrike（使用者設計：原本與追加的一擊都是 45%，全部附加異常與感電）、
+ *   乘勢 oncrit（暴擊時 30% 機率免費施放；觸發時機使用者沒有指定，用我建議的「暴擊時」）。
  *
  * v13（2026-11-18）：移除擴散 wide（使用者決定）。存檔 v3 → v4 的遷移會刪掉背包與裝備上的擴散（saveLayer.js MIGRATIONS[3]）。
  * 移除寶石時一定要同時寫存檔遷移：讀檔遇到不認得的寶石會報錯、不會自動丟掉。
@@ -3306,7 +3319,8 @@ module.exports = { STAT_DEFS, BONUS_OPS, validateBonuses, validateBuffBonuses, s
  *
  * 兩者的 value 寫法一致，都是「增量」：0.3 代表 +30%，-0.15 代表 -15%。
  * 倍率最終必須大於 0（框架把 power 0 當成 1，所以編譯器會直接拒絕）。
- * 玩家看的說明文字不在這裡手寫，由 describeSupport() 依 effects 自動產生，
+ * 背包說明：第一行「與○○技能連結。」依 requires 自動產生，第二行是 desc（可用 {more}{inc}{cost}{ignoreDefense}{leech}{threshold}{chance}{cri} 等佔位）。
+ * 逐條規則說明由 describeSupport() 依 effects 自動產生，
  * 數字改了說明就跟著改，不會對不上。
  *
  * ── 編譯流程（約定）──────────────────────────────────────────────
@@ -3376,9 +3390,19 @@ module.exports = { STAT_DEFS, BONUS_OPS, validateBonuses, validateBuffBonuses, s
  *        （這是 compileLoadout 的工作；單獨呼叫 compileSkill 只會在 grants 欄位拿到資料）。
  *        kind 'opening'    戰鬥開始後的第一次行動必定施放（框架的 openingSkill；會蓋掉手寫的 openingSkill）。
  *                          SP 不夠時機會作廢，照一般流程行動。
+ *        kind 'comboCast'  自己的普攻這一槽打出 minHits 擊以上時（以第一次打中時判斷），插隊多一個行動槽免費施放；
+ *                          每槽最多一次；同類 grant 的 minHits 必須一致。
+ *        kind 'onCrit'     自己的任何一擊暴擊時（普攻、技能都算），有 chance 的機率插隊多一個行動槽，免費（不耗 SP）施放。
+ *                          每個自己的行動槽最多觸發一次；觸發出來的那次不會再觸發；同類 grant 的 chance 必須一致。
  *        kind 'lastResort' HP 第一次降到 threshold（例如 0.5 = 50%）以下時，立刻額外行動一次並施放。
  *                          額外的是一個「行動槽」，不是整個回合；觸發時若沒有付得起或沒被沉默的技能，這次機會作廢。
  *                          同類 grant 的 threshold 必須一致（validateGemData 會檢查）。
+ *   { op: 'condInc', value, when: { hpBelow } }  施放當下生命比例低於 hpBelow 時，value 加進這段的加算區（與 inc 同區）。
+ *   { op: 'critAsDamage' }               施放當下傷害 × (1 + 爆擊率 × (爆擊傷害 − 1))，乘算；爆擊率夾在 0～1。
+ *   reaction do.kind 'drainSp'（trigger AFTER_DAMAGE_DEALT）每一擊命中、目標還活著時，扣目標 ratio × SP 上限的 SP。
+ *   { op: 'repeat', times, text? }       把原本的傷害段（套用 scope、旗標之後）整段複製 times 次，接在原本動作之後、追加段之前。
+ *                                         複本沿用上一段的目標（打同一個目標；目標倒下就不再追擊），各自判定命中、暴擊，
+ *                                         異常與機率效果也各自觸發；吃得到 inc／more。text 是複本的開頭句（例如「{caster} 連擊，」）。
  *   { op: 'wrap', kind: 'charge' }        把技能拆成「外殼 + 本體」：玩家選到的是外殼，使用時只扣 SP 並掛上「蓄力中」標記；
  *                                         下一次輪到這個角色行動時，引擎的 skillSelectionResolver 把那一槽換成本體釋放。
  *                                         所以 2 個行動槽換一次釋放（比一般技能多花一槽），釋放那一槽不會再多行動一次。
@@ -3468,6 +3492,27 @@ const ACTIVE_GEMS = {
     ]
   },
 
+  // 火焰風暴（使用者設計，2026-11-19；數值是我擬的初版）：群體法術。施放後依爆擊率有機率在同一個行動槽
+  // 再打一次 50% 的火焰風暴（額外那次不再擲，不連鎖）。打 Boss 取得。
+  firestorm: {
+    id: 'firestorm',
+    name: '火焰風暴',
+    tags: ['spell', 'aoe'],
+    spCost: 15,
+    uncounterable: true,
+    critEcho: { power: 0.5, text: '火焰風暴再次席捲，' },
+    actions: [
+      {
+        type: 'DAMAGE',
+        targetType: 'ENEMY_ALL',
+        power: 0.9,
+        stat: 'int',
+        uncritable: true,
+        text: { action: '{caster} 召喚火焰風暴，' }
+      }
+    ]
+  },
+
   whirlwind: {
     id: 'whirlwind',
     name: '旋風斬',
@@ -3543,6 +3588,7 @@ const SUPPORT_GEMS = {
   heavy: {
     id: 'heavy',
     name: '強力',
+    desc: '傷害變為{more}，消耗SP提升{cost}。',
     exclusiveGroup: 'economy',
     requires: { action: { type: 'DAMAGE' } },
     addTags: [],
@@ -3556,6 +3602,7 @@ const SUPPORT_GEMS = {
   lean: {
     id: 'lean',
     name: '節能',
+    desc: '傷害變為{more}，消耗SP減少{cost}。',
     exclusiveGroup: 'economy',
     requires: { action: { type: 'DAMAGE' } },
     addTags: [],
@@ -3569,6 +3616,7 @@ const SUPPORT_GEMS = {
   amp: {
     id: 'amp',
     name: '增幅',
+    desc: '傷害增加{inc}。',
     requires: { action: { type: 'DAMAGE' } },
     addTags: [],
     effects: [
@@ -3581,6 +3629,7 @@ const SUPPORT_GEMS = {
   pierce: {
     id: 'pierce',
     name: '穿甲',
+    desc: '無視目標{ignoreDefense}防禦。',
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['pierce'],
     effects: [
@@ -3594,6 +3643,7 @@ const SUPPORT_GEMS = {
   shock: {
     id: 'shock',
     name: '感電',
+    desc: '命中的敵人受到的攻擊傷害增加{damageTaken}，持續{duration}個行動槽。',   // 使用者清單沒列，照同樣語氣寫
     requires: {
       action: { type: 'DAMAGE' },
       tags: { all: ['spell'] }
@@ -3628,6 +3678,7 @@ const SUPPORT_GEMS = {
   focus: {
     id: 'focus',
     name: '聚焦',
+    desc: '攻擊目標變為單體；傷害變為{more}。',
     requires: { action: { type: 'DAMAGE', targetType: 'ENEMY_ALL' } },
     addTags: [],
     removeTags: ['aoe'],
@@ -3642,6 +3693,7 @@ const SUPPORT_GEMS = {
   charge: {
     id: 'charge',
     name: '蓄力',
+    desc: '傷害變為{more}，消耗SP提升{cost}，使用技能前蓄力一回合。',
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['charge'],
     effects: [
@@ -3656,6 +3708,7 @@ const SUPPORT_GEMS = {
   layout: {
     id: 'layout',
     name: '佈局',
+    desc: '戰鬥開始後的第一次行動必定施放此技能。多個技能連結佈局時，隨機選一個。',
     addTags: ['opening'],
     effects: [{ op: 'grant', kind: 'opening', text: '{caster}的第一動，' }]
   },
@@ -3664,6 +3717,7 @@ const SUPPORT_GEMS = {
   trump: {
     id: 'trump',
     name: '撒手鐧',
+    desc: '生命第一次降到 {threshold} 以下時，立刻額外行動一次並施放此技能。多個技能連結撒手鐧時，隨機選一個。',
     addTags: ['lastResort'],
     effects: [{ op: 'grant', kind: 'lastResort', threshold: 0.5 }]
   },
@@ -3673,6 +3727,7 @@ const SUPPORT_GEMS = {
   leech: {
     id: 'leech',
     name: '汲取',
+    desc: '消耗SP提升{cost}。回復造成傷害的{leech}生命。',
     requires: {
       action: { type: 'DAMAGE' },
       tags: { none: ['spell'] }
@@ -3689,6 +3744,73 @@ const SUPPORT_GEMS = {
     ]
   },
 
+  // 迅擊（使用者設計，2026-11-19；原名連擊，同日改名，id 不變）：原本的一擊與追加的一擊都是 45%（合計 90%），兩擊都附加異常與感電；沒有 SP 代價。
+  // 只能連單體技能（追加的那一擊打同一個目標）。
+  multistrike: {
+    id: 'multistrike',
+    name: '迅擊',
+    desc: '傷害變為{more}，額外釋放一次技能。',
+    requires: { action: { type: 'DAMAGE', targetType: 'ENEMY_SINGLE' }, tags: { none: ['aoe'] } },
+    addTags: [],
+    effects: [
+      { op: 'repeat', times: 1, text: '{caster} 迅擊，' },
+      { op: 'more', value: -0.55 }
+    ]
+  },
+
+  // 法術會心（使用者設計，2026-11-19）：讓爆擊率與爆擊傷害在法術上有作用。
+  // 倍率用爆擊的實際平均收益 1 + 爆擊率 × (爆擊傷害 − 1)（使用者選；原案 1 + 爆擊率 × 爆擊傷害），施放當下讀取。
+  spellcrit: {
+    id: 'spellcrit',
+    name: '法術會心',
+    desc: '傷害變為（1＋爆擊率×（爆擊傷害−1））倍。',
+    requires: { action: { type: 'DAMAGE' }, tags: { all: ['spell'] } },
+    addTags: [],
+    effects: [{ op: 'critAsDamage' }]
+  },
+
+  // 暴怒（使用者設計，2026-11-19）：施放當下生命低於 50% 時，傷害 +50%（加算，跟增幅同一區）。
+  rage: {
+    id: 'rage',
+    name: '暴怒',
+    desc: '血量低於{hpBelow}時，傷害增加{condInc}。',
+    requires: { action: { type: 'DAMAGE' } },
+    addTags: [],
+    effects: [{ op: 'condInc', value: 0.5, when: { hpBelow: 0.5 } }]
+  },
+
+  // 吸魔（使用者設計，2026-11-19）：物理限定；每一擊命中時減少目標 5% SP 上限的 SP。
+  drain: {
+    id: 'drain',
+    name: '吸魔',
+    desc: '命中時減少對方{drain}SP上限的SP。',
+    requires: { action: { type: 'DAMAGE' }, tags: { none: ['spell'] } },
+    addTags: [],
+    effects: [{ op: 'reaction', trigger: 'AFTER_DAMAGE_DEALT', scope: 'thisSkill', do: { kind: 'drainSp', ratio: 0.05 } }]
+  },
+
+  // 追擊（使用者設計，2026-11-19）：普攻一次打出 3 連擊以上時，免費施放一次這個技能（每槽最多一次）。
+  // 連擊數取決於自己與目標的速度差（差 > 80 才可能 3 連擊），所以是速度流派的寶石；速度同日加倍就是為了它。
+  followup: {
+    id: 'followup',
+    name: '追擊',
+    desc: '普攻{minHits}連擊以上時釋放一次此技能。',
+    requires: {},
+    addTags: [],
+    effects: [{ op: 'grant', kind: 'comboCast', minHits: 3 }]
+  },
+
+  // 迴響（使用者設計，2026-11-19）：群體法術限定。使用時只開啟迴響（付 200% SP、不造成傷害），
+  // 之後這個技能不再被選用，每回合開始時自動免費釋放一次 40% 傷害；佈局、追擊等觸發仍可施放（開啟後施放的是傷害版）。
+  echo: {
+    id: 'echo',
+    name: '迴響',
+    desc: '傷害變為{more}，消耗SP提升{cost}。使用技能開啟迴響，自身不再使用技能，而是回合開始時自動釋放。',
+    requires: { action: { type: 'DAMAGE', targetType: 'ENEMY_ALL' }, tags: { all: ['spell'] }, gems: { none: ['charge'] } },
+    addTags: [],
+    effects: [{ op: 'more', value: -0.6 }, { op: 'cost', value: 1.0 }, { op: 'wrap', kind: 'echo' }]
+  },
+
   // 爆擊強化：使用時先替自己加上爆擊率 +15%，只持續這次施放的行動槽（duration 1 = 行動槽結束就消失），
   // 所以這次施放的每一擊都吃得到，之後的普攻與其他技能不受影響。
   // 沒有提示文字（text 留空）：BUFF 動作仍會產生一行訊息為空字串的戰報（BUFF_APPLY），顯示端要過濾空訊息。
@@ -3696,6 +3818,7 @@ const SUPPORT_GEMS = {
   critup: {
     id: 'critup',
     name: '爆擊強化',
+    desc: '爆擊率提升{cri}。',
     // 平衡第一輪：禁止連到法術（使用者決定；法術不擲爆擊骰，連了也沒有效果）
     requires: { action: { type: 'DAMAGE' }, tags: { none: ['spell'] } },
     addTags: [],
@@ -3729,7 +3852,7 @@ const SUPPORT_GEMS = {
 // 名單是我擬的佔位：追刃留給打王。王的獎勵還沒做，BOSS_REWARD_GEMS 只是記錄。
 // 治癒術暫時不給（使用者：還沒有配套的輔助寶石），列在 UNOBTAINABLE_ACTIVE_GEMS，之後再決定來源。
 const STARTING_ACTIVE_GEMS = ['magicmissile', 'whirlwind', 'rend'];
-const BOSS_REWARD_GEMS = ['pursuit'];
+const BOSS_REWARD_GEMS = ['pursuit', 'firestorm'];   // 火焰風暴 2026-11-19 加入（使用者）
 const UNOBTAINABLE_ACTIVE_GEMS = ['mend'];
 
 module.exports = { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_GEMS, ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };
@@ -3764,10 +3887,10 @@ class GemLinkError extends Error {
   }
 }
 
-const KNOWN_OPS = new Set(['inc', 'more', 'cost', 'scope', 'actionFlag', 'appendAction', 'prependAction', 'reaction', 'grant', 'wrap', 'castCondition', 'proc']);
+const KNOWN_OPS = new Set(['inc', 'more', 'cost', 'scope', 'actionFlag', 'appendAction', 'prependAction', 'reaction', 'grant', 'wrap', 'castCondition', 'proc', 'repeat', 'condInc', 'critAsDamage']);
 const CONDITION_STATS = { selfHp: { name: '自身生命', ratio: true }, enemyCount: { name: '敵人數量', ratio: false } };
-const GRANT_KINDS = new Set(['opening', 'lastResort']);
-const WRAP_KINDS = new Set(['charge']);
+const GRANT_KINDS = new Set(['opening', 'lastResort', 'onCrit', 'comboCast']);
+const WRAP_KINDS = new Set(['charge', 'echo']);
 const PROC_PER = new Set(['hit', 'target']);
 
 // ── 資料驗證 ────────────────────────────────────────────────
@@ -3780,9 +3903,15 @@ function validateGemData(supportGems, groups) {
   const problems = [];
   const finite = value => typeof value === 'number' && Number.isFinite(value);
   const lastResortThreshold = new Map(); // 'value' → 第一顆 lastResort 寶石的門檻，其餘要與它一致
+  const onCritChance = new Map();        // 'value' → 第一顆 onCrit 寶石的機率，其餘要與它一致
+  const comboMinHits = new Map();        // 'value' → 第一顆 comboCast 寶石的連擊門檻，其餘要與它一致
   for (const [key, gem] of Object.entries(supportGems)) {
     const where = `寶石「${key}」`;
     if (gem.id !== key) problems.push(`${where}的 id（${gem.id}）與登錄的鍵不一致`);
+    if (gem.desc !== undefined && typeof gem.desc !== 'string') problems.push(`${where}的 desc 必須是字串`);
+    else if (gem.desc !== undefined && Array.isArray(gem.effects)) {
+      for (const key of unknownPlaceholders(gem)) problems.push(`${where}的 desc 用到算不出來的佔位 {${key}}`);
+    }
     if (gem.exclusiveGroup !== undefined && !Object.hasOwn(groups, gem.exclusiveGroup)) {
       problems.push(`${where}的互斥組「${gem.exclusiveGroup}」沒有登錄在 GROUPS`);
     }
@@ -3848,6 +3977,19 @@ function validateGemData(supportGems, groups) {
           if (bounds.length === 2 && effect.min > effect.max) problems.push(`${where}的 castCondition min 大於 max，永遠不會成立`);
         }
       }
+      if (effect.op === 'condInc') {
+        if (!finite(effect.value)) problems.push(`${where}的 condInc 需要有限數字 value`);
+        const below = effect.when?.hpBelow;
+        if (!(finite(below) && below > 0 && below <= 1)) problems.push(`${where}的 condInc 需要 when.hpBelow（0 到 1 之間，不含 0）`);
+      }
+      if (effect.op === 'reaction' && effect.do?.kind === 'drainSp') {
+        if (effect.trigger !== 'AFTER_DAMAGE_DEALT') problems.push(`${where}的 drainSp 只能掛在 AFTER_DAMAGE_DEALT`);
+        if (!(finite(effect.do.ratio) && effect.do.ratio > 0 && effect.do.ratio <= 1)) problems.push(`${where}的 drainSp 需要 0 到 1 之間（不含 0）的 ratio`);
+      }
+      if (effect.op === 'repeat') {
+        if (!(Number.isInteger(effect.times) && effect.times >= 1)) problems.push(`${where}的 repeat 需要不小於 1 的整數 times`);
+        if (effect.text !== undefined && typeof effect.text !== 'string') problems.push(`${where}的 repeat text 必須是字串`);
+      }
       if (effect.op === 'wrap' && !WRAP_KINDS.has(effect.kind)) {
         problems.push(`${where}的 wrap 使用了未知的 kind「${effect.kind}」`);
       }
@@ -3855,6 +3997,24 @@ function validateGemData(supportGems, groups) {
         if (effect.text !== undefined && typeof effect.text !== 'string') problems.push(`${where}的 grant text 必須是字串`);
         if (!GRANT_KINDS.has(effect.kind)) {
           problems.push(`${where}的 grant 使用了未知的 kind「${effect.kind}」`);
+        } else if (effect.kind === 'comboCast') {
+          if (!(Number.isInteger(effect.minHits) && effect.minHits >= 2)) {
+            problems.push(`${where}的 comboCast 需要不小於 2 的整數 minHits`);
+          } else {
+            const seen = comboMinHits.get('value');
+            if (seen === undefined) comboMinHits.set('value', effect.minHits);
+            else if (seen !== effect.minHits) problems.push(`${where}的 comboCast minHits（${effect.minHits}）與其他寶石（${seen}）不一致；同類 grant 會合併成一個被動，門檻必須相同`);
+          }
+        } else if (effect.kind === 'onCrit') {
+          if (!(finite(effect.chance) && effect.chance > 0 && effect.chance <= 1)) {
+            problems.push(`${where}的 onCrit 需要 0 到 1 之間（不含 0）的 chance`);
+          } else {
+            const seen = onCritChance.get('value');
+            if (seen === undefined) onCritChance.set('value', effect.chance);
+            else if (seen !== effect.chance) {
+              problems.push(`${where}的 onCrit chance（${effect.chance}）與其他寶石（${seen}）不一致；同類 grant 會合併成一個被動，機率必須相同`);
+            }
+          }
         } else if (effect.kind === 'lastResort') {
           if (!(finite(effect.threshold) && effect.threshold > 0 && effect.threshold < 1)) {
             problems.push(`${where}的 lastResort 需要介於 0 與 1 之間的 threshold`);
@@ -3988,16 +4148,32 @@ function describeEffect(effect) {
     case 'reaction':
       return { kind: 'effect', text: effect.do.kind === 'leech'
         ? `造成實際傷害的 ${pct(effect.do.ratio)} 回復自身生命`
+        : effect.do.kind === 'drainSp' ? `每一擊命中時，減少目標 ${pct(effect.do.ratio)} SP 上限的 SP`
         : `${effect.trigger} 時觸發 ${effect.do.kind}` };
     case 'proc':
       return { kind: 'proc', text: `${effect.per === 'hit' ? '每一擊' : '每個被打中的敵人'}有 ${pct(effect.chance)} 機率：${effect.summary}` };
     case 'castCondition':
       return { kind: 'condition', text: describeCondition(effect) };
+    case 'condInc':
+      return { kind: 'inc', text: `生命低於 ${pct(effect.when.hpBelow)} 時，提高 ${pct(effect.value)} 傷害（加算，施放當下判斷）` };
+    case 'critAsDamage':
+      return { kind: 'more', text: '傷害額外乘上（1 + 爆擊率 ×（爆擊傷害 − 1））（乘算，施放當下讀取；爆擊率最多算到 100%）' };
+    case 'repeat':
+      return { kind: 'effect', text: `追加 ${effect.times} 次同樣的攻擊：打同一個目標，各自判定命中與暴擊、各自附加異常與機率效果（目標倒下就不再追擊）` };
     case 'wrap':
+      if (effect.kind === 'echo') {
+        return { kind: 'effect', text: '使用時只開啟迴響（付 SP、不造成傷害）；之後這個技能不再被選用，改為每回合開始時自動免費釋放一次（佈局、追擊等觸發仍可施放）' };
+      }
       return { kind: 'effect', text: '使用後需要等一個行動槽：下一次行動時自動釋放，期間不能改做別的事（SP 在使用時一次扣完）' };
     case 'grant':
       if (effect.kind === 'opening') {
         return { kind: 'effect', text: '戰鬥開始後的第一次行動必定施放此技能（多個技能連結佈局時，隨機選一個）' };
+      }
+      if (effect.kind === 'comboCast') {
+        return { kind: 'effect', text: `普攻一次打出 ${effect.minHits} 連擊以上時，立刻額外施放此技能（不耗 SP；每個行動槽最多一次；多個技能連結時，隨機選一個）` };
+      }
+      if (effect.kind === 'onCrit') {
+        return { kind: 'effect', text: `自己的任何攻擊暴擊時，有 ${pct(effect.chance)} 機率立刻額外施放此技能（不耗 SP；每個行動槽最多一次，額外施放的那次不會再觸發；多個技能連結時，隨機選一個）` };
       }
       return { kind: 'effect', text: `生命第一次降到 ${pct(effect.threshold)} 以下時，立刻額外行動一次並施放此技能（多個技能連結時，隨機選一個）` };
     default:
@@ -4021,6 +4197,65 @@ function describeSupport(gem, groups = GROUPS) {
   return { id: gem.id, name: gem.name, badges, lines };
 }
 
+// ── 背包說明（玩家看的兩行） ────────────────────────────────
+// 第一行「與○○技能連結。」由 requires 自動產生；第二行是寶石資料的 desc，裡面的 {佔位} 從 effects 算出來，
+// 所以數字改了說明就跟著改（使用者 2026-11-19 指定句子）。describeSupport() 的逐條規則留給詳細說明與數值表。
+
+/** 依連結條件產生「與○○技能連結。」 */
+function linkTargetText(gem) {
+  const action = gem.requires?.action;
+  if (!action) return '與任意技能連結。';
+  const tags = gem.requires?.tags ?? {};
+  const kind = (tags.all ?? []).includes('spell') ? '法術' : (tags.none ?? []).includes('spell') ? '物理' : '';
+  const range = action.targetType === 'ENEMY_SINGLE' ? '單體' : action.targetType === 'ENEMY_ALL' ? '群體' : '';
+  return `與${range}${kind}${action.type === 'DAMAGE' ? '攻擊' : ''}技能連結。`;
+}
+
+/** desc 可用的佔位與數值（都轉成百分比字串）。 */
+function playerPlaceholders(gem) {
+  const effects = gem.effects ?? [];
+  const values = {};
+  const mores = effects.filter(e => e.op === 'more');
+  if (mores.length) values.more = pct(mores.reduce((p, e) => p * (1 + e.value), 1));
+  const incs = effects.filter(e => e.op === 'inc');
+  if (incs.length) values.inc = pct(incs.reduce((s, e) => s + e.value, 0));
+  const costs = effects.filter(e => e.op === 'cost');
+  if (costs.length) values.cost = pct(costs.reduce((p, e) => p * (1 + e.value), 1) - 1);
+  for (const e of effects) {
+    if (e.op === 'actionFlag' && e.flag === 'ignoreDefense') values.ignoreDefense = pct(e.value);
+    if (e.op === 'reaction' && e.do?.kind === 'leech') values.leech = pct(e.do.ratio);
+    if (e.op === 'reaction' && e.do?.kind === 'drainSp') values.drain = pct(e.do.ratio);
+    if (e.op === 'condInc') { values.condInc = pct(e.value); values.hpBelow = pct(e.when.hpBelow); }
+    if (e.op === 'grant' && e.threshold !== undefined) values.threshold = pct(e.threshold);
+    if (e.op === 'grant' && e.chance !== undefined) values.chance = pct(e.chance);
+    if (e.op === 'grant' && e.minHits !== undefined) values.minHits = String(e.minHits);
+    for (const buff of e.action?.buffs ?? []) {
+      for (const bonus of buff.statBonuses ?? []) if (bonus.op === 'flat') values[bonus.stat] = pct(bonus.value);
+      if (buff.damageTaken?.multiplier !== undefined) values.damageTaken = pct(buff.damageTaken.multiplier - 1);
+      if (buff.duration !== undefined) values.duration = String(buff.duration);
+    }
+  }
+  return values;
+}
+
+/** desc 裡用到、但算不出來的佔位（資料檢查用）。 */
+function unknownPlaceholders(gem) {
+  const values = playerPlaceholders(gem);
+  return [...String(gem.desc ?? '').matchAll(/\{(\w+)\}/g)].map(m => m[1]).filter(key => values[key] === undefined);
+}
+
+/**
+ * 背包裡給玩家看的說明：[第一行（連結對象）, 第二行（desc 填好數字）]。
+ * 沒寫 desc 的寶石（例如測試用寶石）退回 describeSupport 的逐條規則。
+ */
+function describePlayer(gem) {
+  const values = playerPlaceholders(gem);
+  const body = gem.desc !== undefined
+    ? gem.desc.replace(/\{(\w+)\}/g, (all, key) => values[key] ?? all)
+    : describeSupport(gem).lines.map(line => line.text).join('；');
+  return [linkTargetText(gem), body];
+}
+
 // ── 被動 ────────────────────────────────────────────────────
 
 function buildPassive(skillId, reaction) {
@@ -4038,6 +4273,21 @@ function buildPassive(skillId, reaction) {
             message: `${self.name} 汲取了 ${healed} 點生命！` });
         }
         self.checkPassives('ON_HP_CHANGE', logger, engine);
+      }
+    };
+  }
+  // 吸魔：這個技能每一擊命中（目標還活著）就扣目標 ratio × SP 上限的 SP（無條件捨去，最多扣到 0）。
+  if (reaction.trigger === 'AFTER_DAMAGE_DEALT' && reaction.do?.kind === 'drainSp') {
+    const { ratio } = reaction.do;
+    return {
+      trigger: 'AFTER_DAMAGE_DEALT',
+      enabled: (self, hit) => self.isAlive && hit.skill?.id === skillId && hit.target?.isAlive,
+      action(self, hit, logger) {
+        const target = hit.target;
+        const lost = Math.min(target.stats.sp, Math.floor((target.stats.maxSp || 0) * ratio));
+        if (lost <= 0) return;
+        target.stats.sp -= lost;
+        logger.addLog({ type: 'TEXT', actorId: self.id, targetId: target.id, skillId, value: lost, message: `${target.name} 失去了 ${lost} 點 SP！` });
       }
     };
   }
@@ -4188,13 +4438,18 @@ function withLeadText(skill, rawText) {
  * @param {{ skill: Skill, grants: object[] }[]} compiledList compileSkill 的回傳值
  */
 function buildGrantPassives(compiledList) {
-  const candidates = { opening: [], lastResort: [] };
+  const candidates = { opening: [], lastResort: [], onCrit: [], comboCast: [] };
   let threshold = null;
-  for (const { skill, grants = [] } of compiledList) {
+  let critChance = null;
+  let comboMinHits = null;
+  for (const { skill: own, grantSkill, grants = [] } of compiledList) {
+    const skill = grantSkill ?? own;   // 迴響：觸發類要用「開啟前開啟、開啟後釋放」的分派版本
     for (const grant of grants) {
       // skill 用來判斷能不能放；use 是實際放出去的版本（有 text 時是加了開頭的複本）
       candidates[grant.kind].push({ skill, use: grant.text ? withLeadText(skill, grant.text) : skill });
       if (grant.kind === 'lastResort') threshold = grant.threshold;
+      if (grant.kind === 'onCrit') critChance = grant.chance;
+      if (grant.kind === 'comboCast') comboMinHits = grant.minHits;
     }
   }
   const passives = [];
@@ -4231,10 +4486,114 @@ function buildGrantPassives(compiledList) {
       }
     });
   }
+  // 暴擊時觸發（onCrit）：自己的任何一擊暴擊（普攻、技能都算）時擲 critChance，成功就插隊免費施放。
+  if (candidates.onCrit.length) {
+    passives.push(...buildTriggeredCast('onCrit', candidates.onCrit,
+      (self, hit) => hit.isCrit === true && random() < critChance, '{caster}乘勢追擊，'));
+  }
+  // 普攻連擊觸發（comboCast，追擊）：自己的普攻這一槽打 minHits 擊以上時，插隊免費施放（必定觸發）。
+  // 以普攻第一次打中（AFTER_DAMAGE_DEALT）時判斷；連擊數是框架這一槽算好的 hits。
+  if (candidates.comboCast.length) {
+    passives.push(...buildTriggeredCast('comboCast', candidates.comboCast,
+      (self, hit) => hit.isNormalAttack === true && hit.hits >= comboMinHits, '{caster}追擊，'));
+  }
   return passives;
 }
 
+/**
+ * 觸發式免費施放（onCrit、comboCast 共用）：自己造成傷害的某一擊符合 condition 時，插隊多一個行動槽免費（不耗 SP）施放。
+ * 每個「自己的行動槽」最多觸發一次（AFTER_ACTION 數槽）；觸發出來的那一次帶 gemTriggered 標記，它造成的傷害不再觸發。
+ * 多個技能連結同一種時隨機選一個（被沉默的跳過）。lead 是技能那一行的開頭（例如「{caster}追擊，」），跟佈局一樣接在施放行前面。
+ */
+function buildTriggeredCast(kind, entries, condition, lead) {
+  const pool = entries.map(entry => {
+    const base = withLeadText(entry.use, lead);
+    const free = Object.create(base);
+    free.gemTriggered = true;
+    free.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+      return base.execute.call(this, caster, allies, enemies, logger, context, { ...options, ignoreSp: true });
+    };
+    return { skill: entry.skill, use: withSlotCleanup(free, entry.skill.gemSlotBuffIds) };
+  });
+  let slot = 0;
+  let usedAt = -1;
+  return [{
+    id: `gem_${kind}:slot`,
+    trigger: 'AFTER_ACTION',
+    enabled: (self, ctx) => ctx?.actor === self,
+    action: () => { slot++; }
+  }, {
+    id: `gem_${kind}`,
+    trigger: 'AFTER_DAMAGE_DEALT',
+    enabled: (self, hit) => self.isAlive && !hit.skill?.gemTriggered && usedAt !== slot,
+    action(self, hit, logger, engine) {
+      if (!engine || engine.result) return;
+      if (!condition(self, hit)) return;
+      const usable = pool.filter(entry => !self.silencedBy?.(entry.skill));
+      if (!usable.length || !self.canAct?.()) return;
+      usedAt = slot;
+      engine.insertAction(self, pickOne(usable).use);
+    }
+  }];
+}
+
 // ── 裝備給的機制（傳說裝備，見 legendaryTable.js）────────────────
+
+/**
+ * 連攜匕首（castOnCrit）：自己的任何一擊暴擊時擲 chance，成功就插隊免費釋放這件裝備上的主動寶石一次。
+ * 同一件裝備上的多組連結合成一個觸發（隨機選一），規則同 buildTriggeredCast（每槽最多一次、不連鎖）。
+ * 蓄力用本體、迴響用分派版（開啟前是開啟、開啟後是傷害版），和報喪法杖相同。
+ */
+function buildCritCastPassives(critCasts) {
+  if (!critCasts.length) return [];
+  const { chance, text } = critCasts[0][1];
+  const entries = critCasts.map(([result]) => {
+    const skill = result.grantSkill ?? result.release ?? result.skill;
+    return { skill, use: skill };
+  });
+  return buildTriggeredCast('legendCrit', entries, (self, hit) => hit.isCrit === true && random() < chance, text ?? '{caster}連攜追擊，');
+}
+
+/**
+ * 魔力循環法球（spShield）：包住技能的 execute，量「這次施放實際扣掉的 SP」；有扣就給自己魔力護盾
+ * = 智力（含 Buff）× 扣的 SP × ratio。已經有魔力護盾時取較大值並重置持續時間（不疊加）。
+ */
+const MANA_SHIELD_ID = 'legend_manaShield';
+function withSpShield(skill, spec) {
+  const base = skill.execute;
+  skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    const before = caster.stats.sp;
+    const result = base.call(this, caster, allies, enemies, logger, context, options);
+    const spent = before - caster.stats.sp;
+    if (spent > 0 && caster.isAlive) {
+      const intel = (caster.getEffectiveStats?.() ?? caster.stats).int || 0;
+      const amount = Math.max(1, Math.round(intel * spent * spec.ratio));
+      const current = caster.buffs.find(buff => buff.id === MANA_SHIELD_ID);
+      if (current) {
+        current.shield.value = Math.max(current.shield.value, amount);
+        current.duration = spec.duration;
+      } else {
+        caster.addBuff({ id: MANA_SHIELD_ID, name: '魔力護盾', duration: spec.duration, shield: amount, polarity: 'positive', dispellable: true }, context);
+      }
+      logger?.addLog({ type: 'TEXT', actorId: caster.id, value: amount, message: `${caster.name} 獲得了 ${amount} 點魔力護盾！` });
+    }
+    return result;
+  };
+  return skill;
+}
+
+/** 護盾破裂回 SP（shieldBreakSp）：自己受到的一擊打碎幾面盾，就回幾次 sp（任何來源的盾都算）。 */
+function buildShieldBreakSpPassive(sp) {
+  return {
+    id: 'legend_shieldBreakSp',
+    trigger: 'AFTER_DAMAGE_RECEIVED',
+    enabled: (self, hit) => self.isAlive && (hit.shieldsBroken?.length ?? 0) > 0,
+    action(self, hit, logger) {
+      const restored = self.restoreSp(sp * hit.shieldsBroken.length, logger);
+      if (restored > 0) logger.addLog({ type: 'TEXT', actorId: self.id, value: restored, message: `${self.name} 從碎裂的護盾回復了 ${restored} 點 SP！` });
+    }
+  };
+}
 
 // 敵人倒下時，插隊多一個行動槽釋放 entry 的技能一次（不扣 SP）。
 // 框架沒有「單位倒下」的被動事件，所以在 AFTER_ACTION（每個行動槽結束、含插隊槽）與 ROUND_START 檢查
@@ -4242,7 +4601,7 @@ function buildGrantPassives(compiledList) {
 // 最後一個敵人倒下時戰鬥已經結束，不會施放。連鎖（施放又打倒別人）會再觸發，次數以敵人數量為上限。
 // 被動帶戰鬥狀態（記得哪些敵人已處理過），每場戰鬥都要重新編譯。
 function buildEnemyDeathCastPassives(entry, text) {
-  const skill = entry.release ?? entry.skill;
+  const skill = entry.grantSkill ?? entry.release ?? entry.skill;
   const free = Object.create(skill);
   free.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
     return skill.execute.call(this, caster, allies, enemies, logger, context, { ...options, ignoreSp: true });
@@ -4379,7 +4738,7 @@ function compileSkill(activeId, supportIds = [], {
   const draft = {
     tags: [...active.tags],
     actions: structuredClone(active.actions),
-    inc: [], more: [], costMult: 1, prepended: [], appended: [], reactions: [], grants: [], wraps: [], procs: []
+    inc: [], more: [], costMult: 1, prepended: [], appended: [], reactions: [], grants: [], wraps: [], procs: [], repeats: [], dynamics: []
   };
   const groupOwner = new Map();   // 互斥組 id → 先處理到的寶石 id
   const scopeWriters = new Map(); // 基準動作的索引 → { to, gemId }
@@ -4450,6 +4809,8 @@ function compileSkill(activeId, supportIds = [], {
         case 'reaction': draft.reactions.push(effect); break;
         case 'grant': draft.grants.push({ ...effect }); break;
         case 'proc': draft.procs.push(effect); break;
+        case 'repeat': draft.repeats.push(effect); break;
+        case 'condInc': case 'critAsDamage': draft.dynamics.push(effect); break;
         case 'wrap': if (!draft.wraps.includes(effect.kind)) draft.wraps.push(effect.kind); break;
         case 'castCondition': {
           // 同一個量取最嚴格的上下界；寶石依 id 字母序處理，數值相同時留先處理到的，所以與連結順序無關。
@@ -4495,10 +4856,26 @@ function compileSkill(activeId, supportIds = [], {
 
   // 動作順序：前置（依寶石 id 字母序）→ 原本的動作 → 追加。前置的是「對自己」這類動作時，
   // 緊接在後的原本第一個動作必須重新挑目標：框架預設沿用上一個動作的目標，不處理的話傷害會打到自己。
-  const actions = [...draft.prepended, ...draft.actions, ...draft.appended].map(action => {
+  // 連擊（repeat）：把套用過 scope／旗標的「原本傷害段」整段複製，接在原本的動作後面、追加段前面。
+  // 複本沿用上一段的目標（框架預設），所以打同一個目標；異常、機率效果照原段落各自觸發；開頭句換成 repeat 的 text。
+  const repeated = [];
+  for (const effect of draft.repeats) {
+    for (let i = 0; i < effect.times; i++) {
+      for (const action of draft.actions) {
+        if (action.type !== 'DAMAGE') continue;
+        const copy = structuredClone(action);
+        delete copy.spCost;
+        if (effect.text !== undefined) copy.text = { ...(copy.text || {}), action: effect.text };
+        repeated.push(copy);
+      }
+    }
+  }
+  const actions = [...draft.prepended, ...draft.actions, ...repeated, ...draft.appended].map(action => {
     const next = withStatEffects(expandText(action));
     if (next.type === 'DAMAGE') {
       next.power = round4((next.power ?? 1) * damageFactorOf(next, incSum, moreProduct, equip));
+      // 施放當下才決定的加成（暴怒、法術會心）要知道這段的加算區底數，才能把條件加算正確地加進去
+      if (draft.dynamics.length) next.gemIncBase = round4(damageFactorOf(next, incSum, 1, equip));
       // 資料欄位 ailments 不送進框架，改放 gemAilments 給被動讀。倍率不乘命中的傷害加成，
       // 只乘裝備的異常傷害增加（自己一個加算區）；basis 'hit' 讀的命中傷害本身已含命中的加成（使用者決定兩者都吃）。
       if (next.ailments) {
@@ -4520,12 +4897,66 @@ function compileSkill(activeId, supportIds = [], {
   const tags = draft.tags;
   const uncounterable = active.uncounterable === true;
 
+  if (draft.wraps.includes('echo') && draft.wraps.includes('charge')) {
+    throw new GemLinkError(activeId, '迴響與蓄力不能同時連結');
+  }
+  const critEcho = active.critEcho ?? null;
+
+  // 迴響：玩家選到的是外殼（付 SP、掛「迴響中」標記、不造成傷害），開啟後外殼不能再選；
+  // 本體（release）每回合開始時由被動插隊免費釋放。觸發類（佈局、追擊、撒手鐧、裝備的倒下釋放）用分派版本：
+  // 還沒開啟時等於外殼（開啟迴響），開啟後等於本體（造成傷害）。
+  if (draft.wraps.includes('echo')) {
+    const releaseId = `${id}#echo`;
+    const markerId = `gem_echo:${id}`;
+    const releaseActions = actions.map(action => { const next = { ...action }; delete next.spCost; return next; });
+    // 迴響釋放的每一行（全體技能每個目標一行）都寫成「○○的迴響引發△△，」，戰報看得出是自動釋放
+    const leadAt = draft.prepended.length;
+    if (releaseActions[leadAt]) releaseActions[leadAt] = { ...releaseActions[leadAt], text: { ...(releaseActions[leadAt].text || {}), action: expandPart('{caster}的迴響引發{skill}，') } };
+    let release = withDynamicDamage(new Skill({ id: releaseId, name: active.name, tags: [...tags], actions: releaseActions, uncounterable }), draft.dynamics);
+    if (critEcho) release = withCritEcho(release, critEcho);
+    release.gemLeadIndex = draft.prepended.length;
+    release.gemSlotBuffIds = slotBuffIds(releaseActions);
+    const releaseUse = release;
+    const shellAction = {
+      type: 'BUFF', targetType: 'SELF', spCost,
+      text: { action: expandPart('{caster} 開啟了迴響（{skill}）！'), buff: '' },
+      buffs: [{ id: markerId, name: '迴響中', type: 'STAT', polarity: 'neutral', duration: 1e6, stackPolicy: 'refresh', dispellable: false }]
+    };
+    const active_ = entity => entity.buffs?.some(buff => buff.id === markerId);
+    const shell = makeSkill({ id, name: active.name, tags: [...tags], actions: [shellAction] }, conditions);
+    const shellCanCast = shell.canCast.bind(shell);
+    shell.canCast = (entity, ...rest) => !active_(entity) && shellCanCast(entity, ...rest);
+    shell.gemSlotBuffIds = [];
+    const dispatch = Object.create(shell);
+    dispatch.canCast = (entity, ...rest) => active_(entity) ? release.canCast(entity, ...rest) : shellCanCast(entity, ...rest);
+    dispatch.execute = function execute(caster, ...rest) {
+      return active_(caster) ? releaseUse.execute(caster, ...rest) : shell.execute.call(this, caster, ...rest);
+    };
+    const echoPassive = {
+      id: `gem_echo_round:${id}`,
+      trigger: 'ROUND_START',
+      enabled: self => self.isAlive && active_(self),
+      action(self, round, logger, engine) {
+        if (!engine || engine.result || !self.canAct?.() || self.silencedBy?.(release)) return;
+        engine.insertAction(self, withSlotCleanup(releaseUse, release.gemSlotBuffIds));
+        engine.runInsertedActions();
+      }
+    };
+    return {
+      skill: shell, release: null, charge: null, grantSkill: dispatch, echo: { markerId, release },
+      passives: [echoPassive, ...draft.reactions.map(reaction => buildPassive(releaseId, reaction)), ...draft.procs.map(proc => buildProcPassive(releaseId, proc)),
+        ...(releaseActions.some(action => action.gemAilments) ? [buildAilmentPassive(releaseId)] : [])],
+      grants: draft.grants, conditions, spCost, damageFactor: round4(factor), links: ids
+    };
+  }
+
   // 蓄力：玩家選到的是外殼（只扣 SP、掛標記），本體等下一個行動槽由 skillSelectionResolver 換上來釋放。
   // 反應被動（汲取）要綁在本體上，因為實際造成傷害的是本體。
   if (draft.wraps.includes('charge')) {
     const releaseId = `${id}#release`;
     const markerId = `gem_charged:${releaseId}`;
-    const release = new Skill({ id: releaseId, name: active.name, tags: [...tags], actions, uncounterable });
+    let release = withDynamicDamage(new Skill({ id: releaseId, name: active.name, tags: [...tags], actions, uncounterable }), draft.dynamics);
+    if (critEcho) release = withCritEcho(release, critEcho);
     release.gemLeadIndex = draft.prepended.length;
     release.gemSlotBuffIds = slotBuffIds(actions);
     const shellAction = {
@@ -4543,13 +4974,69 @@ function compileSkill(activeId, supportIds = [], {
   }
 
   if (actions.length) actions[0] = { ...actions[0], spCost };
-  const skill = makeSkill({ id, name: active.name, tags, actions, uncounterable }, conditions);
+  let skill = withDynamicDamage(makeSkill({ id, name: active.name, tags, actions, uncounterable }, conditions), draft.dynamics);
+  if (critEcho) skill = withCritEcho(skill, critEcho);
   // 前置動作（例如爆擊強化的提示）排在技能那一行之前；佈局的開頭文字要接在技能那一行，不能接在前置動作上。
   skill.gemLeadIndex = draft.prepended.length;
   skill.gemSlotBuffIds = slotBuffIds(actions);
   const passives = [...draft.reactions.map(reaction => buildPassive(id, reaction)), ...draft.procs.map(proc => buildProcPassive(id, proc)),
     ...(actions.some(action => action.gemAilments) ? [buildAilmentPassive(id)] : [])];
   return { skill, release: null, charge: null, passives, grants: draft.grants, conditions, spCost, damageFactor: round4(factor), links: ids };
+}
+
+/**
+ * 施放當下才決定的傷害加成（condInc 暴怒、critAsDamage 法術會心）：包住 execute，
+ * 每次施放依施放者當下的狀態算出倍率，用一個暫時的變體（Object.create）帶著改好 power 的動作去打，不改技能本身。
+ *   condInc      條件成立時把 value 加進這段的加算區：power × (底數 + value) ÷ 底數
+ *   critAsDamage 乘上 1 + 爆擊率 × (爆擊傷害 − 1)（爆擊率夾在 0～1；讀含 Buff 的實際屬性）
+ */
+function withDynamicDamage(skill, dynamics) {
+  if (!dynamics.length) return skill;
+  const base = skill.execute;
+  skill.execute = function execute(caster, ...rest) {
+    const stats = caster.getEffectiveStats?.() ?? caster.stats;
+    const hpRatio = caster.stats.maxHp > 0 ? caster.stats.hp / caster.stats.maxHp : 1;
+    let inc = 0, more = 1;
+    for (const effect of dynamics) {
+      if (effect.op === 'condInc' && hpRatio < effect.when.hpBelow) inc += effect.value;
+      if (effect.op === 'critAsDamage') more *= 1 + Math.min(1, Math.max(0, stats.cri || 0)) * Math.max(0, (stats.criDmg ?? 1.5) - 1);
+    }
+    if (inc === 0 && more === 1) return base.call(this, caster, ...rest);
+    const variant = Object.create(this);
+    variant.actions = this.actions.map(action => {
+      if (action.type !== 'DAMAGE') return action;
+      const incBase = action.gemIncBase ?? 1;
+      return { ...action, power: round4(action.power * (incBase + inc) / incBase * more) };
+    });
+    return base.call(variant, caster, ...rest);
+  };
+  return skill;
+}
+
+/**
+ * 主動寶石的 critEcho（火焰風暴）：施放完後擲一次施放者的爆擊率（含 Buff，夾在 0～1），
+ * 成功就在同一個行動槽裡再打一次：傷害段 power × critEcho.power、開頭換成 critEcho.text。額外那次不再擲（不連鎖）。
+ */
+function withCritEcho(skill, critEcho) {
+  const base = skill.execute;
+  skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    const result = base.call(this, caster, allies, enemies, logger, context, options);
+    if (!caster.isAlive || !enemies.some(enemy => enemy.isAlive)) return result;
+    const stats = caster.getEffectiveStats?.() ?? caster.stats;
+    if (random() >= Math.min(1, Math.max(0, stats.cri || 0))) return result;
+    const variant = Object.create(this);
+    let first = true;
+    variant.actions = this.actions.slice(this.gemLeadIndex ?? 0).map(action => {   // 前置動作（Buff 提示）不重放
+      if (action.type !== 'DAMAGE') return action;
+      const next = { ...action, power: round4(action.power * critEcho.power) };
+      delete next.spCost;
+      if (first && critEcho.text) { next.text = { ...(next.text || {}), action: expandPart(critEcho.text) }; first = false; }
+      return next;
+    });
+    base.call(variant, caster, allies, enemies, logger, context, { ...options, ignoreSp: true });
+    return result;
+  };
+  return skill;
 }
 
 // ── 裝備的非屬性效果 ────────────────────────────────────────
@@ -4761,7 +5248,8 @@ function compileLoadout(gems, options = {}) {
   const compiled = [];
   const seen = new Set();
   const deathCasts = [];
-  for (const { active, supports = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null } of gems) {
+  const critCasts = [];
+  for (const { active, supports = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null, castOnCrit = null } of gems) {
     if (!Number.isInteger(weight) || weight < MIN_WEIGHT || weight > MAX_WEIGHT) {
       throw new GemLinkError(active, `施放權重必須是 ${MIN_WEIGHT}～${MAX_WEIGHT} 的整數（收到 ${weight}）`);
     }
@@ -4772,6 +5260,7 @@ function compileLoadout(gems, options = {}) {
     const result = grantedSupports.length ? compileWithGranted(active, supports, grantedSupports, options) : compileSkill(active, supports, options);
     result.weight = weight;
     if (castOnEnemyDeath) deathCasts.push([result, castOnEnemyDeath.text]);
+    if (castOnCrit) critCasts.push([result, castOnCrit]);
     if (seen.has(result.skill.id)) {
       throw new GemLinkError(active, `配置重複：${result.skill.id} 出現兩次（同一個技能 id 無法同時存在）`);
     }
@@ -4779,6 +5268,10 @@ function compileLoadout(gems, options = {}) {
     compiled.push(result);
   }
   const equip = checkEquipment(options.equipment);
+  const mechanics = options.mechanics ?? [];
+  const spShield = mechanics.find(m => m.type === 'spShield');
+  if (spShield) for (const result of compiled) withSpShield(result.skill, spShield);   // 外殼（蓄力、迴響）付 SP，本體免費，不用包
+  const breakSp = mechanics.filter(m => m.type === 'shieldBreakSp').reduce((sum, m) => sum + m.sp, 0);
   const hasCharge = compiled.some(result => result.charge);
   const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
   return {
@@ -4787,6 +5280,8 @@ function compileLoadout(gems, options = {}) {
       ...compiled.flatMap(result => result.passives),
       ...buildGrantPassives(compiled),
       ...deathCasts.flatMap(([result, text]) => buildEnemyDeathCastPassives(result, text)),
+      ...buildCritCastPassives(critCasts),
+      ...(breakSp > 0 ? [buildShieldBreakSpPassive(breakSp)] : []),
       ...(equip.reduction > 0 ? [buildReductionPassive(equip.reduction)] : []),
       ...(equip.spRegen > 0 ? [buildSpRegenPassive(equip.spRegen)] : []),
       ...(hasCharge ? [buildChargeGuardPassive()] : []),
@@ -4799,7 +5294,7 @@ function compileLoadout(gems, options = {}) {
   };
 }
 
-module.exports = { compileSkill, compileLoadout, buildGrantPassives, buildChargeResolver, buildWeightResolver, combineResolvers, describeSupport, validateGemData, GemLinkError };
+module.exports = { compileSkill, compileLoadout, buildGrantPassives, buildChargeResolver, buildWeightResolver, combineResolvers, describeSupport, describePlayer, validateGemData, GemLinkError };
 
 },
 "gem/affixTable.js": function (module, exports, require) {
@@ -4842,7 +5337,8 @@ module.exports = { compileSkill, compileLoadout, buildGrantPassives, buildCharge
  *   合成本身不擲數值：刻印沒有個體差異，數值是刻到裝備上時才擲（ROLL_MIN～1 × 上限）。
  */
 
-const TIER_SCALE = { 1: 0.20, 2: 0.35, 3: 0.55, 4: 0.78, 5: 1.0 };
+// 第二版（2026-11-19，難度改成 15 級約 10 倍、裝備預算 ×5 → ×10）：低階變弱、階與階拉開，原本 0.20／0.35／0.55／0.78／1.0
+const TIER_SCALE = { 1: 0.10, 2: 0.29, 3: 0.50, 4: 0.71, 5: 1.0 };
 const ROLL_MIN = 0.7;          // 擲值下限（占該階上限的比例）
 const REDUCTION_CAP = 0.5;     // 減傷率合計上限
 const COMBINE_INPUTS = 3;      // 合成一次投入的刻印數
@@ -4853,14 +5349,16 @@ const stat = (statKey, op, max) => line('stat', { stat: statKey, op, max });
 
 // 上限 = 第 5 階、滿骰、「單一詞綴行」的值。每個刻印有 3 行，刻印到裝備上時隨機取其中 2 行生效，
 // 所以數值是照「每行只有 2/3 機率出現」配的（整套 8 個刻印、16 行生效，期望值與預算一致）。
+// 第二版（2026-11-19，預算 ×10）：攻／智／生命／防禦的百分比、物理／法術傷害提高、平值生命與防禦都 × 1.9；
+// 爆擊、爆擊傷害、速度、SP、減傷、命中、閃避不變（有上限、或放大會改變手感）。
 const ENGRAVING_TYPES = {
-  fury:     { name: '猛攻', lines: [stat('atk', 'inc', 0.17), line('physDmg', { max: 0.12 }), stat('criDmg', 'flat', 0.25)] },
-  arcane:   { name: '奧術', lines: [stat('int', 'inc', 0.17), line('spellDmg', { max: 0.12 }), stat('sp', 'flat', 50)] },
+  fury:     { name: '猛攻', lines: [stat('atk', 'inc', 0.32), line('physDmg', { max: 0.23 }), stat('criDmg', 'flat', 0.25)] },
+  arcane:   { name: '奧術', lines: [stat('int', 'inc', 0.32), line('spellDmg', { max: 0.23 }), stat('sp', 'flat', 50)] },
   precise:  { name: '精準', lines: [stat('cri', 'flat', 0.08), stat('criDmg', 'flat', 0.25), stat('spd', 'inc', 0.12)] },
-  vital:    { name: '堅韌', lines: [stat('hp', 'inc', 0.21), stat('def', 'flat', 33), line('reduction', { max: 0.05 })] },
-  bulwark:  { name: '鐵壁', lines: [stat('def', 'inc', 0.25), stat('hp', 'flat', 330), line('reduction', { max: 0.065 })] },
+  vital:    { name: '堅韌', lines: [stat('hp', 'inc', 0.40), stat('def', 'flat', 63), line('reduction', { max: 0.05 })] },
+  bulwark:  { name: '鐵壁', lines: [stat('def', 'inc', 0.48), stat('hp', 'flat', 630), line('reduction', { max: 0.065 })] },
   gale:     { name: '疾風', lines: [stat('spd', 'inc', 0.21), stat('sp', 'flat', 50), stat('cri', 'flat', 0.04)] },
-  endure:   { name: '持久', lines: [stat('sp', 'flat', 75), stat('hp', 'inc', 0.08), stat('atk', 'inc', 0.065)] },
+  endure:   { name: '持久', lines: [stat('sp', 'flat', 75), stat('hp', 'inc', 0.15), stat('atk', 'inc', 0.12)] },
   // 靈巧：命中與閃避（遊戲用 hitFormula: 'contest'，命中 = 200 + hit、閃避機率 = (100 + max(0, 差距)) / (200 + |差距|)）
   deft:     { name: '靈巧', lines: [stat('hit', 'flat', 150), stat('eva', 'flat', 50), stat('spd', 'inc', 0.12)] }
 };
@@ -4894,10 +5392,10 @@ const AILMENT_DURATION_CAP = 2;   // 異常持續時間加成合計上限（槽�
 
 // 裝備基底（固定值，第 5 階滿骰）。階級用同一個 TIER_SCALE；擲值同 ROLL_MIN。
 const BASE_BY_SLOT = {
-  weapon: [{ stat: 'atk', op: 'flat', max: 215 }, { stat: 'int', op: 'flat', max: 215 }],
-  helmet: [{ stat: 'hp', op: 'flat', max: 1070 }, { stat: 'def', op: 'flat', max: 43 }],
-  armor:  [{ stat: 'hp', op: 'flat', max: 1700 }, { stat: 'def', op: 'flat', max: 75 }, { stat: 'atk', op: 'flat', max: 140 }, { stat: 'int', op: 'flat', max: 140 }],
-  boots:  [{ stat: 'hp', op: 'flat', max: 860 }, { stat: 'def', op: 'flat', max: 32 }, { stat: 'spd', op: 'flat', max: 11 }]
+  weapon: [{ stat: 'atk', op: 'flat', max: 410 }, { stat: 'int', op: 'flat', max: 410 }],
+  helmet: [{ stat: 'hp', op: 'flat', max: 2030 }, { stat: 'def', op: 'flat', max: 82 }],
+  armor:  [{ stat: 'hp', op: 'flat', max: 3230 }, { stat: 'def', op: 'flat', max: 143 }, { stat: 'atk', op: 'flat', max: 266 }, { stat: 'int', op: 'flat', max: 266 }],
+  boots:  [{ stat: 'hp', op: 'flat', max: 1630 }, { stat: 'def', op: 'flat', max: 61 }, { stat: 'spd', op: 'flat', max: 22 }]
 };
 
 const INTEGER_STATS = new Set(['hp', 'sp', 'atk', 'int', 'def', 'spd', 'hit', 'eva']);
@@ -4995,7 +5493,8 @@ module.exports = { TIER_SCALE, ROLL_MIN, REDUCTION_CAP, AILMENT_DURATION_CAP, CO
  *       階級只影響基礎數值，不影響品質機率。
  *     品質（QUALITIES）：次等 ×1（45%）、普通 ×1.15（30%）、上等 ×1.3（15%）、精良 ×1.4（8%）、頂級 ×1.5（2%）。
  *     部位倍率（SLOT_MULT）：武器偏攻智、護甲偏血防、鞋子偏速度、頭盔居中。
- *   施放權重 = round(WEIGHT.max × (ROLL_MIN～1 隨機，與詞綴相同)) + Σ 刻印的權重加成 × TIER_SCALE，夾在 10～999。
+ *   施放權重 = round(WEIGHT.low～WEIGHT.high 均勻隨機) + Σ 刻印的權重加成 × TIER_SCALE，夾在 10～999。
+ *     區間 60～120（使用者，2026-11-19；原本 100 × 0.7～1 = 70～100）。新手武器固定 100；傳說裝備同樣 60～120。
  *     目前只有疾風、精準提高權重（WEIGHT.bonus）。
  *   製作出來的裝備帶 CRAFT_AFFIX_SLOTS（1）條「製作詞綴」，放不適合做成刻印的效果（CRAFT_AFFIXES，依 weight 抽 1 種）。
  *     數值 = 上限 × 投入刻印的平均階級縮放（10 個刻印的 TIER_SCALE 平均）× (ROLL_MIN～1 隨機，與刻印詞綴相同)；品質不影響。
@@ -5028,7 +5527,8 @@ const CRAFT_AFFIXES = [
 const CRAFT_STATS = ['hp', 'sp', 'atk', 'int', 'def', 'spd'];
 
 // 一個第 5 階刻印「全部點數都給這個屬性」時的值（部位倍率 1、品質 ×1）
-const STAT_UNIT = { hp: 290, sp: 20, atk: 36, int: 36, def: 15, spd: 3.1 };
+// 第二版（2026-11-19，預算 ×10）：生命、攻擊、智力、防禦 × 1.9（原本 290／36／36／15），SP 與速度不變
+const STAT_UNIT = { hp: 551, sp: 20, atk: 68.4, int: 68.4, def: 28.5, spd: 6.2 };   // 速度 2026-11-19 加倍（原本 3.1）
 
 // 每種刻印的屬性偏向（加總 1）
 const KIND_SHARES = {
@@ -5057,7 +5557,7 @@ const QUALITIES = [
   { id: 'supreme',  name: '頂級', mult: 1.5,  chance: 0.02 }
 ];
 
-const WEIGHT = { max: 100, bonus: { gale: 6, precise: 3 }, min: 10, cap: 999 };
+const WEIGHT = { low: 60, high: 120, bonus: { gale: 6, precise: 3 }, min: 10, cap: 999 };
 
 function normalizeInputs(engravings) {
   if (!Array.isArray(engravings) || engravings.length !== CRAFT_INPUTS) {
@@ -5124,7 +5624,7 @@ function rollCraft(slot, engravings, rng = Math.random) {
     .map(stat => ({ stat, op: 'flat', value: Math.round(raw[stat] * quality.mult * mult[stat]) }))
     .filter(entry => entry.value > 0);
   const bonus = inputs.reduce((sum, { type, tier }) => sum + (WEIGHT.bonus[type] ?? 0) * TIER_SCALE[tier], 0);
-  const rolledWeight = WEIGHT.max * (ROLL_MIN + (1 - ROLL_MIN) * rng());
+  const rolledWeight = WEIGHT.low + (WEIGHT.high - WEIGHT.low) * rng();   // 一樣只用一個亂數，亂數序列不變
   const castWeight = Math.min(WEIGHT.cap, Math.max(WEIGHT.min, Math.round(rolledWeight + bonus)));
   return { slot, base, castWeight, quality: quality.id, affixes: rollCraftAffixes(inputs, rng) };
 }
@@ -5333,14 +5833,20 @@ module.exports = { ENERGY_CAP, SALVAGE_ENERGY, CLEAR_COST, WIN_ENERGY, addEnergy
  *   獨有詞綴兩種格式：
  *     { scope: 'wearer', stat, op, max }   屬性（走加成層，同刻印的屬性行）
  *     { scope: 'effect', kind, max }       非屬性效果（physDmg／spellDmg／reduction／ailmentDmg）
+ *     任一種把 max 換成 range: [低, 高] 就是**固定區間**：不乘階級縮放、不擲 0.7～1，直接在區間內均勻擲（連攜匕首的爆擊傷害減少）。
  *   武器的 attackStat 決定普攻吃 atk 或 int（傳說武器每件固定）。
- *   施放權重與製作裝備相同：round(100 × (ROLL_MIN～1))。
+ *   施放權重與製作裝備相同：round(60～120 均勻隨機)（2026-11-19 使用者，原本 100 × 0.7～1 = 70～100）。
  *
  * ── 特殊機制（mechanics，寫成程式，存檔只存 legendaryId，編譯時才查表）──────────
  *   { type: 'grantSupport', gem }       這件裝備上的主動寶石**額外**具有該輔助寶石，不佔連結位、不算進 3 顆上限。
  *                                       玩家已經連了同一顆就不重複；與主動寶石不相容（例如條件不符、互斥）時自動不套用。
  *   { type: 'castOnEnemyDeath', text }  敵人倒下時，插隊多一個行動槽釋放這件裝備上的主動寶石一次（**不扣 SP**）。
  *                                       見 gemCompiler.js 的 buildEnemyDeathCastPassive。
+ *   { type: 'castOnCrit', chance }      自己的任何一擊暴擊時擲 chance，成功就插隊免費釋放這件裝備上的主動寶石一次（多組隨機選一）；
+ *                                       每個行動槽最多一次，觸發出來的那次不再觸發（同迅擊以外的觸發類規則）。
+ *   { type: 'spShield', ratio, duration } 角色層級：施放技能實際扣了 SP 時，得到「魔力護盾」= 智力 × 扣的 SP × ratio，
+ *                                       持續 duration 個行動槽；已有魔力護盾時取較大值並重置時間。免費施放沒扣 SP 就沒有盾。
+ *   { type: 'shieldBreakSp', sp }       角色層級：自己的任何護盾碎掉時，每碎一面回復 sp 點 SP（不限這件裝備給的盾）。
  *
  * ── rng 呼叫順序 ──────────────────────────────────────────────
  *   base 每行 1 次 → unique 每行 1 次 → 施放權重 1 次。
@@ -5356,17 +5862,47 @@ const LEGENDARIES = {
     slot: 'weapon',
     attackStat: 'int',
     // 平衡第一輪：240 → 280、30% → 35%（原本比製作的第 5 階武器還弱；調整後單體 +2～3%、多隻怪 +5～10%）
-    base: [{ stat: 'int', op: 'flat', max: 280 }],
-    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.35 }],
+    base: [{ stat: 'int', op: 'flat', max: 532 }],   // 預算 ×10 後 × 1.9（原本 280、35%）
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.665 }],
     mechanics: [
       { type: 'castOnEnemyDeath', text: '{caster} 手中的報喪法杖為 {target} 敲響喪鐘！' },
       { type: 'grantSupport', gem: 'amp' }
     ]
+  },
+
+  // 連攜匕首（使用者設計，2026-11-19）：把「暴擊時釋放技能」做成武器；用爆擊傷害換爆擊率。
+  // 爆擊傷害減少是固定區間 −30～−20 個百分點（不隨難度）；觸發機率固定 40%（使用者：30～50% 挑一個，我選中間）。
+  linkdagger: {
+    id: 'linkdagger',
+    name: '連攜匕首',
+    slot: 'weapon',
+    attackStat: 'atk',
+    base: [{ stat: 'atk', op: 'flat', max: 532 }],
+    unique: [
+      { scope: 'wearer', stat: 'cri', op: 'flat', max: 0.2 },
+      { scope: 'wearer', stat: 'criDmg', op: 'flat', range: [-0.3, -0.2] }
+    ],
+    mechanics: [{ type: 'castOnCrit', chance: 0.4, text: '{caster}連攜追擊，' }]
+  },
+
+  // 魔力循環法球（使用者設計，2026-11-19）：靠自循環拿 SP、補一點生存。
+  // 護盾 = 智力 × 扣的 SP × 0.1（第 5 階放魔法飛彈約生命的 9%），持續 3 槽、再放取較大值並重置；任何盾碎掉回 2 SP。
+  manaorb: {
+    id: 'manaorb',
+    name: '魔力循環法球',
+    slot: 'weapon',
+    attackStat: 'int',
+    base: [{ stat: 'int', op: 'flat', max: 532 }],
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
+    mechanics: [
+      { type: 'spShield', ratio: 0.1, duration: 3 },
+      { type: 'shieldBreakSp', sp: 2 }
+    ]
   }
 };
 
-const LEGENDARY_WEIGHT = { max: 100 };
-const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath'];
+const LEGENDARY_WEIGHT = { low: 60, high: 120 };
+const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp'];
 
 function round(stat, op, value) {
   // 只有 flat 的整數屬性取整（同 affixTable 的修正：inc 百分比不能取整）
@@ -5386,12 +5922,14 @@ function rollLegendary(legendaryId, difficulty, rng = Math.random) {
   if (!def) throw new Error(`找不到傳說裝備「${legendaryId}」`);
   const scale = TIER_SCALE[openTier(difficulty)];
   const roll = () => ROLL_MIN + (1 - ROLL_MIN) * rng();
-  const base = def.base.map(line => ({ stat: line.stat, op: line.op, value: round(line.stat, line.op, line.max * scale * roll()) }));
+  // 每行 1 個亂數：一般行是 上限 × 階級縮放 × (0.7～1)；固定區間行直接在 range 內擲
+  const raw = line => line.range ? line.range[0] + (line.range[1] - line.range[0]) * rng() : line.max * scale * roll();
+  const base = def.base.map(line => ({ stat: line.stat, op: line.op, value: round(line.stat, line.op, raw(line)) }));
   const source = `legendary:${legendaryId}`;
   const affixes = def.unique.map(line => line.scope === 'wearer'
-    ? { scope: 'wearer', stat: line.stat, op: line.op, value: round(line.stat, line.op, line.max * scale * roll()), source }
-    : { scope: 'effect', kind: line.kind, value: round(null, null, line.max * scale * roll()), source });
-  const castWeight = Math.round(LEGENDARY_WEIGHT.max * roll());
+    ? { scope: 'wearer', stat: line.stat, op: line.op, value: round(line.stat, line.op, raw(line)), source }
+    : { scope: 'effect', kind: line.kind, value: round(null, null, raw(line)), source });
+  const castWeight = Math.round(LEGENDARY_WEIGHT.low + (LEGENDARY_WEIGHT.high - LEGENDARY_WEIGHT.low) * rng());   // 一樣只用一個亂數
   return { slot: def.slot, origin: 'drop', legendaryId, ...(def.attackStat ? { attackStat: def.attackStat } : {}), base, affixes, castWeight };
 }
 
@@ -5399,6 +5937,18 @@ function rollLegendary(legendaryId, difficulty, rng = Math.random) {
 function pickLegendary(rng = Math.random) {
   const ids = Object.keys(LEGENDARIES);
   return ids[Math.min(ids.length - 1, Math.floor(rng() * ids.length))];
+}
+
+/** 機制給玩家看的一句話（介面與數值表共用）。supportName：輔助寶石 id → 名稱。 */
+function describeMechanic(mechanic, supportName = id => id) {
+  switch (mechanic.type) {
+    case 'grantSupport': return `裝備的主動寶石具有「${supportName(mechanic.gem)}」`;
+    case 'castOnEnemyDeath': return '敵人倒下時釋放一次裝備的主動寶石（不耗 SP）';
+    case 'castOnCrit': return `暴擊時有 ${Math.round(mechanic.chance * 100)}% 機率釋放一次裝備的主動寶石（不耗 SP；每個行動槽最多一次）`;
+    case 'spShield': return `施放技能時依消耗的 SP 獲得護盾，持續 ${mechanic.duration} 個行動槽`;
+    case 'shieldBreakSp': return `護盾破裂時獲得 ${mechanic.sp} 點 SP`;
+    default: return mechanic.type;
+  }
 }
 
 /** 一件裝備的特殊機制（依 legendaryId 查表；不是傳說裝備回傳空陣列）。 */
@@ -5410,6 +5960,12 @@ function mechanicsOf(item) {
 for (const def of Object.values(LEGENDARIES)) {
   if (!['weapon', 'helmet', 'armor', 'boots'].includes(def.slot)) throw new Error(`傳說裝備「${def.id}」的部位不對`);
   if (def.attackStat !== undefined && (def.slot !== 'weapon' || !['atk', 'int'].includes(def.attackStat))) throw new Error(`傳說裝備「${def.id}」的 attackStat 只能是武器的 atk 或 int`);
+  for (const line of [...def.base, ...def.unique]) {
+    if (line.range !== undefined && !(Array.isArray(line.range) && line.range.length === 2 && line.range.every(Number.isFinite) && line.range[0] <= line.range[1])) {
+      throw new Error(`傳說裝備「${def.id}」的 range 要是 [低, 高]`);
+    }
+    if (line.range === undefined && !Number.isFinite(line.max)) throw new Error(`傳說裝備「${def.id}」的詞綴要有 max 或 range`);
+  }
   for (const line of def.unique) {
     if (line.scope === 'effect' && !EFFECT_KINDS.includes(line.kind)) throw new Error(`傳說裝備「${def.id}」的效果「${line.kind}」不存在`);
     if (!['wearer', 'effect'].includes(line.scope)) throw new Error(`傳說裝備「${def.id}」的獨有詞綴只能是 wearer 或 effect`);
@@ -5419,7 +5975,7 @@ for (const def of Object.values(LEGENDARIES)) {
   }
 }
 
-module.exports = { LEGENDARIES, MECHANIC_TYPES, rollLegendary, pickLegendary, mechanicsOf };
+module.exports = { LEGENDARIES, MECHANIC_TYPES, rollLegendary, pickLegendary, mechanicsOf, describeMechanic };
 
 },
 "gem/difficulty.js": function (module, exports, require) {
@@ -5429,16 +5985,23 @@ module.exports = { LEGENDARIES, MECHANIC_TYPES, rollLegendary, pickLegendary, me
  * 難度縮放（初版，數值是我擬的佔位）：怪物的屬性怎麼隨難度 1～15 成長。純函式，不依賴框架。
  *
  * ── 公式 ──────────────────────────────────────────────────────
- *   強度倍率 M(難度) = BASE × GROWTH^(難度 − 1) = 1.07 × 1.115^(難度 − 1)
- *     難度 1 ≈ 1.07、5 ≈ 1.65、10 ≈ 2.85、15 ≈ 4.91。
- *   生命、攻擊、智力 × M；命中 + HIT_PER_LEVEL × (難度 − 1)。
- *   防禦、速度、SP、閃避、爆擊**不隨難度變**，由怪物種類自己決定：
- *     防禦的減傷是 300/(def+300)，跟著難度乘上去曲線會失控；速度差決定連擊段數，縮放會讓手感劇變。
+ *   強度倍率 M(難度) = BASE × GROWTH^(難度 − 1) = 1.07 × 1.153^(難度 − 1)
+ *     難度 1 ≈ 1.07、5 ≈ 1.89、10 ≈ 3.85、15 ≈ 7.85。
+ *   生命、攻擊、智力 × M；命中 + HIT_PER_LEVEL × (難度 − 1)；**防禦 + DEF_PER_LEVEL × (難度 − 1)**（加法，基準怪 50 → 難度 15 302）。
+ *   速度、SP、閃避、爆擊**不隨難度變**，由怪物種類自己決定（速度差決定連擊段數，縮放會讓手感劇變）。
+ *   防禦用加法、不用乘法：減傷是 300/(def+300)，乘上去高防禦的怪（魔像 200）會失控。
+ *
+ * ── 第二版（2026-11-19，使用者決定）──────────────────────────────
+ *   目標：難度 15 約是難度 1 的 **10 倍**（以難度 1 為基準拉高上限，讓越級變難）；裝備預算同步從 ×5 拉到約 ×10。
+ *   10 倍裡包含防禦成長：防禦 50 → 300 讓第 5 階整套能打的倍率從 5.67 降到 4.17（約等於怪物 ×1.36），
+ *   所以生命／攻擊只成長 7.85 ÷ 1.07 ≈ 7.3 倍（每級 ×1.153），7.3 × 1.36 ≈ 10。
+ *   第一版：1.07 × 1.115^(難度 − 1)（難度 15 ≈ 4.6 倍）、防禦不成長。
  *   遊戲用 hitFormula: 'contest'（命中 = 200 + hit）。
  *
  * ── 怎麼定出來的（node gem/difficulty-check.js 驗證）──────────────
  *   先量「各階一整套裝備（講究配方）能打贏多強的怪」：怪物生命與攻擊同乘 m，找勝率 75% 的 m。
- *   物理 build（比法術弱，當基準）：空手 1.13、第 1 階 1.72、第 2 階 2.22、第 3 階 3.02、第 4 階 4.15、第 5 階 5.49。
+ *   物理 build（比法術弱，當基準；防禦 50）：空手 1.17、第 1 階 1.66、第 2 階 2.96、第 3 階 4.74、第 4 階 7.78、第 5 階 12.3
+ *   （第二版；第一版是 1.13／1.72／2.22／3.02／4.15／5.49）。
  *   勝率對 m 很敏感（75% 與 50% 只差約 5%），所以曲線要同時滿足：
  *     入段：拿上一階整套，能穩定打這段的第一個難度（3、7、10、13）。
  *     段末：拿這一階整套，能穩定打這段的最後一個難度（2、6、9、12、15）。
@@ -5446,8 +6009,9 @@ module.exports = { LEGENDARIES, MECHANIC_TYPES, rollLegendary, pickLegendary, me
  *   基準怪（M = 1）就是 affix-budget.js 的 FOE：生命 3000、攻擊 90、防禦 50、速度 90、SP 200。
  */
 
-const DIFFICULTY_SCALE = { base: 1.07, growth: 1.115 };
+const DIFFICULTY_SCALE = { base: 1.07, growth: 1.153 };
 const HIT_PER_LEVEL = 10;
+const DEF_PER_LEVEL = 18;
 const MIN_DIFFICULTY = 1;
 const MAX_DIFFICULTY = 15;
 
@@ -5465,7 +6029,7 @@ function strength(difficulty) {
 
 /**
  * 把怪物的基礎屬性縮放到某難度（回傳新物件，不改傳入的）。
- * hp／maxHp／atk／int 乘 M 後取整；hit 加上 HIT_PER_LEVEL × (難度 − 1)；其他原樣保留。
+ * hp／maxHp／atk／int 乘 M 後取整；hit 加上 HIT_PER_LEVEL × (難度 − 1)、def 加上 DEF_PER_LEVEL × (難度 − 1)；其他原樣保留。
  */
 function scaleMonster(stats, difficulty) {
   const m = strength(difficulty);
@@ -5473,10 +6037,11 @@ function scaleMonster(stats, difficulty) {
   for (const key of ['hp', 'maxHp', 'atk', 'int']) if (typeof stats[key] === 'number') out[key] = Math.round(stats[key] * m);
   if (out.maxHp === undefined && typeof out.hp === 'number') out.maxHp = out.hp;
   out.hit = (stats.hit ?? 0) + HIT_PER_LEVEL * (difficulty - 1);
+  if (typeof stats.def === 'number') out.def = stats.def + DEF_PER_LEVEL * (difficulty - 1);
   return out;
 }
 
-module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICULTY, strength, scaleMonster };
+module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, DEF_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICULTY, strength, scaleMonster };
 
 },
 "gem/monsters.js": function (module, exports, require) {
@@ -5494,6 +6059,7 @@ module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICUL
  *
  * ── 數值 ──────────────────────────────────────────────────────
  *   怪物屬性寫成「基準怪（BASE_MONSTER，強度 1）的倍率」：hp、atk、int 是倍率，def、spd、eva、hit 是固定值。
+ *   速度 2026-11-19 全部加倍（使用者：玩家、怪物、裝備的平值速度一起 ×2，讓連擊更常出現；百分比不動）。
  *   組戰鬥時：基準 × 倍率 × 預算正規化 → difficulty.scaleMonster（× 難度強度 M、命中 + 10／級）。
  *   技能的護盾、治療、持續傷害數值在組戰鬥時用怪物「縮放後」的屬性算好（框架的 Buff 是固定值）。
  *
@@ -5511,7 +6077,7 @@ const { Entity, Skill } = require('../src');
 const { scaleMonster } = require('./difficulty');
 
 // 基準怪（強度 1）：與 affix-budget.js 的 FOE 相同
-const BASE_MONSTER = { hp: 3000, atk: 90, int: 90, def: 50, spd: 90, sp: 200 };
+const BASE_MONSTER = { hp: 3000, atk: 90, int: 90, def: 50, spd: 180, sp: 200 };
 const RARE_CHANCE = 0.03;
 const ELITE_CHANCE = 0.15;
 
@@ -5519,7 +6085,7 @@ const MONSTERS = {
   // ── 廢都 ──
   dog: {
     id: 'dog', name: '憤怒野犬', from: 1, cost: 0.35,
-    stats: { hp: 0.35, atk: 0.4, def: 20, spd: 120 },
+    stats: { hp: 0.35, atk: 0.4, def: 20, spd: 240 },
     skills: [
       { kind: 'attack', id: 'bite', name: '撕咬', from: 1, spCost: 10, power: 1.4, target: 'single' },
       { kind: 'buff', id: 'howl', name: '狂吠', from: 7, spCost: 10, target: 'self', stat: 'atk', mult: 1.3, duration: 3 },
@@ -5528,7 +6094,7 @@ const MONSTERS = {
   },
   circle: {
     id: 'circle', name: '守衛魔法陣', from: 1, cost: 0.45, spell: true,
-    stats: { hp: 0.4, atk: 0, int: 0.5, def: 80, spd: 70 },
+    stats: { hp: 0.4, atk: 0, int: 0.5, def: 80, spd: 140 },
     skills: [
       { kind: 'attack', id: 'arcane_blast', name: '魔力衝擊', from: 1, spCost: 10, power: 1.4, target: 'single' },
       { kind: 'shield', id: 'ward', name: '防護結界', from: 7, spCost: 15, target: 'allyAll', ratio: 0.08, duration: 3 },
@@ -5538,16 +6104,17 @@ const MONSTERS = {
   doll: {
     // 一場最多 1 隻（使用者決定，2026-11-19）：兩隻會互相補到 40 回合平手
     id: 'doll', name: '修繕人偶', from: 3, cost: 0.3, spell: true, skillCastRate: 0.5, maxPerEncounter: 1,
-    stats: { hp: 0.35, atk: 0, int: 0.4, def: 40, spd: 100 },
+    stats: { hp: 0.35, atk: 0, int: 0.4, def: 40, spd: 200 },
     skills: [
-      { kind: 'heal', id: 'mend_ally', name: '修補', from: 3, spCost: 10, target: 'allySingle', power: 3 },
+      // 修補 300% → 200%（使用者，2026-11-19）：難度 10 倍之後「野犬＋人偶」在高難度太難打（難度 15 拿第 5 階只有 32%）
+      { kind: 'heal', id: 'mend_ally', name: '修補', from: 3, spCost: 10, target: 'allySingle', power: 2 },
       { kind: 'shield', id: 'reinforce', name: '加固', from: 7, spCost: 10, target: 'allySingle', ratio: 0.25, duration: 3 },
       { kind: 'heal', id: 'overhaul', name: '緊急修復', from: 13, spCost: 20, target: 'allyAll', power: 2 }
     ]
   },
   goblin: {
     id: 'goblin', name: '地精', from: 1, cost: 0.3, rarity: 'rare',
-    stats: { hp: 0.3, atk: 0.3, def: 20, spd: 130, eva: 250 },
+    stats: { hp: 0.3, atk: 0.3, def: 20, spd: 260, eva: 250 },
     skills: [
       { kind: 'attack', id: 'sneak', name: '偷襲', from: 1, spCost: 10, power: 1.2, target: 'single' },
       { kind: 'buff', id: 'smoke', name: '煙霧彈', from: 7, spCost: 15, target: 'self', stat: 'eva', mult: 1.6, duration: 2 }
@@ -5555,7 +6122,7 @@ const MONSTERS = {
   },
   golem: {
     id: 'golem', name: '自動魔像', from: 7, cost: 1.0, rarity: 'elite',
-    stats: { hp: 1.0, atk: 1.1, def: 200, spd: 50 },
+    stats: { hp: 1.0, atk: 1.1, def: 200, spd: 100 },
     skills: [
       { kind: 'attack', id: 'slam', name: '重擊', from: 7, spCost: 20, power: 2.0, target: 'single' },
       { kind: 'buff', id: 'plating', name: '裝甲強化', from: 10, spCost: 15, target: 'self', stat: 'def', mult: 1.5, duration: 3 },
@@ -5566,7 +6133,7 @@ const MONSTERS = {
   // ── 地下水道 ──
   rat: {
     id: 'rat', name: '鏽蝕老鼠', from: 1, cost: 0.15,
-    stats: { hp: 0.15, atk: 0.18, def: 10, spd: 110 },
+    stats: { hp: 0.15, atk: 0.18, def: 10, spd: 220 },
     skills: [
       { kind: 'attack', id: 'gnaw', name: '啃咬', from: 1, spCost: 8, power: 1.2, target: 'single' },
       { kind: 'attack', id: 'plague_bite', name: '病菌啃咬', from: 7, spCost: 10, power: 1.0, target: 'single', dot: { name: '病菌', power: 0.3, duration: 3 } },
@@ -5575,7 +6142,7 @@ const MONSTERS = {
   },
   tentacle: {
     id: 'tentacle', name: '管線觸手', from: 1, cost: 0.3,
-    stats: { hp: 0.35, atk: 0.35, def: 60, spd: 80 },
+    stats: { hp: 0.35, atk: 0.35, def: 60, spd: 160 },
     skills: [
       { kind: 'attack', id: 'lash', name: '鞭打', from: 1, spCost: 10, power: 1.3, target: 'single' },
       { kind: 'buff', id: 'entangle', name: '纏繞', from: 7, spCost: 12, target: 'enemy', stat: 'spd', mult: 0.8, duration: 2 },
@@ -5584,7 +6151,7 @@ const MONSTERS = {
   },
   slime: {
     id: 'slime', name: '毒水史萊姆', from: 3, cost: 0.3, spell: true,
-    stats: { hp: 0.35, atk: 0, int: 0.3, def: 30, spd: 70 },
+    stats: { hp: 0.35, atk: 0, int: 0.3, def: 30, spd: 140 },
     skills: [
       { kind: 'attack', id: 'venom', name: '毒液', from: 3, spCost: 10, power: 1.0, target: 'single', dot: { name: '中毒', power: 0.3, duration: 3 } }
     ],
@@ -5592,7 +6159,7 @@ const MONSTERS = {
   },
   mimic: {
     id: 'mimic', name: '寶箱擬態怪', from: 1, cost: 0.4, rarity: 'rare',
-    stats: { hp: 0.5, atk: 0.6, def: 80, spd: 100 },
+    stats: { hp: 0.5, atk: 0.6, def: 80, spd: 200 },
     skills: [
       { kind: 'attack', id: 'chomp', name: '咬合', from: 1, spCost: 10, power: 1.5, target: 'single' },
       { kind: 'heal', id: 'devour', name: '吞噬', from: 10, spCost: 15, target: 'self', power: 3 }
@@ -5601,7 +6168,7 @@ const MONSTERS = {
   },
   scavenger: {
     id: 'scavenger', name: '水道清道夫', from: 7, cost: 0.7, rarity: 'elite',
-    stats: { hp: 0.7, atk: 0.6, def: 70, spd: 85 },
+    stats: { hp: 0.7, atk: 0.6, def: 70, spd: 170 },
     skills: [
       { kind: 'attack', id: 'tail_sweep', name: '掃尾', from: 7, spCost: 15, power: 1.0, target: 'all' },
       { kind: 'heal', id: 'feed', name: '吞食', from: 10, spCost: 15, target: 'self', power: 4 },
@@ -5829,7 +6396,7 @@ const BOSSES = [
     placeholder: true,
     monsters: [{
       id: 'gatekeeper', name: '廢都守門者',
-      stats: { hp: 1.6, atk: 0.8, def: 80, spd: 85 },
+      stats: { hp: 1.6, atk: 0.8, def: 80, spd: 170 },
       skillCastRate: 0.4,
       skills: [
         { kind: 'attack', id: 'cleave', name: '重劈', from: 1, spCost: 15, power: 1.8, target: 'single' },
@@ -5838,7 +6405,7 @@ const BOSSES = [
       ],
       traits: [{ kind: 'enrage', at: 0.3, stat: 'atk', mult: 1.3, text: '{caster} 的眼中燃起紅光，攻勢變得更加猛烈！' }]
     }],
-    rewards: { gems: ['pursuit'], unlockRegions: [] }
+    rewards: { gems: ['pursuit', 'firestorm'], unlockRegions: [] }
   }
 ];
 
@@ -5914,7 +6481,7 @@ const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 4;
+const SAVE_VERSION = 6;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -6250,16 +6817,27 @@ const MIGRATIONS = {
   },
   // v3 → v4：移除擴散（wide，使用者決定直接刪除、不換成別顆）——背包裡的、鑲在裝備上的都刪掉。
   // 寫死 id 是刻意的：這一步只描述「v4 移除了哪些寶石」，之後再移除別顆要另寫一步。
-  3: save => {
-    const removed = new Set(['wide']);
-    const gems = Object.fromEntries(Object.entries(save.gems ?? {}).filter(([id]) => !removed.has(id)));
-    const equipment = (save.equipment ?? []).map(item => ({
-      ...item,
-      links: (item.links ?? []).map(link => ({ ...link, supports: (link.supports ?? []).filter(id => !removed.has(id)) }))
-    }));
-    return { ...save, version: 4, gems, equipment };
+  3: save => ({ ...dropRemovedGems(save, ['wide']), version: 4 }),
+  // v4 → v5：移除乘勢（oncrit，2026-11-19 使用者決定；Artifact 版上線過約兩小時，存檔裡可能有）。
+  4: save => ({ ...dropRemovedGems(save, ['oncrit']), version: 5 }),
+  // v5 → v6：守門者的首次擊敗獎勵加了火焰風暴（2026-11-19）；已經打贏過的存檔補發一顆（沒有的才補）。
+  5: save => {
+    const gems = { ...(save.gems ?? {}) };
+    if ((save.progress?.defeatedBosses ?? []).includes('gatekeeper') && !gems.firestorm) gems.firestorm = 1;
+    return { ...save, version: 6, gems };
   }
 };
+
+/** 從背包與所有裝備連結裡刪掉指定的輔助寶石（遷移用；不改傳入的物件）。 */
+function dropRemovedGems(save, ids) {
+  const removed = new Set(ids);
+  const gems = Object.fromEntries(Object.entries(save.gems ?? {}).filter(([id]) => !removed.has(id)));
+  const equipment = (save.equipment ?? []).map(item => ({
+    ...item,
+    links: (item.links ?? []).map(link => ({ ...link, supports: (link.supports ?? []).filter(id => !removed.has(id)) }))
+  }));
+  return { ...save, gems, equipment };
+}
 
 function migrateSave(raw, migrations = MIGRATIONS, target = SAVE_VERSION) {
   if (!isObject(raw)) throw new SaveError('存檔必須是物件');
@@ -6751,7 +7329,12 @@ function equippedEffects(save) {
  * 屬性加成仍要自己用 equippedBonuses 套到角色基礎屬性上。
  */
 function compileEquipped(save, options = {}) {
-  return { ...compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save) }), normalAttackStat: equippedAttackStat(save) };
+  return { ...compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save), mechanics: equippedMechanics(save) }), normalAttackStat: equippedAttackStat(save) };
+}
+
+/** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */
+function equippedMechanics(save) {
+  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => m.type === 'spShield' || m.type === 'shieldBreakSp');
 }
 
 /** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */
@@ -6771,10 +7354,12 @@ function equippedLinks(save) {
     const mechanics = mechanicsOf(item);
     const granted = mechanics.filter(m => m.type === 'grantSupport').map(m => m.gem);
     const deathCast = mechanics.find(m => m.type === 'castOnEnemyDeath');
+    const critCast = mechanics.find(m => m.type === 'castOnCrit');
     return normalizeLinks(item.links).map(link => ({
       ...link, weight: item.castWeight,
       ...(granted.length ? { grantedSupports: granted } : {}),
-      ...(deathCast ? { castOnEnemyDeath: { text: deathCast.text } } : {})
+      ...(deathCast ? { castOnEnemyDeath: { text: deathCast.text } } : {}),
+      ...(critCast ? { castOnCrit: { chance: critCast.chance, text: critCast.text } } : {})
     }));
   });
 }
@@ -6838,7 +7423,7 @@ module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
   addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
-  setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
+  setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedMechanics, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };
 
@@ -6872,7 +7457,7 @@ const { rollEncounter, availableMonsters, REGIONS } = require('./monsters');
 const { buildBossEncounter, findBoss } = require('./bosses');
 const { rollDrops } = require('./dropTable');
 
-const HERO_BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 100, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };
+const HERO_BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 200, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };   // 速度 2026-11-19 加倍（原本 100）
 const HERO_NAME = '玩家';   // 預設名；玩家改過名就用 settings.playerName
 const MAX_TURNS = 40;
 
@@ -7448,7 +8033,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   function dropChip(label, onclick) { return h('span', { class: 'chip drop', text: label, title: '點一下看資料', onclick }); }
   function showGemInfo(id) {
     if (G.ACTIVE_GEMS[id]) showInfo(`主動寶石：${gemName(id)}`, [h('div', { text: describeActive(G.ACTIVE_GEMS[id]) }), G.ACTIVE_GEMS[id].description ? h('div', { class: 'muted', style: 'margin-top:6px', text: G.ACTIVE_GEMS[id].description }) : null].filter(Boolean));
-    else showInfo(`輔助寶石：${gemName(id)}`, [h('ul', { style: 'margin:0;padding-left:18px' }, compiler.describeSupport(G.SUPPORT_GEMS[id]).lines.map(l => h('li', { text: l.text })))]);
+    else showInfo(`輔助寶石：${gemName(id)}`, [...compiler.describePlayer(G.SUPPORT_GEMS[id]).map(text => h('div', { text })), h('div', { class: 'muted', style: 'margin-top:8px;font-size:12px', text: '詳細規則' }), h('ul', { class: 'muted', style: 'margin:0;padding-left:18px;font-size:12px' }, compiler.describeSupport(G.SUPPORT_GEMS[id]).lines.map(l => h('li', { text: l.text })))]);
   }
   function resultBox(result, live) {
     const box = h('div', { class: 'result ' + (result.victory ? 'win' : 'lose') },
@@ -7669,7 +8254,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
       ...item.base.map(b => statLayer.describeStatBonus(b).text),
       ...item.affixes.map(a => describeAffix(a) + (a.source?.startsWith('engraving:') ? `（${engravingLabel(a.source.slice(10))}）` : a.source?.startsWith('craft:') ? '（製作詞綴）' : a.source?.startsWith('legendary:') ? '（獨有）' : ''))
     ];
-    const mech = legendary.mechanicsOf(item).map(m => m.type === 'grantSupport' ? `裝備的主動寶石具有${gemName(m.gem)}` : m.type === 'castOnEnemyDeath' ? '敵人倒下時釋放一次裝備的主動寶石' : m.type);
+    const mech = legendary.mechanicsOf(item).map(m => legendary.describeMechanic(m, gemName));
     const links = S.equippedLinks({ ...state, equipped: { weapon: null, helmet: null, armor: null, boots: null, [item.slot]: item.id } });
     return h('div', { class: 'item' + (worn ? ' worn' : '') },
       h('div', { class: 'name' }, itemName(item), h('span', { class: 'muted', style: 'font-weight:normal', text: `　${SLOT_NAMES[item.slot]}` }),
@@ -7749,7 +8334,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     return [h('div', { class: 'grid4' }, Object.keys(SLOT_NAMES).map(linkEditor)),
       h('div', { class: 'grid2' },
         h('div', { class: 'panel' }, h('h2', { text: '已擁有的主動寶石' }), h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: '擁有一次就能鑲在任意多件裝備上；穿在身上的裝備裡同一種只能有一顆。' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id]) => h('li', {}, h('strong', { text: gemName(id) }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有' })),
-        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), h('div', { class: 'muted', style: 'font-size:12px', text: compiler.describeSupport(G.SUPPORT_GEMS[id]).lines.map(l => l.text).join('；') })))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' })))];
+        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), ...compiler.describePlayer(G.SUPPORT_GEMS[id]).map(text => h('div', { class: 'muted', style: 'font-size:12px', text }))))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' })))];
   }
 
   // ── 畫面 ────────────────────────────────────────────────────

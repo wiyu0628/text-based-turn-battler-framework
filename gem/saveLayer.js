@@ -53,7 +53,7 @@ const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 4;
+const SAVE_VERSION = 6;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -389,16 +389,27 @@ const MIGRATIONS = {
   },
   // v3 → v4：移除擴散（wide，使用者決定直接刪除、不換成別顆）——背包裡的、鑲在裝備上的都刪掉。
   // 寫死 id 是刻意的：這一步只描述「v4 移除了哪些寶石」，之後再移除別顆要另寫一步。
-  3: save => {
-    const removed = new Set(['wide']);
-    const gems = Object.fromEntries(Object.entries(save.gems ?? {}).filter(([id]) => !removed.has(id)));
-    const equipment = (save.equipment ?? []).map(item => ({
-      ...item,
-      links: (item.links ?? []).map(link => ({ ...link, supports: (link.supports ?? []).filter(id => !removed.has(id)) }))
-    }));
-    return { ...save, version: 4, gems, equipment };
+  3: save => ({ ...dropRemovedGems(save, ['wide']), version: 4 }),
+  // v4 → v5：移除乘勢（oncrit，2026-11-19 使用者決定；Artifact 版上線過約兩小時，存檔裡可能有）。
+  4: save => ({ ...dropRemovedGems(save, ['oncrit']), version: 5 }),
+  // v5 → v6：守門者的首次擊敗獎勵加了火焰風暴（2026-11-19）；已經打贏過的存檔補發一顆（沒有的才補）。
+  5: save => {
+    const gems = { ...(save.gems ?? {}) };
+    if ((save.progress?.defeatedBosses ?? []).includes('gatekeeper') && !gems.firestorm) gems.firestorm = 1;
+    return { ...save, version: 6, gems };
   }
 };
+
+/** 從背包與所有裝備連結裡刪掉指定的輔助寶石（遷移用；不改傳入的物件）。 */
+function dropRemovedGems(save, ids) {
+  const removed = new Set(ids);
+  const gems = Object.fromEntries(Object.entries(save.gems ?? {}).filter(([id]) => !removed.has(id)));
+  const equipment = (save.equipment ?? []).map(item => ({
+    ...item,
+    links: (item.links ?? []).map(link => ({ ...link, supports: (link.supports ?? []).filter(id => !removed.has(id)) }))
+  }));
+  return { ...save, gems, equipment };
+}
 
 function migrateSave(raw, migrations = MIGRATIONS, target = SAVE_VERSION) {
   if (!isObject(raw)) throw new SaveError('存檔必須是物件');
@@ -890,7 +901,12 @@ function equippedEffects(save) {
  * 屬性加成仍要自己用 equippedBonuses 套到角色基礎屬性上。
  */
 function compileEquipped(save, options = {}) {
-  return { ...compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save) }), normalAttackStat: equippedAttackStat(save) };
+  return { ...compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save), mechanics: equippedMechanics(save) }), normalAttackStat: equippedAttackStat(save) };
+}
+
+/** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */
+function equippedMechanics(save) {
+  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => m.type === 'spShield' || m.type === 'shieldBreakSp');
 }
 
 /** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */
@@ -910,10 +926,12 @@ function equippedLinks(save) {
     const mechanics = mechanicsOf(item);
     const granted = mechanics.filter(m => m.type === 'grantSupport').map(m => m.gem);
     const deathCast = mechanics.find(m => m.type === 'castOnEnemyDeath');
+    const critCast = mechanics.find(m => m.type === 'castOnCrit');
     return normalizeLinks(item.links).map(link => ({
       ...link, weight: item.castWeight,
       ...(granted.length ? { grantedSupports: granted } : {}),
-      ...(deathCast ? { castOnEnemyDeath: { text: deathCast.text } } : {})
+      ...(deathCast ? { castOnEnemyDeath: { text: deathCast.text } } : {}),
+      ...(critCast ? { castOnCrit: { chance: critCast.chance, text: critCast.text } } : {})
     }));
   });
 }
@@ -977,6 +995,6 @@ module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
   addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
-  setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedLinks,
+  setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedMechanics, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };

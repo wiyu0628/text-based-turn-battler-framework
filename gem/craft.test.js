@@ -54,7 +54,7 @@ test('base = Σ engraving values × quality × slot multiplier, rounded, zeroes 
   assert.equal(valueOf(base, 'hp'), Math.round(10 * STAT_UNIT.hp * 0.25 * SLOT_MULT.weapon.hp));
   assert.ok(!base.some(b => b.stat === 'int' || b.value === 0));
   assert.ok(base.every(b => b.op === 'flat' && Number.isInteger(b.value)));
-  assert.equal(castWeight, 70);
+  assert.equal(castWeight, 60);
   assert.equal(affixes.length, 1);   // 製作詞綴 1 條（見下面的測試）
   // 頂級 ×1.5
   const top = rollCraft('weapon', ten('fury'), scripted(0.99, 0));
@@ -88,8 +88,8 @@ test('one craft affix: ailment damage, max 25% × average tier scale × 0.7~1 ro
   assert.deepEqual(low, { scope: 'effect', kind: 'ailmentDmg', value: 0.175, source: 'craft:ailmentDmg' });   // 0.25 × 1 × 0.7
   const [high] = rollCraft('weapon', ten('fury'), scripted(0.99, 0, 0, 0.9999999)).affixes;
   assert.equal(high.value, 0.25);                                                                      // 頂級品質也不會更高
-  const mixed = [...ten('fury', 5).slice(0, 5), ...ten('fury', 1).slice(0, 5)];                      // 平均縮放 (1 + 0.2) / 2
-  assert.equal(rollCraft('weapon', mixed, scripted(0, 0, 0, 0.9999999)).affixes[0].value, 0.15);
+  const mixed = [...ten('fury', 5).slice(0, 5), ...ten('fury', 1).slice(0, 5)];                      // 平均縮放 (第 5 階 + 第 1 階) / 2
+  assert.equal(rollCraft('weapon', mixed, scripted(0, 0, 0, 0.9999999)).affixes[0].value, Math.round(0.25 * (TIER_SCALE[5] + TIER_SCALE[1]) / 2 * 10000) / 10000);
   assert.equal(CRAFT_AFFIX_SLOTS, 1);
   assert.deepEqual(CRAFT_AFFIXES.map(a => a.kind), ['ailmentDmg', 'ailmentDuration', 'spRegen']);
 });
@@ -102,7 +102,7 @@ test('craft affix kinds are drawn evenly: ailment damage, ailment duration (fixe
   assert.equal(affix(0.4, 0, ten('fury', 1)).value, 1);                        // 也不吃階級縮放
   assert.deepEqual(affix(0.9, 0.9999999), { scope: 'effect', kind: 'spRegen', value: 1, source: 'craft:spRegen' });
   assert.equal(affix(0.9, 0).value, 0.7);
-  assert.equal(affix(0.9, 0, ten('fury', 1)).value, 0.14);                     // 1 × 0.2 × 0.7
+  assert.equal(affix(0.9, 0, ten('fury', 1)).value, Math.round(1 * TIER_SCALE[1] * 0.7 * 10000) / 10000);   // 1 × 第 1 階縮放 × 0.7
   const rng = createSeededRandom(8);
   const counts = { ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 };
   for (let i = 0; i < 9000; i++) counts[rollCraft('weapon', ten('fury'), rng).affixes[0].kind]++;
@@ -125,11 +125,13 @@ const low = () => ({ scope: 'effect', kind: 'ailmentDmg', value: 0.1, source: 'c
 
 // ── 施放權重 ──────────────────────────────────────────────
 
-test('cast weight rolls in 70~100 like affixes, and gale / precise raise it', () => {
-  assert.equal(rollCraft('boots', ten('vital'), scripted(0, 0)).castWeight, 70);
-  assert.equal(rollCraft('boots', ten('vital'), scripted(0, 0.9999999)).castWeight, 100);
-  assert.equal(rollCraft('boots', ten('gale'), scripted(0, 0)).castWeight, 70 + 10 * WEIGHT.bonus.gale);
-  assert.equal(rollCraft('boots', ten('precise', 1), scripted(0, 0)).castWeight, Math.round(70 + 10 * WEIGHT.bonus.precise * TIER_SCALE[1]));
+test('cast weight rolls in 60~120, and gale / precise raise it', () => {
+  assert.deepEqual([WEIGHT.low, WEIGHT.high], [60, 120]);
+  assert.equal(rollCraft('boots', ten('vital'), scripted(0, 0)).castWeight, 60);
+  assert.equal(rollCraft('boots', ten('vital'), scripted(0, 0.5)).castWeight, 90);
+  assert.equal(rollCraft('boots', ten('vital'), scripted(0, 0.9999999)).castWeight, 120);
+  assert.equal(rollCraft('boots', ten('gale'), scripted(0, 0)).castWeight, 60 + 10 * WEIGHT.bonus.gale);
+  assert.equal(rollCraft('boots', ten('precise', 1), scripted(0, 0)).castWeight, Math.round(60 + 10 * WEIGHT.bonus.precise * TIER_SCALE[1]));
 });
 
 test('bad craft input is rejected', () => {

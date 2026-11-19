@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const save = require('./saveLayer');
-const { rollEngraving } = require('./affixTable');
+const { rollEngraving, ENGRAVING_TYPES } = require('./affixTable');
 
 const fresh = () => save.createEmptySave({ now: '2026-01-01T00:00:00Z' });
 const ten = (type, tier = 5) => Array.from({ length: 10 }, () => ({ type, tier }));
@@ -45,8 +45,8 @@ test('engraved effects reach the wearer: stat lines via equippedBonuses, effect 
   const { state, id } = crafted();
   // fury 第 3 行落選 → ATK inc 與物理傷害提高
   const next = save.equip(save.engraveEquipment(state, id, 'fury', 5, scripted(0.99, 1, 1)).save, id);
-  assert.ok(save.equippedBonuses(next).some(b => b.stat === 'atk' && b.op === 'inc' && Math.abs(b.value - 0.17) < 1e-9));
-  assert.ok(Math.abs(save.equippedEffects(next).physDmg - 0.12) < 1e-9);
+  assert.ok(save.equippedBonuses(next).some(b => b.stat === 'atk' && b.op === 'inc' && Math.abs(b.value - ENGRAVING_TYPES.fury.lines[0].max) < 1e-9));
+  assert.ok(Math.abs(save.equippedEffects(next).physDmg - ENGRAVING_TYPES.fury.lines[1].max) < 1e-9);
 });
 
 test('engraving works on worn items with gems, and survives export / import', () => {

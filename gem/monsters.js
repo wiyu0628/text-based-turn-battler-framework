@@ -12,6 +12,7 @@
  *
  * ── 數值 ──────────────────────────────────────────────────────
  *   怪物屬性寫成「基準怪（BASE_MONSTER，強度 1）的倍率」：hp、atk、int 是倍率，def、spd、eva、hit 是固定值。
+ *   速度 2026-11-19 全部加倍（使用者：玩家、怪物、裝備的平值速度一起 ×2，讓連擊更常出現；百分比不動）。
  *   組戰鬥時：基準 × 倍率 × 預算正規化 → difficulty.scaleMonster（× 難度強度 M、命中 + 10／級）。
  *   技能的護盾、治療、持續傷害數值在組戰鬥時用怪物「縮放後」的屬性算好（框架的 Buff 是固定值）。
  *
@@ -29,7 +30,7 @@ const { Entity, Skill } = require('../src');
 const { scaleMonster } = require('./difficulty');
 
 // 基準怪（強度 1）：與 affix-budget.js 的 FOE 相同
-const BASE_MONSTER = { hp: 3000, atk: 90, int: 90, def: 50, spd: 90, sp: 200 };
+const BASE_MONSTER = { hp: 3000, atk: 90, int: 90, def: 50, spd: 180, sp: 200 };
 const RARE_CHANCE = 0.03;
 const ELITE_CHANCE = 0.15;
 
@@ -37,7 +38,7 @@ const MONSTERS = {
   // ── 廢都 ──
   dog: {
     id: 'dog', name: '憤怒野犬', from: 1, cost: 0.35,
-    stats: { hp: 0.35, atk: 0.4, def: 20, spd: 120 },
+    stats: { hp: 0.35, atk: 0.4, def: 20, spd: 240 },
     skills: [
       { kind: 'attack', id: 'bite', name: '撕咬', from: 1, spCost: 10, power: 1.4, target: 'single' },
       { kind: 'buff', id: 'howl', name: '狂吠', from: 7, spCost: 10, target: 'self', stat: 'atk', mult: 1.3, duration: 3 },
@@ -46,7 +47,7 @@ const MONSTERS = {
   },
   circle: {
     id: 'circle', name: '守衛魔法陣', from: 1, cost: 0.45, spell: true,
-    stats: { hp: 0.4, atk: 0, int: 0.5, def: 80, spd: 70 },
+    stats: { hp: 0.4, atk: 0, int: 0.5, def: 80, spd: 140 },
     skills: [
       { kind: 'attack', id: 'arcane_blast', name: '魔力衝擊', from: 1, spCost: 10, power: 1.4, target: 'single' },
       { kind: 'shield', id: 'ward', name: '防護結界', from: 7, spCost: 15, target: 'allyAll', ratio: 0.08, duration: 3 },
@@ -56,16 +57,17 @@ const MONSTERS = {
   doll: {
     // 一場最多 1 隻（使用者決定，2026-11-19）：兩隻會互相補到 40 回合平手
     id: 'doll', name: '修繕人偶', from: 3, cost: 0.3, spell: true, skillCastRate: 0.5, maxPerEncounter: 1,
-    stats: { hp: 0.35, atk: 0, int: 0.4, def: 40, spd: 100 },
+    stats: { hp: 0.35, atk: 0, int: 0.4, def: 40, spd: 200 },
     skills: [
-      { kind: 'heal', id: 'mend_ally', name: '修補', from: 3, spCost: 10, target: 'allySingle', power: 3 },
+      // 修補 300% → 200%（使用者，2026-11-19）：難度 10 倍之後「野犬＋人偶」在高難度太難打（難度 15 拿第 5 階只有 32%）
+      { kind: 'heal', id: 'mend_ally', name: '修補', from: 3, spCost: 10, target: 'allySingle', power: 2 },
       { kind: 'shield', id: 'reinforce', name: '加固', from: 7, spCost: 10, target: 'allySingle', ratio: 0.25, duration: 3 },
       { kind: 'heal', id: 'overhaul', name: '緊急修復', from: 13, spCost: 20, target: 'allyAll', power: 2 }
     ]
   },
   goblin: {
     id: 'goblin', name: '地精', from: 1, cost: 0.3, rarity: 'rare',
-    stats: { hp: 0.3, atk: 0.3, def: 20, spd: 130, eva: 250 },
+    stats: { hp: 0.3, atk: 0.3, def: 20, spd: 260, eva: 250 },
     skills: [
       { kind: 'attack', id: 'sneak', name: '偷襲', from: 1, spCost: 10, power: 1.2, target: 'single' },
       { kind: 'buff', id: 'smoke', name: '煙霧彈', from: 7, spCost: 15, target: 'self', stat: 'eva', mult: 1.6, duration: 2 }
@@ -73,7 +75,7 @@ const MONSTERS = {
   },
   golem: {
     id: 'golem', name: '自動魔像', from: 7, cost: 1.0, rarity: 'elite',
-    stats: { hp: 1.0, atk: 1.1, def: 200, spd: 50 },
+    stats: { hp: 1.0, atk: 1.1, def: 200, spd: 100 },
     skills: [
       { kind: 'attack', id: 'slam', name: '重擊', from: 7, spCost: 20, power: 2.0, target: 'single' },
       { kind: 'buff', id: 'plating', name: '裝甲強化', from: 10, spCost: 15, target: 'self', stat: 'def', mult: 1.5, duration: 3 },
@@ -84,7 +86,7 @@ const MONSTERS = {
   // ── 地下水道 ──
   rat: {
     id: 'rat', name: '鏽蝕老鼠', from: 1, cost: 0.15,
-    stats: { hp: 0.15, atk: 0.18, def: 10, spd: 110 },
+    stats: { hp: 0.15, atk: 0.18, def: 10, spd: 220 },
     skills: [
       { kind: 'attack', id: 'gnaw', name: '啃咬', from: 1, spCost: 8, power: 1.2, target: 'single' },
       { kind: 'attack', id: 'plague_bite', name: '病菌啃咬', from: 7, spCost: 10, power: 1.0, target: 'single', dot: { name: '病菌', power: 0.3, duration: 3 } },
@@ -93,7 +95,7 @@ const MONSTERS = {
   },
   tentacle: {
     id: 'tentacle', name: '管線觸手', from: 1, cost: 0.3,
-    stats: { hp: 0.35, atk: 0.35, def: 60, spd: 80 },
+    stats: { hp: 0.35, atk: 0.35, def: 60, spd: 160 },
     skills: [
       { kind: 'attack', id: 'lash', name: '鞭打', from: 1, spCost: 10, power: 1.3, target: 'single' },
       { kind: 'buff', id: 'entangle', name: '纏繞', from: 7, spCost: 12, target: 'enemy', stat: 'spd', mult: 0.8, duration: 2 },
@@ -102,7 +104,7 @@ const MONSTERS = {
   },
   slime: {
     id: 'slime', name: '毒水史萊姆', from: 3, cost: 0.3, spell: true,
-    stats: { hp: 0.35, atk: 0, int: 0.3, def: 30, spd: 70 },
+    stats: { hp: 0.35, atk: 0, int: 0.3, def: 30, spd: 140 },
     skills: [
       { kind: 'attack', id: 'venom', name: '毒液', from: 3, spCost: 10, power: 1.0, target: 'single', dot: { name: '中毒', power: 0.3, duration: 3 } }
     ],
@@ -110,7 +112,7 @@ const MONSTERS = {
   },
   mimic: {
     id: 'mimic', name: '寶箱擬態怪', from: 1, cost: 0.4, rarity: 'rare',
-    stats: { hp: 0.5, atk: 0.6, def: 80, spd: 100 },
+    stats: { hp: 0.5, atk: 0.6, def: 80, spd: 200 },
     skills: [
       { kind: 'attack', id: 'chomp', name: '咬合', from: 1, spCost: 10, power: 1.5, target: 'single' },
       { kind: 'heal', id: 'devour', name: '吞噬', from: 10, spCost: 15, target: 'self', power: 3 }
@@ -119,7 +121,7 @@ const MONSTERS = {
   },
   scavenger: {
     id: 'scavenger', name: '水道清道夫', from: 7, cost: 0.7, rarity: 'elite',
-    stats: { hp: 0.7, atk: 0.6, def: 70, spd: 85 },
+    stats: { hp: 0.7, atk: 0.6, def: 70, spd: 170 },
     skills: [
       { kind: 'attack', id: 'tail_sweep', name: '掃尾', from: 7, spCost: 15, power: 1.0, target: 'all' },
       { kind: 'heal', id: 'feed', name: '吞食', from: 10, spCost: 15, target: 'self', power: 4 },

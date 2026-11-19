@@ -1329,3 +1329,234 @@ test('主動寶石的 id 必須與登錄的鍵一致（技能 id 是用鍵組出
   assert.throws(() => compileSkill('fireball', [], { activeGems: broken }), /與登錄的鍵不一致/);
   for (const [key, gem] of Object.entries(ACTIVE_GEMS)) assert.equal(gem.id, key);
 });
+
+// ── 連擊（repeat）與乘勢（grant onCrit），2026-11-19 ────────────────
+
+const MULTI = moreOf('multistrike');   // 每一擊的傷害倍率（0.45）
+// 乘勢已從正式寶石移除（2026-11-19），onCrit 機制留著，用測試用寶石驗證
+const withOnCrit = { ...SUPPORT_GEMS, oncrit: mkGem('oncrit', [{ op: 'grant', kind: 'onCrit', chance: 0.3 }], { name: '乘勢', requires: { action: { type: 'DAMAGE' } } }) };
+
+test('迅擊：原本的傷害段再複製一次，兩段都乘上連擊的倍率、都帶異常；SP 只算一次', () => {
+  const plainRend = compileSkill('rend', []);
+  const { skill, spCost } = compileSkill('rend', ['multistrike']);
+  const damage = skill.actions.filter(action => action.type === 'DAMAGE');
+  assert.equal(damage.length, 2);
+  for (const action of damage) {
+    assert.equal(action.power, round(plainRend.skill.actions[0].power * MULTI));
+    assert.ok(action.gemAilments?.length, '兩擊都附加裂傷');
+  }
+  assert.equal(spCost, plainRend.spCost, '沒有 SP 代價');
+  assert.equal(skill.actions[1].spCost, undefined, '複本不再扣 SP');
+  assert.equal(skill.actions[1].inheritTarget, undefined, '複本沿用上一段的目標（框架預設）');
+});
+
+test('迅擊：只能連單體技能；全體技能（旋風斬）拒絕', () => {
+  assert.throws(() => compileSkill('whirlwind', ['multistrike']), error => error instanceof GemLinkError && error.gemId === 'multistrike');
+  assert.doesNotThrow(() => compileSkill('magicmissile', ['multistrike', 'shock']));
+});
+
+test('迅擊：戰鬥中第二擊打同一個目標，戰報用「連擊」開頭；目標被第一擊打倒就不追擊', () => {
+  const run = (foeHp, seed = 2) => {
+    const loadout = compileLoadout([{ active: 'rend', supports: ['multistrike'] }]);
+    const hero = makeHero(loadout.skills, loadout.passives);
+    const foes = [makeFoe('a', { hp: foeHp }), makeFoe('b', { hp: foeHp })];
+    const result = new BattleEngine([hero], foes, { rng: createSeededRandom(seed), maxTurns: 1, skillSelectionResolver: loadout.resolver }).start();
+    return result.logs.filter(log => log.actorId === 'hero' && log.type === 'DAMAGE');
+  };
+  const [first, second] = run(1e6);
+  assert.ok(second.message.startsWith('勇者 迅擊，'), second.message);
+  assert.equal(second.targetId, first.targetId);
+  const killed = run(1);
+  assert.equal(killed.filter(log => log.message.includes('迅擊')).length, 0, '目標倒下就不再追擊');
+});
+
+test('onCrit（以測試用的乘勢為例）：暴擊時有機率免費施放，每個行動槽最多一次，觸發出來的那次不再連鎖', () => {
+  const loadout = compileLoadout([{ active: 'rend', supports: ['oncrit'] }], { supportGems: withOnCrit });
+  assert.ok(loadout.passives.some(p => p.id === 'gem_onCrit'));
+  let triggers = 0, slots = 0, maxPerSlot = 0, casts = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    const fresh = compileLoadout([{ active: 'rend', supports: ['oncrit'] }], { supportGems: withOnCrit });
+    const hero = makeHero(fresh.skills, fresh.passives, { cri: 1, skillCastRate: 0, sp: 0 });   // 只普攻、必定暴擊、沒有 SP
+    const result = new BattleEngine([hero], [makeFoe('a')], { rng: createSeededRandom(seed), maxTurns: 5, skillSelectionResolver: fresh.resolver }).start();
+    let current = 0;
+    for (const log of result.logs) {
+      if (log.actorId !== 'hero') continue;
+      if (log.message?.startsWith('勇者乘勢追擊，')) { triggers++; current++; maxPerSlot = Math.max(maxPerSlot, current); }
+      else if (log.type === 'DAMAGE' && log.message.startsWith('勇者 攻擊')) { slots++; current = 0; }
+    }
+    assert.equal(hero.stats.sp, 0, '免費施放不扣 SP');
+    casts += result.logs.filter(log => log.message?.startsWith('勇者乘勢追擊，使出撕裂')).length;
+  }
+  assert.ok(casts > 0, 'SP 0 也放得出來（最後一槽觸發時戰鬥可能已經結束，所以只檢查有放出來）');
+  const rate = triggers / slots;
+  const chance = withOnCrit.oncrit.effects[0].chance;
+  // 每一擊暴擊各擲一次、同槽成功一次就停：普攻一槽打 2～3 擊，所以每槽的觸發率介於 chance 與 1 − (1 − chance)^3 之間
+  assert.ok(rate > chance * 0.8 && rate < 1 - (1 - chance) ** 3 + 0.08, `每槽觸發率 ${rate}`);
+  assert.equal(maxPerSlot, 1, '同一槽最多觸發一次，觸發出來的撕裂暴擊也不再觸發');
+});
+
+test('repeat 與 onCrit 的資料檢查', () => {
+  const bad = {
+    a: mkGem('a', [{ op: 'repeat', times: 0 }]),
+    b: mkGem('b', [{ op: 'grant', kind: 'onCrit', chance: 0 }]),
+    c: mkGem('c', [{ op: 'grant', kind: 'onCrit', chance: 0.3 }]),
+    d: mkGem('d', [{ op: 'grant', kind: 'onCrit', chance: 0.5 }])
+  };
+  const problems = validateGemData(bad, GROUPS).join('\n');
+  assert.match(problems, /寶石「a」的 repeat 需要不小於 1 的整數 times/);
+  assert.match(problems, /寶石「b」的 onCrit 需要 0 到 1 之間/);
+  assert.match(problems, /寶石「d」的 onCrit chance（0.5）與其他寶石（0.3）不一致/);
+  assert.deepEqual(validateGemData(SUPPORT_GEMS, GROUPS), []);
+  assert.deepEqual(describeSupport(SUPPORT_GEMS.multistrike).lines.map(line => line.kind), ['effect', 'more']);
+});
+
+test('背包說明：第一行依連結條件自動產生，第二行的數字從 effects 算出', () => {
+  const { describePlayer } = require('./gemCompiler');
+  assert.deepEqual(describePlayer(SUPPORT_GEMS.heavy), ['與攻擊技能連結。', `傷害變為${Math.round(moreOf('heavy') * 100)}%，消耗SP提升${Math.round((costOf('heavy') - 1) * 100)}%。`]);
+  assert.equal(describePlayer(SUPPORT_GEMS.focus)[0], '與群體攻擊技能連結。');
+  assert.equal(describePlayer(SUPPORT_GEMS.multistrike)[0], '與單體攻擊技能連結。');
+  assert.equal(describePlayer(SUPPORT_GEMS.leech)[0], '與物理攻擊技能連結。');
+  assert.equal(describePlayer(SUPPORT_GEMS.shock)[0], '與法術攻擊技能連結。');
+  assert.equal(describePlayer(SUPPORT_GEMS.layout)[0], '與任意技能連結。');
+  for (const gem of Object.values(SUPPORT_GEMS)) {
+    assert.ok(gem.desc, `${gem.id} 要有 desc`);
+    assert.doesNotMatch(describePlayer(gem)[1], /\{\w+\}/, `${gem.id} 的佔位都要填上`);
+  }
+  // 數字跟著資料變
+  const tuned = { ...SUPPORT_GEMS.heavy, effects: [{ op: 'more', value: 0.5 }, { op: 'cost', value: 0.2 }] };
+  assert.match(describePlayer(tuned)[1], /傷害變為150%/);
+  // 算不出來的佔位是資料錯誤
+  const bad = { x: { ...mkGem('x', [{ op: 'inc', value: 0.1 }]), desc: '傷害變為{more}' } };
+  assert.match(validateGemData(bad, GROUPS).join('\n'), /desc 用到算不出來的佔位 \{more\}/);
+});
+
+// ── 法術會心（critAsDamage）、暴怒（condInc）、吸魔（drainSp），2026-11-19 ─────
+
+// 只放一次技能、看第一行技能傷害（同一顆種子，亂數序列相同，差別只在倍率）
+const firstSkillDamage = (active, supports, heroStats = {}, foeStats = {}) => {
+  const loadout = compileLoadout([{ active, supports }]);
+  const hero = makeHero(loadout.skills, loadout.passives, { skillCastRate: 1, ...heroStats });
+  const foe = makeFoe('foe', foeStats);
+  const result = new BattleEngine([hero], [foe], { rng: createSeededRandom(5), maxTurns: 1, skillSelectionResolver: loadout.resolver }).start();
+  return { log: result.logs.find(log => log.actorId === 'hero' && log.type === 'DAMAGE'), result, foe };
+};
+
+test('法術會心：傷害 × (1 + 爆擊率 × (爆擊傷害 − 1))，施放當下讀取；爆擊率最多算 100%；法術不會因此暴擊', () => {
+  const base = firstSkillDamage('magicmissile', [], { cri: 0.5, criDmg: 2 }).log.value;
+  const boosted = firstSkillDamage('magicmissile', ['spellcrit'], { cri: 0.5, criDmg: 2 }).log;
+  assert.ok(Math.abs(boosted.value / base - 1.5) < 0.01, `${boosted.value} / ${base}`);
+  assert.doesNotMatch(boosted.message, /會心一擊/);
+  const capped = firstSkillDamage('magicmissile', ['spellcrit'], { cri: 3, criDmg: 2 }).log.value;
+  assert.ok(Math.abs(capped / firstSkillDamage('magicmissile', [], { cri: 3, criDmg: 2 }).log.value - 2) < 0.01);
+  assert.equal(firstSkillDamage('magicmissile', ['spellcrit'], { cri: 0 }).log.value, firstSkillDamage('magicmissile', [], { cri: 0 }).log.value);
+  assert.throws(() => compileSkill('rend', ['spellcrit']), error => error instanceof GemLinkError);   // 限法術
+});
+
+test('暴怒：施放當下生命低於 50% 才加，和增幅在同一個加算區', () => {
+  const low = { hp: 1000, maxHp: 4000 }, high = { hp: 3000, maxHp: 4000 };
+  const ratio = (supports, stats) => firstSkillDamage('magicmissile', [...supports, 'rage'], stats).log.value / firstSkillDamage('magicmissile', supports, stats).log.value;
+  assert.ok(Math.abs(ratio([], low) - 1.5) < 0.01);
+  assert.ok(Math.abs(ratio(['amp'], low) - (1.2 + 0.5) / 1.2) < 0.01, '加算：(1 + 20% + 50%) ÷ (1 + 20%)');
+  assert.equal(ratio([], high), 1);
+  assert.doesNotThrow(() => compileLoadout([{ active: 'rend', supports: ['rage', 'charge'] }]));   // 蓄力的本體也要包到
+});
+
+test('吸魔：每一擊命中扣目標 5% SP 上限的 SP，並寫戰報；限物理', () => {
+  const { result, foe } = firstSkillDamage('rend', ['drain'], {}, { sp: 200, maxSp: 200 });
+  const lines = result.logs.filter(log => log.message?.includes('失去了'));
+  const casts = result.logs.filter(log => log.message?.startsWith('勇者 使出撕裂')).length;
+  assert.equal(lines[0].message, 'foe 失去了 10 點 SP！');
+  assert.equal(lines.length, casts, '每一擊一次');
+  assert.equal(foe.stats.sp, 200 - 10 * casts);
+  const twice = firstSkillDamage('rend', ['drain', 'multistrike'], {}, { sp: 200, maxSp: 200 });
+  const hits = twice.result.logs.filter(log => /^勇者 (使出撕裂|迅擊)/.test(log.message ?? '')).length;
+  assert.equal(twice.foe.stats.sp, 200 - 10 * hits, '迅擊兩擊各扣一次');
+  const empty = firstSkillDamage('rend', ['drain'], {}, { sp: 3, maxSp: 200 });
+  assert.equal(empty.foe.stats.sp, 0, '最多扣到 0');
+  assert.throws(() => compileSkill('magicmissile', ['drain']), error => error instanceof GemLinkError);
+});
+
+test('追擊：普攻一槽打出 3 連擊以上時免費施放（每槽最多一次）；連擊不夠就不觸發', () => {
+  const run = (heroSpd, foeSpd) => {
+    const loadout = compileLoadout([{ active: 'rend', supports: ['followup'] }]);
+    const hero = makeHero(loadout.skills, loadout.passives, { spd: heroSpd, sp: 0, skillCastRate: 0 });   // 只普攻、沒有 SP
+    const foe = makeFoe('foe', { spd: foeSpd });
+    const result = new BattleEngine([hero], [foe], { rng: createSeededRandom(3), maxTurns: 3, skillSelectionResolver: loadout.resolver }).start();
+    const lines = result.logs.filter(log => log.actorId === 'hero' && log.message).map(log => log.message);
+    return { lines, hero };
+  };
+  const fast = run(300, 150);   // 速度差 150：每槽 2～4 擊
+  const attacks = [];
+  for (const line of fast.lines) {
+    if (line.startsWith('勇者 攻擊')) attacks.push({ hits: 1, followed: false });
+    else if (/^第 \d+ 擊/.test(line)) attacks.at(-1).hits++;
+    else if (line.startsWith('勇者追擊，使出撕裂')) attacks.at(-1).followed = true;
+  }
+  assert.ok(attacks.some(a => a.hits >= 3) && attacks.some(a => a.hits < 3), '要同時有夠與不夠的槽');
+  for (const a of attacks) assert.equal(a.followed, a.hits >= 3, `打 ${a.hits} 擊`);
+  assert.equal(fast.hero.stats.sp, 0, '免費施放');
+  const slow = run(200, 180);   // 速度差 20：只會 1 擊
+  assert.equal(slow.lines.filter(line => line.includes('追擊')).length, 0);
+  const { describePlayer } = require('./gemCompiler');
+  assert.deepEqual(describePlayer(SUPPORT_GEMS.followup), ['與任意技能連結。', '普攻3連擊以上時釋放一次此技能。']);
+  const bad = { a: mkGem('a', [{ op: 'grant', kind: 'comboCast', minHits: 1 }]) };
+  assert.match(validateGemData(bad, GROUPS).join('\n'), /comboCast 需要不小於 2 的整數 minHits/);
+});
+
+// ── 火焰風暴（critEcho）與迴響（wrap echo），2026-11-19 ───────────────
+
+const echoBattle = (supports, { cri = 0, turns = 4, seed = 4, castRate = 0.5 } = {}) => {
+  const loadout = compileLoadout([{ active: 'firestorm', supports }]);
+  const hero = makeHero(loadout.skills, loadout.passives, { cri, spd: 200, sp: 200, maxSp: 200, skillCastRate: castRate });
+  const foes = [makeFoe('a', { spd: 150 }), makeFoe('b', { spd: 150 })];
+  const result = new BattleEngine([hero], foes, { rng: createSeededRandom(seed), maxTurns: turns, skillSelectionResolver: loadout.resolver }).start();
+  return { result, hero, lines: result.logs.filter(log => log.message).map(log => log.message) };
+};
+
+test('火焰風暴：依爆擊率在同一個行動槽多打一次 50%（不連鎖）；爆擊率 0 不會多打', () => {
+  const always = echoBattle([], { cri: 1, turns: 2 });
+  const casts = always.lines.filter(line => line.startsWith('勇者 召喚火焰風暴')).length;
+  const echoes = always.lines.filter(line => line.startsWith('火焰風暴再次席捲')).length;
+  assert.ok(casts > 0);
+  assert.equal(echoes, casts, '每次施放（兩個目標各一行）都多打一次，而且只多一次');
+  const first = always.result.logs.find(log => log.message?.startsWith('勇者 召喚火焰風暴'));
+  const extra = always.result.logs.find(log => log.message?.startsWith('火焰風暴再次席捲') && log.targetId === first.targetId);
+  assert.ok(Math.abs(extra.value / first.value - 0.5) < 0.1, `${extra.value} / ${first.value}`);
+  assert.equal(echoBattle([], { cri: 0, turns: 2 }).lines.filter(line => line.includes('再次席捲')).length, 0);
+  assert.ok(BOSSES_REWARD().includes('firestorm'));
+});
+const BOSSES_REWARD = () => require('./gems').BOSS_REWARD_GEMS;
+
+test('迴響：使用時只開啟（付 200% SP、沒有傷害），之後不再被選，每回合開始自動免費釋放 40%', () => {
+  const { lines, hero, result } = echoBattle(['echo'], { turns: 5 });
+  const open = lines.findIndex(line => line === '勇者 開啟了迴響（火焰風暴）！');
+  assert.ok(open >= 0);
+  assert.equal(lines.filter(line => line.includes('開啟了迴響')).length, 1, '只開啟一次');
+  assert.equal(lines.filter(line => line.startsWith('勇者 召喚火焰風暴')).length, 0, '不再被選來施放');
+  // 開啟之後的每個回合開頭都有一次迴響
+  const rounds = lines.map((line, i) => [line, i]).filter(([line, i]) => line.startsWith('--- 第') && i > open);
+  for (const [, i] of rounds) assert.ok(lines[i + 1].startsWith('勇者的迴響引發火焰風暴'), lines[i + 1]);
+  const spLogs = result.logs.filter(log => log.actorId === 'hero');
+  const { spCost } = compileSkill('firestorm', ['echo']);
+  assert.equal(spCost, Math.ceil(ACTIVE_GEMS.firestorm.spCost * costOf('echo')));
+  const normals = lines.filter(line => line.startsWith('勇者 攻擊')).length;
+  assert.ok(hero.stats.sp <= 200 - spCost && hero.stats.sp >= 200 - spCost - 2 * normals, `只有開啟付 SP（另外是普攻），迴響免費：剩 ${hero.stats.sp}`);
+  assert.ok(spLogs.length);
+});
+
+test('迴響：開啟前的佈局是「開啟」，開啟後追擊施放的是傷害版；迴響不能和蓄力一起連', () => {
+  const layout = echoBattle(['echo', 'layout'], { turns: 2, castRate: 0 });
+  assert.ok(layout.lines.includes('勇者的第一動，開啟了迴響（火焰風暴）！'));
+  const loadout = compileLoadout([{ active: 'firestorm', supports: ['echo', 'followup'] }]);
+  const hero = makeHero(loadout.skills, loadout.passives, { spd: 400, sp: 200, maxSp: 200, skillCastRate: 0.5 });
+  const foes = [makeFoe('a', { spd: 150 }), makeFoe('b', { spd: 150 })];
+  const lines = new BattleEngine([hero], foes, { rng: createSeededRandom(2), maxTurns: 4, skillSelectionResolver: loadout.resolver }).start()
+    .logs.filter(log => log.message).map(log => log.message);
+  const open = lines.findIndex(line => line.includes('開啟了迴響（火焰風暴）'));   // 可能是自己選的，也可能是追擊觸發的
+  assert.ok(open >= 0);
+  assert.ok(lines.slice(open).some(line => line.startsWith('勇者的迴響引發火焰風暴')), '開啟後追擊與回合開始都放傷害版');
+  assert.ok(!lines.slice(open + 1).some(line => line.includes('開啟了迴響')));
+  assert.throws(() => compileSkill('firestorm', ['echo', 'charge']), error => error instanceof GemLinkError);
+  assert.throws(() => compileSkill('magicmissile', ['echo']), error => error instanceof GemLinkError);   // 限群體
+  assert.throws(() => compileSkill('whirlwind', ['echo']), error => error instanceof GemLinkError);      // 限法術
+});

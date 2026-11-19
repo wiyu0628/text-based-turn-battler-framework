@@ -10,8 +10,8 @@ const { applyStatBonuses } = require('./statLayer');
 const { rollEngraving, rollBase, sumEffectAffixes } = require('./affixTable');
 const { rollCraft } = require('./craftTable');
 
-const BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 100, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };
-const FOE = { hp: 3000, sp: 200, atk: 90, int: 90, def: 50, spd: 90, cri: 0.05 };
+const BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 200, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };
+const FOE = { hp: 3000, sp: 200, atk: 90, int: 90, def: 50, spd: 180, cri: 0.05 };   // 速度 2026-11-19 加倍
 const N = 100, SAMPLES = 30;
 const HIT_FORMULA = process.argv.includes('--classic') ? 'classic' : 'contest';
 // 每件裝備兩個刻印（可重複）。

@@ -1,7 +1,20 @@
 'use strict';
 
 /**
- * 技能串接寶石資料 v13（5 顆主動寶石 + 11 顆輔助寶石 + 互斥組 + 連結上限）
+ * 技能串接寶石資料 v18（6 顆主動寶石 + 17 顆輔助寶石 + 互斥組 + 連結上限）
+ *
+ * v18（2026-11-19）：新增主動寶石火焰風暴 firestorm（critEcho：依爆擊率額外釋放 50%，打 Boss 取得）、
+ *   輔助寶石迴響 echo（wrap kind 'echo'：開啟後每回合開始自動釋放），使用者設計。
+ *
+ * v17（2026-11-19）：新增追擊 followup（grant kind comboCast：普攻 3 連擊以上時免費施放），使用者設計。
+ *
+ * v16（2026-11-19）：新增法術會心 spellcrit（op critAsDamage）、暴怒 rage（op condInc）、吸魔 drain（reaction drainSp），使用者設計。
+ *
+ * v15（2026-11-19）：連擊改名迅擊（id multistrike 不變）；移除乘勢 oncrit（存檔 v4 → v5 刪除）；
+ *   每顆寶石加上 desc（背包說明第二行，使用者指定句子；{佔位} 由 effects 算出，見 gemCompiler.describePlayer）。
+ *
+ * v14（2026-11-19）：新增連擊 multistrike（使用者設計：原本與追加的一擊都是 45%，全部附加異常與感電）、
+ *   乘勢 oncrit（暴擊時 30% 機率免費施放；觸發時機使用者沒有指定，用我建議的「暴擊時」）。
  *
  * v13（2026-11-18）：移除擴散 wide（使用者決定）。存檔 v3 → v4 的遷移會刪掉背包與裝備上的擴散（saveLayer.js MIGRATIONS[3]）。
  * 移除寶石時一定要同時寫存檔遷移：讀檔遇到不認得的寶石會報錯、不會自動丟掉。
@@ -45,7 +58,8 @@
  *
  * 兩者的 value 寫法一致，都是「增量」：0.3 代表 +30%，-0.15 代表 -15%。
  * 倍率最終必須大於 0（框架把 power 0 當成 1，所以編譯器會直接拒絕）。
- * 玩家看的說明文字不在這裡手寫，由 describeSupport() 依 effects 自動產生，
+ * 背包說明：第一行「與○○技能連結。」依 requires 自動產生，第二行是 desc（可用 {more}{inc}{cost}{ignoreDefense}{leech}{threshold}{chance}{cri} 等佔位）。
+ * 逐條規則說明由 describeSupport() 依 effects 自動產生，
  * 數字改了說明就跟著改，不會對不上。
  *
  * ── 編譯流程（約定）──────────────────────────────────────────────
@@ -115,9 +129,19 @@
  *        （這是 compileLoadout 的工作；單獨呼叫 compileSkill 只會在 grants 欄位拿到資料）。
  *        kind 'opening'    戰鬥開始後的第一次行動必定施放（框架的 openingSkill；會蓋掉手寫的 openingSkill）。
  *                          SP 不夠時機會作廢，照一般流程行動。
+ *        kind 'comboCast'  自己的普攻這一槽打出 minHits 擊以上時（以第一次打中時判斷），插隊多一個行動槽免費施放；
+ *                          每槽最多一次；同類 grant 的 minHits 必須一致。
+ *        kind 'onCrit'     自己的任何一擊暴擊時（普攻、技能都算），有 chance 的機率插隊多一個行動槽，免費（不耗 SP）施放。
+ *                          每個自己的行動槽最多觸發一次；觸發出來的那次不會再觸發；同類 grant 的 chance 必須一致。
  *        kind 'lastResort' HP 第一次降到 threshold（例如 0.5 = 50%）以下時，立刻額外行動一次並施放。
  *                          額外的是一個「行動槽」，不是整個回合；觸發時若沒有付得起或沒被沉默的技能，這次機會作廢。
  *                          同類 grant 的 threshold 必須一致（validateGemData 會檢查）。
+ *   { op: 'condInc', value, when: { hpBelow } }  施放當下生命比例低於 hpBelow 時，value 加進這段的加算區（與 inc 同區）。
+ *   { op: 'critAsDamage' }               施放當下傷害 × (1 + 爆擊率 × (爆擊傷害 − 1))，乘算；爆擊率夾在 0～1。
+ *   reaction do.kind 'drainSp'（trigger AFTER_DAMAGE_DEALT）每一擊命中、目標還活著時，扣目標 ratio × SP 上限的 SP。
+ *   { op: 'repeat', times, text? }       把原本的傷害段（套用 scope、旗標之後）整段複製 times 次，接在原本動作之後、追加段之前。
+ *                                         複本沿用上一段的目標（打同一個目標；目標倒下就不再追擊），各自判定命中、暴擊，
+ *                                         異常與機率效果也各自觸發；吃得到 inc／more。text 是複本的開頭句（例如「{caster} 連擊，」）。
  *   { op: 'wrap', kind: 'charge' }        把技能拆成「外殼 + 本體」：玩家選到的是外殼，使用時只扣 SP 並掛上「蓄力中」標記；
  *                                         下一次輪到這個角色行動時，引擎的 skillSelectionResolver 把那一槽換成本體釋放。
  *                                         所以 2 個行動槽換一次釋放（比一般技能多花一槽），釋放那一槽不會再多行動一次。
@@ -207,6 +231,27 @@ const ACTIVE_GEMS = {
     ]
   },
 
+  // 火焰風暴（使用者設計，2026-11-19；數值是我擬的初版）：群體法術。施放後依爆擊率有機率在同一個行動槽
+  // 再打一次 50% 的火焰風暴（額外那次不再擲，不連鎖）。打 Boss 取得。
+  firestorm: {
+    id: 'firestorm',
+    name: '火焰風暴',
+    tags: ['spell', 'aoe'],
+    spCost: 15,
+    uncounterable: true,
+    critEcho: { power: 0.5, text: '火焰風暴再次席捲，' },
+    actions: [
+      {
+        type: 'DAMAGE',
+        targetType: 'ENEMY_ALL',
+        power: 0.9,
+        stat: 'int',
+        uncritable: true,
+        text: { action: '{caster} 召喚火焰風暴，' }
+      }
+    ]
+  },
+
   whirlwind: {
     id: 'whirlwind',
     name: '旋風斬',
@@ -282,6 +327,7 @@ const SUPPORT_GEMS = {
   heavy: {
     id: 'heavy',
     name: '強力',
+    desc: '傷害變為{more}，消耗SP提升{cost}。',
     exclusiveGroup: 'economy',
     requires: { action: { type: 'DAMAGE' } },
     addTags: [],
@@ -295,6 +341,7 @@ const SUPPORT_GEMS = {
   lean: {
     id: 'lean',
     name: '節能',
+    desc: '傷害變為{more}，消耗SP減少{cost}。',
     exclusiveGroup: 'economy',
     requires: { action: { type: 'DAMAGE' } },
     addTags: [],
@@ -308,6 +355,7 @@ const SUPPORT_GEMS = {
   amp: {
     id: 'amp',
     name: '增幅',
+    desc: '傷害增加{inc}。',
     requires: { action: { type: 'DAMAGE' } },
     addTags: [],
     effects: [
@@ -320,6 +368,7 @@ const SUPPORT_GEMS = {
   pierce: {
     id: 'pierce',
     name: '穿甲',
+    desc: '無視目標{ignoreDefense}防禦。',
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['pierce'],
     effects: [
@@ -333,6 +382,7 @@ const SUPPORT_GEMS = {
   shock: {
     id: 'shock',
     name: '感電',
+    desc: '命中的敵人受到的攻擊傷害增加{damageTaken}，持續{duration}個行動槽。',   // 使用者清單沒列，照同樣語氣寫
     requires: {
       action: { type: 'DAMAGE' },
       tags: { all: ['spell'] }
@@ -367,6 +417,7 @@ const SUPPORT_GEMS = {
   focus: {
     id: 'focus',
     name: '聚焦',
+    desc: '攻擊目標變為單體；傷害變為{more}。',
     requires: { action: { type: 'DAMAGE', targetType: 'ENEMY_ALL' } },
     addTags: [],
     removeTags: ['aoe'],
@@ -381,6 +432,7 @@ const SUPPORT_GEMS = {
   charge: {
     id: 'charge',
     name: '蓄力',
+    desc: '傷害變為{more}，消耗SP提升{cost}，使用技能前蓄力一回合。',
     requires: { action: { type: 'DAMAGE' } },
     addTags: ['charge'],
     effects: [
@@ -395,6 +447,7 @@ const SUPPORT_GEMS = {
   layout: {
     id: 'layout',
     name: '佈局',
+    desc: '戰鬥開始後的第一次行動必定施放此技能。多個技能連結佈局時，隨機選一個。',
     addTags: ['opening'],
     effects: [{ op: 'grant', kind: 'opening', text: '{caster}的第一動，' }]
   },
@@ -403,6 +456,7 @@ const SUPPORT_GEMS = {
   trump: {
     id: 'trump',
     name: '撒手鐧',
+    desc: '生命第一次降到 {threshold} 以下時，立刻額外行動一次並施放此技能。多個技能連結撒手鐧時，隨機選一個。',
     addTags: ['lastResort'],
     effects: [{ op: 'grant', kind: 'lastResort', threshold: 0.5 }]
   },
@@ -412,6 +466,7 @@ const SUPPORT_GEMS = {
   leech: {
     id: 'leech',
     name: '汲取',
+    desc: '消耗SP提升{cost}。回復造成傷害的{leech}生命。',
     requires: {
       action: { type: 'DAMAGE' },
       tags: { none: ['spell'] }
@@ -428,6 +483,73 @@ const SUPPORT_GEMS = {
     ]
   },
 
+  // 迅擊（使用者設計，2026-11-19；原名連擊，同日改名，id 不變）：原本的一擊與追加的一擊都是 45%（合計 90%），兩擊都附加異常與感電；沒有 SP 代價。
+  // 只能連單體技能（追加的那一擊打同一個目標）。
+  multistrike: {
+    id: 'multistrike',
+    name: '迅擊',
+    desc: '傷害變為{more}，額外釋放一次技能。',
+    requires: { action: { type: 'DAMAGE', targetType: 'ENEMY_SINGLE' }, tags: { none: ['aoe'] } },
+    addTags: [],
+    effects: [
+      { op: 'repeat', times: 1, text: '{caster} 迅擊，' },
+      { op: 'more', value: -0.55 }
+    ]
+  },
+
+  // 法術會心（使用者設計，2026-11-19）：讓爆擊率與爆擊傷害在法術上有作用。
+  // 倍率用爆擊的實際平均收益 1 + 爆擊率 × (爆擊傷害 − 1)（使用者選；原案 1 + 爆擊率 × 爆擊傷害），施放當下讀取。
+  spellcrit: {
+    id: 'spellcrit',
+    name: '法術會心',
+    desc: '傷害變為（1＋爆擊率×（爆擊傷害−1））倍。',
+    requires: { action: { type: 'DAMAGE' }, tags: { all: ['spell'] } },
+    addTags: [],
+    effects: [{ op: 'critAsDamage' }]
+  },
+
+  // 暴怒（使用者設計，2026-11-19）：施放當下生命低於 50% 時，傷害 +50%（加算，跟增幅同一區）。
+  rage: {
+    id: 'rage',
+    name: '暴怒',
+    desc: '血量低於{hpBelow}時，傷害增加{condInc}。',
+    requires: { action: { type: 'DAMAGE' } },
+    addTags: [],
+    effects: [{ op: 'condInc', value: 0.5, when: { hpBelow: 0.5 } }]
+  },
+
+  // 吸魔（使用者設計，2026-11-19）：物理限定；每一擊命中時減少目標 5% SP 上限的 SP。
+  drain: {
+    id: 'drain',
+    name: '吸魔',
+    desc: '命中時減少對方{drain}SP上限的SP。',
+    requires: { action: { type: 'DAMAGE' }, tags: { none: ['spell'] } },
+    addTags: [],
+    effects: [{ op: 'reaction', trigger: 'AFTER_DAMAGE_DEALT', scope: 'thisSkill', do: { kind: 'drainSp', ratio: 0.05 } }]
+  },
+
+  // 追擊（使用者設計，2026-11-19）：普攻一次打出 3 連擊以上時，免費施放一次這個技能（每槽最多一次）。
+  // 連擊數取決於自己與目標的速度差（差 > 80 才可能 3 連擊），所以是速度流派的寶石；速度同日加倍就是為了它。
+  followup: {
+    id: 'followup',
+    name: '追擊',
+    desc: '普攻{minHits}連擊以上時釋放一次此技能。',
+    requires: {},
+    addTags: [],
+    effects: [{ op: 'grant', kind: 'comboCast', minHits: 3 }]
+  },
+
+  // 迴響（使用者設計，2026-11-19）：群體法術限定。使用時只開啟迴響（付 200% SP、不造成傷害），
+  // 之後這個技能不再被選用，每回合開始時自動免費釋放一次 40% 傷害；佈局、追擊等觸發仍可施放（開啟後施放的是傷害版）。
+  echo: {
+    id: 'echo',
+    name: '迴響',
+    desc: '傷害變為{more}，消耗SP提升{cost}。使用技能開啟迴響，自身不再使用技能，而是回合開始時自動釋放。',
+    requires: { action: { type: 'DAMAGE', targetType: 'ENEMY_ALL' }, tags: { all: ['spell'] }, gems: { none: ['charge'] } },
+    addTags: [],
+    effects: [{ op: 'more', value: -0.6 }, { op: 'cost', value: 1.0 }, { op: 'wrap', kind: 'echo' }]
+  },
+
   // 爆擊強化：使用時先替自己加上爆擊率 +15%，只持續這次施放的行動槽（duration 1 = 行動槽結束就消失），
   // 所以這次施放的每一擊都吃得到，之後的普攻與其他技能不受影響。
   // 沒有提示文字（text 留空）：BUFF 動作仍會產生一行訊息為空字串的戰報（BUFF_APPLY），顯示端要過濾空訊息。
@@ -435,6 +557,7 @@ const SUPPORT_GEMS = {
   critup: {
     id: 'critup',
     name: '爆擊強化',
+    desc: '爆擊率提升{cri}。',
     // 平衡第一輪：禁止連到法術（使用者決定；法術不擲爆擊骰，連了也沒有效果）
     requires: { action: { type: 'DAMAGE' }, tags: { none: ['spell'] } },
     addTags: [],
@@ -468,7 +591,7 @@ const SUPPORT_GEMS = {
 // 名單是我擬的佔位：追刃留給打王。王的獎勵還沒做，BOSS_REWARD_GEMS 只是記錄。
 // 治癒術暫時不給（使用者：還沒有配套的輔助寶石），列在 UNOBTAINABLE_ACTIVE_GEMS，之後再決定來源。
 const STARTING_ACTIVE_GEMS = ['magicmissile', 'whirlwind', 'rend'];
-const BOSS_REWARD_GEMS = ['pursuit'];
+const BOSS_REWARD_GEMS = ['pursuit', 'firestorm'];   // 火焰風暴 2026-11-19 加入（使用者）
 const UNOBTAINABLE_ACTIVE_GEMS = ['mend'];
 
 module.exports = { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_GEMS, ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };

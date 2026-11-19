@@ -29,16 +29,18 @@ test('every line is equally likely to be dropped', () => {
 
 test('max roll at tier 5 equals the table maximum; tier and roll scale it', () => {
   const [atk, phys] = rollEngraving('fury', 5, () => 1);      // 最後一行落選、其餘滿骰
-  assert.deepEqual([atk.value, phys.value], [0.17, 0.12]);
+  const [atkMax, physMax] = ENGRAVING_TYPES.fury.lines.map(l => l.max);   // 數值從表讀，調平衡不用改測試
+  assert.deepEqual([atk.value, phys.value], [atkMax, physMax]);
   const [low] = rollEngraving('fury', 1, scripted(0.99, 0));  // 第 3 行落選，第一行擲到下限
-  assert.equal(low.value, Math.round(0.17 * TIER_SCALE[1] * ROLL_MIN * 10000) / 10000);
+  assert.equal(low.value, Math.round(atkMax * TIER_SCALE[1] * ROLL_MIN * 10000) / 10000);
 });
 
 test('percent lines keep their decimals; only flat integer stats are rounded', () => {
   const lines = rollEngraving('vital', 5, () => 1);            // hp inc、def flat
   assert.equal(lines[0].op, 'inc');
-  assert.equal(lines[0].value, 0.21);
-  assert.equal(lines[1].value, 33);
+  assert.equal(lines[0].value, ENGRAVING_TYPES.vital.lines[0].max);
+  assert.equal(lines[1].value, ENGRAVING_TYPES.vital.lines[1].max);
+  assert.ok(Number.isInteger(lines[1].value));
   const flatHp = rollEngraving('bulwark', 3, scripted(0, 0.5, 0.5)).find(l => l.stat === 'hp');   // 第 1 行（def inc）落選
   assert.ok(Number.isInteger(flatHp.value));
 });
@@ -60,8 +62,9 @@ test('a rolled item can be added to a save and its bonuses reach the stats', () 
   const result = addEquipment(state, { slot: 'weapon', origin: 'craft', base: rollBase('weapon', 5, () => 1), affixes: rollEngraving(['fury', 'fury'], 5, () => 1) });
   state = equip(result.save, result.id);
   const stats = applyStatBonuses({ hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 100 }, equippedBonuses(state));
-  // 兩個猛攻各取到「ATK +17%」（最後一行落選），同在加算區：(150 + 215) × (1 + 0.17 + 0.17)
-  assert.equal(stats.atk, Math.round((150 + 215) * 1.34));
+  // 兩個猛攻各取到「ATK +X%」（最後一行落選），同在加算區：(150 + 武器基底) × (1 + X + X)
+  const inc = ENGRAVING_TYPES.fury.lines[0].max, base = BASE_BY_SLOT.weapon.find(b => b.stat === 'atk').max;
+  assert.equal(stats.atk, Math.round((150 + base) * (1 + 2 * inc)));
 });
 
 test('spell engravings carry no crit lines and physical ones no spell lines', () => {
@@ -101,5 +104,5 @@ test('an item takes exactly two engravings, and the same one twice is allowed', 
 test('armor carries atk and int base like the weapon', () => {
   const stats = rollBase('armor', 5, () => 1).map(b => b.stat);
   assert.ok(stats.includes('atk') && stats.includes('int'));
-  assert.deepEqual(rollBase('armor', 5, () => 1).filter(b => b.stat === 'atk' || b.stat === 'int').map(b => b.value), [140, 140]);
+  assert.deepEqual(rollBase('armor', 5, () => 1).filter(b => b.stat === 'atk' || b.stat === 'int').map(b => b.value), BASE_BY_SLOT.armor.filter(b => b.stat === 'atk' || b.stat === 'int').map(b => b.max));
 });

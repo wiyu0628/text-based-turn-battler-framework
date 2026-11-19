@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const { Entity, Skill, BattleEngine, Formulas, createSeededRandom } = require('../src');
 const { compileLoadout, compileSkill } = require('./gemCompiler');
 const save = require('./saveLayer');
-const { rollEngraving, rollBase } = require('./affixTable');
+const { rollEngraving, rollBase, ENGRAVING_TYPES } = require('./affixTable');
+const lineMax = (type, i) => ENGRAVING_TYPES[type].lines[i].max;   // 數值從表讀，調平衡不用改測試
 
 const powers = (loadoutOrSkill) => (loadoutOrSkill.skills ?? [loadoutOrSkill.skill])[0].actions.filter(a => a.type === 'DAMAGE').map(a => a.power);
 const power = (active, supports, equipment) => powers(compileLoadout([{ active, supports }], { equipment }))[0];
@@ -96,7 +97,7 @@ function equipped(types) {
   }
   return state;
 }
-// 猛攻留下「ATK +17%、物理傷害 +12%」（第 3 行落選）；堅韌第 2 行落選留下 hp 與減傷；鐵壁第 2 行落選留下 def 與減傷
+// 猛攻留下「ATK、物理傷害」兩行（第 3 行落選）；堅韌第 2 行落選留下 hp 與減傷；鐵壁第 2 行落選留下 def 與減傷
 const FURY = ['fury', 'fury'];
 const vitalBulwark = () => [['vital', 'bulwark'], scripted(0.5, 1, 1, 0.5, 1, 1)];   // rng 有狀態，每次用都要新做一個
 
@@ -111,8 +112,8 @@ test('save accepts effect affixes and rejects bad kinds and values', () => {
 test('equippedEffects sums equipped items only, with reduction capped', () => {
   const state = equipped({ weapon: [FURY], helmet: vitalBulwark() });
   const fx = save.equippedEffects(state);
-  assert.ok(Math.abs(fx.physDmg - 0.24) < 1e-9);          // 12% × 2
-  assert.ok(Math.abs(fx.reduction - 0.115) < 1e-9);       // 5% + 6.5%
+  assert.ok(Math.abs(fx.physDmg - 2 * lineMax('fury', 1)) < 1e-9);                          // 兩個猛攻的物理傷害
+  assert.ok(Math.abs(fx.reduction - (lineMax('vital', 2) + lineMax('bulwark', 2))) < 1e-9);  // 堅韌 + 鐵壁的減傷
   assert.equal(fx.spellDmg, 0);
   assert.deepEqual(save.equippedEffects(fresh()), { physDmg: 0, spellDmg: 0, reduction: 0, ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 });
 });
@@ -123,7 +124,7 @@ test('compileEquipped wires links, damage bonus and reduction in one step', () =
   const weaponId = state.equipped.weapon;
   state = save.setLinks(state, weaponId, [{ active: 'whirlwind', supports: [] }]);
   const loadout = save.compileEquipped(state);
-  assert.equal(loadout.skills[0].actions[0].power, r4(WW * 1.24));   // × (1 + 0.24)
+  assert.equal(loadout.skills[0].actions[0].power, r4(WW * (1 + 2 * lineMax('fury', 1))));   // × (1 + 兩個猛攻的物理傷害)
   assert.ok(loadout.passives.some(p => p.id === 'gem_equipment_reduction'));
 });
 

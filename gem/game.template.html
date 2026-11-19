@@ -642,7 +642,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   function dropChip(label, onclick) { return h('span', { class: 'chip drop', text: label, title: '點一下看資料', onclick }); }
   function showGemInfo(id) {
     if (G.ACTIVE_GEMS[id]) showInfo(`主動寶石：${gemName(id)}`, [h('div', { text: describeActive(G.ACTIVE_GEMS[id]) }), G.ACTIVE_GEMS[id].description ? h('div', { class: 'muted', style: 'margin-top:6px', text: G.ACTIVE_GEMS[id].description }) : null].filter(Boolean));
-    else showInfo(`輔助寶石：${gemName(id)}`, [h('ul', { style: 'margin:0;padding-left:18px' }, compiler.describeSupport(G.SUPPORT_GEMS[id]).lines.map(l => h('li', { text: l.text })))]);
+    else showInfo(`輔助寶石：${gemName(id)}`, [...compiler.describePlayer(G.SUPPORT_GEMS[id]).map(text => h('div', { text })), h('div', { class: 'muted', style: 'margin-top:8px;font-size:12px', text: '詳細規則' }), h('ul', { class: 'muted', style: 'margin:0;padding-left:18px;font-size:12px' }, compiler.describeSupport(G.SUPPORT_GEMS[id]).lines.map(l => h('li', { text: l.text })))]);
   }
   function resultBox(result, live) {
     const box = h('div', { class: 'result ' + (result.victory ? 'win' : 'lose') },
@@ -863,7 +863,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
       ...item.base.map(b => statLayer.describeStatBonus(b).text),
       ...item.affixes.map(a => describeAffix(a) + (a.source?.startsWith('engraving:') ? `（${engravingLabel(a.source.slice(10))}）` : a.source?.startsWith('craft:') ? '（製作詞綴）' : a.source?.startsWith('legendary:') ? '（獨有）' : ''))
     ];
-    const mech = legendary.mechanicsOf(item).map(m => m.type === 'grantSupport' ? `裝備的主動寶石具有${gemName(m.gem)}` : m.type === 'castOnEnemyDeath' ? '敵人倒下時釋放一次裝備的主動寶石' : m.type);
+    const mech = legendary.mechanicsOf(item).map(m => legendary.describeMechanic(m, gemName));
     const links = S.equippedLinks({ ...state, equipped: { weapon: null, helmet: null, armor: null, boots: null, [item.slot]: item.id } });
     return h('div', { class: 'item' + (worn ? ' worn' : '') },
       h('div', { class: 'name' }, itemName(item), h('span', { class: 'muted', style: 'font-weight:normal', text: `　${SLOT_NAMES[item.slot]}` }),
@@ -943,7 +943,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     return [h('div', { class: 'grid4' }, Object.keys(SLOT_NAMES).map(linkEditor)),
       h('div', { class: 'grid2' },
         h('div', { class: 'panel' }, h('h2', { text: '已擁有的主動寶石' }), h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: '擁有一次就能鑲在任意多件裝備上；穿在身上的裝備裡同一種只能有一顆。' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id]) => h('li', {}, h('strong', { text: gemName(id) }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有' })),
-        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), h('div', { class: 'muted', style: 'font-size:12px', text: compiler.describeSupport(G.SUPPORT_GEMS[id]).lines.map(l => l.text).join('；') })))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' })))];
+        h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {}, h('strong', { text: `${gemName(id)} ×${n}` }), ...compiler.describePlayer(G.SUPPORT_GEMS[id]).map(text => h('div', { class: 'muted', style: 'font-size:12px', text }))))) : h('div', { class: 'muted', text: '沒有（打怪會掉）' })))];
   }
 
   // ── 畫面 ────────────────────────────────────────────────────

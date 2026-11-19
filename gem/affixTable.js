@@ -37,7 +37,8 @@
  *   合成本身不擲數值：刻印沒有個體差異，數值是刻到裝備上時才擲（ROLL_MIN～1 × 上限）。
  */
 
-const TIER_SCALE = { 1: 0.20, 2: 0.35, 3: 0.55, 4: 0.78, 5: 1.0 };
+// 第二版（2026-11-19，難度改成 15 級約 10 倍、裝備預算 ×5 → ×10）：低階變弱、階與階拉開，原本 0.20／0.35／0.55／0.78／1.0
+const TIER_SCALE = { 1: 0.10, 2: 0.29, 3: 0.50, 4: 0.71, 5: 1.0 };
 const ROLL_MIN = 0.7;          // 擲值下限（占該階上限的比例）
 const REDUCTION_CAP = 0.5;     // 減傷率合計上限
 const COMBINE_INPUTS = 3;      // 合成一次投入的刻印數
@@ -48,14 +49,16 @@ const stat = (statKey, op, max) => line('stat', { stat: statKey, op, max });
 
 // 上限 = 第 5 階、滿骰、「單一詞綴行」的值。每個刻印有 3 行，刻印到裝備上時隨機取其中 2 行生效，
 // 所以數值是照「每行只有 2/3 機率出現」配的（整套 8 個刻印、16 行生效，期望值與預算一致）。
+// 第二版（2026-11-19，預算 ×10）：攻／智／生命／防禦的百分比、物理／法術傷害提高、平值生命與防禦都 × 1.9；
+// 爆擊、爆擊傷害、速度、SP、減傷、命中、閃避不變（有上限、或放大會改變手感）。
 const ENGRAVING_TYPES = {
-  fury:     { name: '猛攻', lines: [stat('atk', 'inc', 0.17), line('physDmg', { max: 0.12 }), stat('criDmg', 'flat', 0.25)] },
-  arcane:   { name: '奧術', lines: [stat('int', 'inc', 0.17), line('spellDmg', { max: 0.12 }), stat('sp', 'flat', 50)] },
+  fury:     { name: '猛攻', lines: [stat('atk', 'inc', 0.32), line('physDmg', { max: 0.23 }), stat('criDmg', 'flat', 0.25)] },
+  arcane:   { name: '奧術', lines: [stat('int', 'inc', 0.32), line('spellDmg', { max: 0.23 }), stat('sp', 'flat', 50)] },
   precise:  { name: '精準', lines: [stat('cri', 'flat', 0.08), stat('criDmg', 'flat', 0.25), stat('spd', 'inc', 0.12)] },
-  vital:    { name: '堅韌', lines: [stat('hp', 'inc', 0.21), stat('def', 'flat', 33), line('reduction', { max: 0.05 })] },
-  bulwark:  { name: '鐵壁', lines: [stat('def', 'inc', 0.25), stat('hp', 'flat', 330), line('reduction', { max: 0.065 })] },
+  vital:    { name: '堅韌', lines: [stat('hp', 'inc', 0.40), stat('def', 'flat', 63), line('reduction', { max: 0.05 })] },
+  bulwark:  { name: '鐵壁', lines: [stat('def', 'inc', 0.48), stat('hp', 'flat', 630), line('reduction', { max: 0.065 })] },
   gale:     { name: '疾風', lines: [stat('spd', 'inc', 0.21), stat('sp', 'flat', 50), stat('cri', 'flat', 0.04)] },
-  endure:   { name: '持久', lines: [stat('sp', 'flat', 75), stat('hp', 'inc', 0.08), stat('atk', 'inc', 0.065)] },
+  endure:   { name: '持久', lines: [stat('sp', 'flat', 75), stat('hp', 'inc', 0.15), stat('atk', 'inc', 0.12)] },
   // 靈巧：命中與閃避（遊戲用 hitFormula: 'contest'，命中 = 200 + hit、閃避機率 = (100 + max(0, 差距)) / (200 + |差距|)）
   deft:     { name: '靈巧', lines: [stat('hit', 'flat', 150), stat('eva', 'flat', 50), stat('spd', 'inc', 0.12)] }
 };
@@ -89,10 +92,10 @@ const AILMENT_DURATION_CAP = 2;   // 異常持續時間加成合計上限（槽�
 
 // 裝備基底（固定值，第 5 階滿骰）。階級用同一個 TIER_SCALE；擲值同 ROLL_MIN。
 const BASE_BY_SLOT = {
-  weapon: [{ stat: 'atk', op: 'flat', max: 215 }, { stat: 'int', op: 'flat', max: 215 }],
-  helmet: [{ stat: 'hp', op: 'flat', max: 1070 }, { stat: 'def', op: 'flat', max: 43 }],
-  armor:  [{ stat: 'hp', op: 'flat', max: 1700 }, { stat: 'def', op: 'flat', max: 75 }, { stat: 'atk', op: 'flat', max: 140 }, { stat: 'int', op: 'flat', max: 140 }],
-  boots:  [{ stat: 'hp', op: 'flat', max: 860 }, { stat: 'def', op: 'flat', max: 32 }, { stat: 'spd', op: 'flat', max: 11 }]
+  weapon: [{ stat: 'atk', op: 'flat', max: 410 }, { stat: 'int', op: 'flat', max: 410 }],
+  helmet: [{ stat: 'hp', op: 'flat', max: 2030 }, { stat: 'def', op: 'flat', max: 82 }],
+  armor:  [{ stat: 'hp', op: 'flat', max: 3230 }, { stat: 'def', op: 'flat', max: 143 }, { stat: 'atk', op: 'flat', max: 266 }, { stat: 'int', op: 'flat', max: 266 }],
+  boots:  [{ stat: 'hp', op: 'flat', max: 1630 }, { stat: 'def', op: 'flat', max: 61 }, { stat: 'spd', op: 'flat', max: 22 }]
 };
 
 const INTEGER_STATS = new Set(['hp', 'sp', 'atk', 'int', 'def', 'spd', 'hit', 'eva']);
