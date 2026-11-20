@@ -36,10 +36,23 @@
  */
 
 const { Entity, Skill } = require('../src');
+
+// 閃避反擊的點數曲線（gem 自己的，和框架的 Formulas.counterChance 同型、常數可以自由改；使用者之後決定）：
+//   chance = ceiling / (1 + e^(−(守方點數 − 攻方點數) / scale))；守方 0 點 = 不反擊
+// 2026-11-20 使用者：調高一倍——點數相同 20%、上限 40%
+const EVADE_COUNTER = { ceiling: 0.4, scale: 50 };
+function evadeCounterChance(points, attackerPoints = 0) {
+  if (!(points > 0)) return 0;
+  return EVADE_COUNTER.ceiling / (1 + Math.exp(-(points - attackerPoints) / EVADE_COUNTER.scale));
+}
 const { scaleMonster } = require('./difficulty');
 
 // 基準怪（強度 1）：與 affix-budget.js 的 FOE 相同
-const BASE_MONSTER = { hp: 3000, atk: 90, int: 90, def: 50, spd: 180, sp: 200 };
+// sp 200 → 800（2026-11-20）：修正怪物技能 spCost 沒生效後，200 會讓怪物很快掉到疲累（≤50% SP 全屬性 ×0.8），難度大降；800 讓各地區勝率回到修正前的水準
+const BASE_MONSTER = { hp: 3000, atk: 90, int: 90, def: 50, spd: 180, sp: 800 };
+// 怪物 SP 隨難度：沒寫 stats.sp 的怪物 SP = base + perLevel × (難度 − 1)。王與寫了 stats.sp 的怪不受影響。
+// 2026-11-20 使用者選線性（前期選擇少時更好上手）：難度 1 是 200、每級 +50、難度 15 是 900。perLevel 0 就是固定。
+const MONSTER_SP = { base: 200, perLevel: 50 };
 const RARE_CHANCE = 0.03;
 const ELITE_CHANCE = 0.15;
 
@@ -166,7 +179,7 @@ function buildSkill(spec, def, stats, casterName) {
   const spell = spec.spell ?? def.spell;
   const stat = spell ? 'int' : 'atk';
   const spellFlags = spell ? { uncritable: true, uncounterable: true } : {};
-  const base = { id: `${def.id}_${spec.id}`, name: spec.name, spCost: spec.spCost ?? 0 };
+  const base = { id: `${def.id}_${spec.id}`, name: spec.name };
   if (spec.kind === 'attack') {
     const intro = spec.intro !== undefined ? [{ type: 'TEXT', text: { action: template(spec.intro, casterName) } }] : [];
     if (spec.target === 'random') {
@@ -249,6 +262,12 @@ function buildEnragePassive(trait, def) {
  *     繼承王的防禦；被打倒後，在下一個行動結束（或回合開始）時對王造成 breakRatio 的傷害（直接扣血，不吃防禦與減傷）。
  *     有 drain：輪到它時只會用這一招——讓對面的主角失去 sp 點 SP（不夠就扣到 0；不造成傷害、不會落空）；沒有 drain 就不行動。
  *   文字裡的 {caster} 是王的名字、{player} 是對面主角的名字、{summon} 是召喚物的名字。
+ *
+ * ── 閃避反擊 evadeCounter（選填，2026-11-20 使用者：反擊必須先閃避成功）──────────
+ *   { points, skill?, text? }：這隻怪閃避掉一擊之後，依 EVADE_COUNTER 的點數曲線擲反擊（攻擊方沒有點數＝0），
+ *   成功就立刻還擊攻擊者一下：有 skill（attack 技能格式）且 SP 夠就用它並扣 SP，否則用預設反擊（普攻倍率一擊，text 是開頭）。
+ *   還擊必定命中、不會再被反擊（框架的 counterSource）；法術（uncounterable）被躲開也不反擊。
+ *   框架原本「命中才判定」的反擊不用：所有單位的 stats.counter 保持 0。
  */
 // 旁白裡的 {player}：對面隊伍的主角（id 'hero'，沒有就第一個）的名字——玩家可以改名，所以不能寫死「玩家」
 function playerNameFor(self, engine) {
@@ -349,6 +368,41 @@ function buildSpDrainSkill(spec, def) {
   return skill;
 }
 
+function withSpCost(skill, cost) {
+  if (cost > 0) skill.actions[0] = { ...skill.actions[0], spCost: cost };
+  return skill;
+}
+
+// 閃避反擊（見檔頭 evadeCounter）
+function buildEvadeCounterPassive(def, stats, entityName) {
+  const spec = def.evadeCounter;
+  const stat = def.spell ? 'int' : 'atk';
+  const flags = def.spell ? { uncritable: true } : {};
+  const basic = new Skill({ id: `${def.id}_evade_counter`, name: '反擊', ...flags,
+    actions: [{ type: 'DAMAGE', stat, power: 1, ...flags, text: { action: template(spec.text ?? '{caster} 趁隙反擊，', entityName) } }] });
+  const special = spec.skill ? buildSkill(spec.skill, def, stats, entityName) : null;
+  return {
+    id: `monster_evade_counter:${def.id}`,
+    trigger: 'AFTER_EVADE',
+    enabled: (self, evasion) => Boolean(evasion.caster?.isAlive) && !(evasion.skill?.uncounterable || evasion.action?.uncounterable),
+    action(self, evasion, logger, engine) {
+      if (!engine || engine.result || engine.counterSource || !self.canAct()) return;
+      const attacker = evasion.caster;
+      const chance = evadeCounterChance(spec.points, attacker.evadeCounterPoints ?? 0);
+      if (!((engine.rng ?? Math.random)() < chance)) return;
+      // 怪物技能的 spCost 寫在技能規格上（框架的 Skill 只看 action.spCost），這裡自己扣
+      const cost = spec.skill?.spCost ?? 0;
+      const useSpecial = special && self.stats.sp >= cost;
+      const reply = useSpecial ? special : basic;
+      if (useSpecial) self.stats.sp -= cost;
+      const source = { actorId: self.id, targetId: attacker.id, incomingSkillId: evasion.skill?.id };
+      const allies = self.team === 'A' ? engine.teamA : engine.teamB;
+      const enemies = self.team === 'A' ? engine.teamB : engine.teamA;
+      engine.withCounterSource(source, () => reply.execute(self, allies, enemies, logger, engine, { targets: [attacker], ignoreSp: true }));
+    }
+  };
+}
+
 // 伏擊：開戰時攻擊力 × mult，撐到自己的第一個行動槽結束
 function buildAmbushPassive(trait, def) {
   return {
@@ -376,7 +430,7 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
     hp: BASE_MONSTER.hp * def.stats.hp * scale,
     atk: BASE_MONSTER.atk * (def.stats.atk ?? 0) * scale,
     int: BASE_MONSTER.int * (def.stats.int ?? 0) * scale,
-    def: def.stats.def ?? BASE_MONSTER.def, spd: def.stats.spd ?? BASE_MONSTER.spd, sp: def.stats.sp ?? BASE_MONSTER.sp,
+    def: def.stats.def ?? BASE_MONSTER.def, spd: def.stats.spd ?? BASE_MONSTER.spd, sp: def.stats.sp ?? Math.round(MONSTER_SP.base + MONSTER_SP.perLevel * (difficulty - 1)),
     eva: def.stats.eva ?? 0, hit: def.stats.hit ?? 0
   };
   const stats = scaleMonster({ ...raw, hp: Math.round(raw.hp), maxHp: Math.round(raw.hp) }, difficulty);
@@ -386,13 +440,15 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
   const normalAttack = new Skill({ id: `${def.id}_attack`, name: '攻擊', actions: [{ type: 'DAMAGE', stat, ...(def.spell ? { uncritable: true, uncounterable: true } : {}),
     ...(def.normalAttackText !== undefined ? { text: { action: template(def.normalAttackText, entityName) } } : {}) }],
     ...(def.spell ? { uncritable: true, uncounterable: true } : {}) });
-  const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => buildSkill(spec, def, stats, entityName));
+  // spCost 要放在第一個 action 上框架才會扣（Skill 只讀 action.spCost）。2026-11-20 修正：之前寫在技能層級，怪物放技能從來不扣 SP。
+  const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => withSpCost(buildSkill(spec, def, stats, entityName), spec.spCost));
   const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives };
   const passives = (def.traits ?? []).filter(trait => difficulty >= (trait.from ?? 1)).flatMap(trait => {
     if (!TRAIT_BUILDERS[trait.kind]) throw new Error(`怪物「${def.id}」的特性種類不明：${trait.kind}`);
     return TRAIT_BUILDERS[trait.kind](trait, def, { difficulty, stats, entityName });
   });
   passives.push(...buildNarrationPassives(def.texts));
+  if (def.evadeCounter) passives.push(buildEvadeCounterPassive(def, stats, entityName));
   return new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack, normalAttackSpCost: 2, skills, passives, stats });
 }
 
@@ -458,4 +514,4 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   return { monsters, summonFactory, info: { ids: picks.map(def => def.id), rare: hasRare, elite: hasElite, totalCost, scale } };
 }
 
-module.exports = { BASE_MONSTER, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, buildMonster, buildFromDef, availableMonsters, rollEncounter };
+module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildMonster, buildFromDef, availableMonsters, rollEncounter };

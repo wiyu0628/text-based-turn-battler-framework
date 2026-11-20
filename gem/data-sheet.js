@@ -61,12 +61,12 @@ add('地區', '地區', `每場隻數在範圍內；稀有怪 ${pct(M.RARE_CHANC
 const rarity = def => def.rarity === 'rare' ? '稀有' : def.rarity === 'elite' ? '菁英' : '普通';
 const regionOf = id => Object.values(M.REGIONS).filter(r => r.monsters.includes(id)).map(r => r.name).join('、');
 const statsAt = (def, d) => M.buildFromDef(def, d, { id: 'x' }).stats;
-add('怪物', '怪物屬性', `倍率欄以基準怪（HP ${M.BASE_MONSTER.hp}、攻擊 ${M.BASE_MONSTER.atk}、智力 ${M.BASE_MONSTER.int}）為 1；防禦是難度 1 的值（每級 +${DIFF.DEF_PER_LEVEL}），速度／閃避是固定值。後面各難度欄是單隻、預算縮放前的實際值（遭遇戰會再依預算縮放 HP 與攻擊／智力）。`,
+add('怪物', '怪物屬性', `倍率欄以基準怪（HP ${M.BASE_MONSTER.hp}、攻擊 ${M.BASE_MONSTER.atk}、智力 ${M.BASE_MONSTER.int}）為 1；防禦是難度 1 的值（每級 +${DIFF.DEF_PER_LEVEL}），速度／閃避是固定值。SP 隨難度：${M.MONSTER_SP.base} ＋ ${M.MONSTER_SP.perLevel} ×（難度 − 1）；怪物放技能會扣 SP。後面各難度欄是單隻、預算縮放前的實際值（遭遇戰會再依預算縮放 HP 與攻擊／智力）。`,
   ['地區', 'id', '名稱', '稀有度', '出現難度', '預算成本', '傷害類型', 'HP 倍率', '攻擊倍率', '智力倍率', '防禦', '速度', '閃避', 'SP', '施放率',
     ...SHOW_DIFFS.flatMap(d => [`難度${d} HP`, `難度${d} 攻擊/智力`])],
   Object.values(M.MONSTERS).map(def => [regionOf(def.id), def.id, def.name, rarity(def), def.from, def.cost, def.spell ? '法術（智力）' : '物理（攻擊）',
     def.stats.hp, def.stats.atk ?? 0, def.stats.int ?? 0, def.stats.def ?? M.BASE_MONSTER.def, def.stats.spd ?? M.BASE_MONSTER.spd, def.stats.eva ?? 0,
-    def.stats.sp ?? M.BASE_MONSTER.sp, def.skillCastRate ?? 0.35,
+    def.stats.sp ?? `${M.MONSTER_SP.base}＋${M.MONSTER_SP.perLevel}×(難度−1)`, def.skillCastRate ?? 0.35,
     ...SHOW_DIFFS.flatMap(d => { const s = statsAt(def, d); return [s.maxHp, def.spell ? s.int : s.atk]; })]));
 
 // ── 怪物技能與特性（Boss 一起列） ──
@@ -106,7 +106,7 @@ add('Boss', 'Boss', 'Boss 難度固定；勝利掉落比照菁英（+1 個刻印
     const s = M.buildFromDef(m, b.difficulty, { id: 'x' }).stats;
     return [b.id, m.name, b.difficulty, s.maxHp, s.atk, s.int, s.def, s.spd, m.skillCastRate ?? 0.35,
       [b.rewards.gems.length ? '主動寶石：' + b.rewards.gems.map(g => G.ACTIVE_GEMS[g]?.name ?? g).join('、') : '', b.rewards.unlockRegions.length ? '開放地區：' + b.rewards.unlockRegions.join('、') : '', b.rewards.accessories?.length ? '飾品：' + b.rewards.accessories.map(a => AC.ACCESSORIES[a]?.name ?? a).join('、') : ''].filter(Boolean).join('；'),
-      b.placeholder ? '佔位，待重新設計' : '普攻物理；技能法術'];
+      b.placeholder ? '佔位，待重新設計' : `普攻物理；技能法術；SP ${b.monsters[0].stats.sp ?? 800}`];
   })));
 
 // ── 刻印 ──
@@ -187,7 +187,7 @@ add('飾品', '飾品', `玩家看到的類別名是${AC.ACCESSORY_LABEL}。飾�
   Object.values(AC.ACCESSORIES).map(a => [a.id, a.name, a.affixes.map(accessoryLine).join('、'), accessorySource(a.id)]));
 
 // ── 能量 ──
-add('能量', '能量', `上限 ${E.ENERGY_CAP}，超過的部分作廢。勝利能量依該難度的最高刻印階。`,
+add('能量', '能量', `沒有上限。勝利能量依該難度的最高刻印階。轉移刻印到同部位的另一件裝備固定 ${E.TRANSFER_ENERGY}（目標刻滿時另外加清除費）；黑骰重骰製作詞綴時鎖定種類另外 ${E.CRAFT_REROLL_LOCK_ENERGY}。`,
   ['刻印階級', '分解 1 個刻印得到', '清除裝備上 1 個刻印消耗', '勝利能量（最高刻印階 = 此階時）'],
   [1, 2, 3, 4, 5].map(t => [t, E.SALVAGE_ENERGY[t], E.CLEAR_COST[t], E.WIN_ENERGY[t]]));
 

@@ -181,3 +181,97 @@ test('rare encounters drop 2 extra engravings biased to higher tiers; elite 1 ex
   }
   assert.ok(rare / nr > normal / nn + 0.2, `${rare / nr} vs ${normal / nn}`);
 });
+
+// ── 閃避反擊（2026-11-20）────────────────────────────────────────────
+{
+  const M = require('./monsters');
+  const { Entity: E, Skill: S, BattleEngine: BE, createSeededRandom: seeded } = require('../src');
+  const quiet = () => { const logs = []; return { logs, addLog: entry => logs.push(entry) }; };
+  const setup = (spec, heroOpts = {}) => {
+    const mob = M.buildFromDef({ ...M.MONSTERS.dog, id: 'dogx', evadeCounter: spec }, 3);
+    mob.stats.sp = 100; mob.stats.maxSp = 100;
+    const hero = new E({ id: 'hero', name: '玩家', team: 'A', normalAttack: new S({ id: 'na', name: '普攻', actions: [{ type: 'DAMAGE' }] }),
+      stats: { hp: 5000, maxHp: 5000, atk: 100, int: 100, def: 0, spd: 100, sp: 100, maxSp: 100 }, ...heroOpts });
+    const engine = new BE([hero], [mob], { rng: () => 0 });
+    return { mob, hero, engine, passive: mob.passives.find(p => p.trigger === 'AFTER_EVADE') };
+  };
+
+  test('閃避反擊的點數曲線：0 點不反擊；點數相同是上限一半；上限與斜率是 gem 自己的常數', () => {
+    assert.deepEqual(M.EVADE_COUNTER, { ceiling: 0.4, scale: 50 });   // 2026-11-20：點數相同 20%、上限 40%
+    assert.equal(M.evadeCounterChance(0), 0);
+    assert.ok(Math.abs(M.evadeCounterChance(50, 50) - 0.2) < 1e-12);
+    assert.ok(Math.abs(M.evadeCounterChance(100) - 0.4 / (1 + Math.exp(-2))) < 1e-12);
+    assert.ok(M.evadeCounterChance(1e6) <= 0.4);
+  });
+
+  test('閃避反擊：躲掉一擊後擲反擊，成功就用預設反擊（普攻倍率、必定命中）還擊攻擊者；法術被躲開不反擊；沒有 evadeCounter 的怪沒有這個被動', () => {
+    const { mob, hero, engine, passive } = setup({ points: 100, text: '{caster} 閃身反咬，' });
+    const logger = quiet();
+    const strike = hero.normalAttack;
+    assert.equal(passive.enabled(mob, { caster: hero, skill: strike, action: strike.actions[0] }), true);
+    const spell = new S({ id: 'mm', name: '魔法飛彈', uncounterable: true, actions: [{ type: 'DAMAGE', stat: 'int', uncounterable: true }] });
+    assert.equal(passive.enabled(mob, { caster: hero, skill: spell, action: spell.actions[0] }), false);
+    passive.action(mob, { caster: hero, skill: strike, action: strike.actions[0] }, logger, engine);   // rng 0 → 必定成功
+    const hit = logger.logs.find(l => l.type === 'DAMAGE');
+    assert.ok(hit && hit.targetId === 'hero');
+    assert.match(hit.message, /^憤怒野犬 閃身反咬，/);
+    assert.ok(hero.stats.hp < 5000);
+    assert.equal(engine.counterSource, null);                                      // 結束後還原
+    assert.equal(M.buildFromDef(M.MONSTERS.dog, 3).passives.some(p => p.trigger === 'AFTER_EVADE'), false);
+  });
+
+  test('閃避反擊：擲輸就不反擊；已經在反擊中（counterSource）不再反擊；有專屬反擊技能且 SP 夠就用它並扣 SP，不夠退回預設反擊', () => {
+    const lose = setup({ points: 100 });
+    lose.engine.rng = () => 0.99;
+    const l1 = quiet();
+    lose.passive.action(lose.mob, { caster: lose.hero, skill: lose.hero.normalAttack }, l1, lose.engine);
+    assert.equal(l1.logs.length, 0);
+    const chained = setup({ points: 100 });
+    const l2 = quiet();
+    chained.engine.withCounterSource({ actorId: 'x' }, () => chained.passive.action(chained.mob, { caster: chained.hero, skill: chained.hero.normalAttack }, l2, chained.engine));
+    assert.equal(l2.logs.length, 0);
+    const special = setup({ points: 100, skill: { kind: 'attack', id: 'riposte', name: '迴身斬', spCost: 30, target: 'single', power: 2, text: '{caster} 迴身一斬，' } });
+    const l3 = quiet();
+    special.passive.action(special.mob, { caster: special.hero, skill: special.hero.normalAttack }, l3, special.engine);
+    assert.match(l3.logs.find(l => l.type === 'DAMAGE').message, /迴身一斬/);
+    assert.equal(special.mob.stats.sp, 70);
+    special.mob.stats.sp = 10;
+    const l4 = quiet();
+    special.passive.action(special.mob, { caster: special.hero, skill: special.hero.normalAttack }, l4, special.engine);
+    assert.match(l4.logs.find(l => l.type === 'DAMAGE').message, /趁隙反擊/);
+    assert.equal(special.mob.stats.sp, 10);
+  });
+
+  test('閃避反擊（整場戰鬥）：每一筆反擊都緊接在怪物躲掉玩家攻擊之後；玩家命中時不反擊', () => {
+    M.EVADE_COUNTER.ceiling = 1;
+    try {
+      const mob = M.buildFromDef({ ...M.MONSTERS.dog, id: 'dogx', stats: { ...M.MONSTERS.dog.stats, eva: 300 }, evadeCounter: { points: 1000 } }, 3);
+      const hero = new E({ id: 'hero', name: '玩家', team: 'A', normalAttack: new S({ id: 'na', name: '普攻', actions: [{ type: 'DAMAGE' }] }),
+        stats: { hp: 1e6, maxHp: 1e6, atk: 100, def: 0, spd: 300, sp: 100, maxSp: 100 } });
+      const engine = new BE([hero], [mob], { rng: seeded(4), maxTurns: 10, hitFormula: 'contest' });
+      engine.start();
+      const logs = engine.logger.logs;
+      const counters = logs.map((l, i) => [l, i]).filter(([l]) => l.type === 'DAMAGE' && /趁隙反擊/.test(l.message));
+      assert.ok(counters.length > 0);
+      for (const [, i] of counters) assert.ok(logs[i - 1].type === 'MISS' && logs[i - 1].targetId === mob.id && logs[i - 1].actorId === 'hero');
+      const playerHits = logs.filter(l => l.type === 'DAMAGE' && l.actorId === 'hero').length;
+      assert.ok(playerHits > 0);
+    } finally { M.EVADE_COUNTER.ceiling = 0.4; }
+  });
+}
+
+test('怪物技能會扣 SP（2026-11-20 修正：spCost 放在第一個 action，框架才會扣）；怪物 SP 隨難度線性：200 + 50 × (難度 − 1)', () => {
+  const { MONSTER_SP } = require('./monsters');
+  assert.deepEqual(MONSTER_SP, { base: 200, perLevel: 50 });
+  assert.equal(buildMonster('dog', 1).stats.maxSp, 200);
+  assert.equal(buildMonster('dog', 15).stats.maxSp, 900);
+  const doll = buildMonster('doll', 13);
+  assert.deepEqual(doll.skills.map(s => s.actions[0].spCost), MONSTERS.doll.skills.map(s => s.spCost));
+  const mend = doll.skills[0];
+  const sp = doll.stats.sp;
+  const ally = buildMonster('dog', 13);
+  ally.stats.hp = 1;
+  const engine = new BattleEngine([new Entity({ id: 'h', name: '玩家', team: 'A', normalAttack: new Skill({ id: 'na', name: '普攻', actions: [{ type: 'DAMAGE' }] }), stats: { hp: 100, maxHp: 100, atk: 1, spd: 1 } })], [doll, ally], { rng: createSeededRandom(1) });
+  mend.execute(doll, engine.teamB, engine.teamA, { addLog() {} }, engine);
+  assert.equal(doll.stats.sp, sp - MONSTERS.doll.skills[0].spCost);
+});

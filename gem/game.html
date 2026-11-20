@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>刷怪打王</title>
+<title>我的翼識界</title>
 <script>
 // 主題在畫面出來前就套上，避免閃一下淺色。沒選過就跟系統設定。
 (function () {
@@ -64,8 +64,6 @@
   nav button { border: none; background: transparent; padding: 6px 14px; border-radius: 6px; }
   nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .energy { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .energy .bar { width: 160px; height: 10px; border-radius: 5px; background: var(--energy-track); overflow: hidden; }
-  .energy .bar > div { height: 100%; background: var(--energy); }
   .energy .dice { white-space: nowrap; margin-left: 4px; }
   .header-actions { display: flex; gap: 6px; }
 
@@ -172,7 +170,6 @@
     header { position: static; flex-wrap: wrap; gap: 8px 10px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); }
     header h1 { font-size: 16px; }
     .energy { gap: 6px; font-size: 13px; }
-    .energy .bar { width: 72px; }
     .header-actions { order: 3; width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
     .header-actions button { flex: none; }
     nav { order: 4; width: 100%; margin: 0; }
@@ -215,7 +212,7 @@
     <button data-tab="gems">寶石</button>
   </nav>
   <div class="energy" title="能量：勝利與分解刻印取得，清除裝備上的刻印時消耗">
-    <span>能量</span><div class="bar"><div id="energy-fill"></div></div><span id="energy-text"></span>
+    <span>能量</span><strong id="energy-text"></strong>
     <span class="dice" title="黑骰：分解傳說裝備取得，用來重置一件傳說裝備的數值">黑骰 <strong id="dice-text">0</strong></span>
   </div>
   <div class="header-actions">
@@ -5659,13 +5656,15 @@ function rollQuality(r) {
 }
 
 // 製作詞綴：依 weight 抽種類，數值 = 上限 × 平均階級縮放 × (ROLL_MIN～1)。
-function rollCraftAffixes(inputs, rng) {
+// lockKind：指定種類時不抽種類（黑骰鎖定種類重擲用），只擲數值（少用一個亂數）
+function rollCraftAffixes(inputs, rng, lockKind = null) {
   const scale = inputs.reduce((sum, { tier }) => sum + TIER_SCALE[tier], 0) / inputs.length;
   const total = CRAFT_AFFIXES.reduce((sum, affix) => sum + affix.weight, 0);
   const affixes = [];
   for (let i = 0; i < CRAFT_AFFIX_SLOTS; i++) {
-    let r = rng() * total;
-    const pick = CRAFT_AFFIXES.find(affix => (r -= affix.weight) < 0) ?? CRAFT_AFFIXES.at(-1);
+    let r = lockKind ? 0 : rng() * total;
+    const pick = lockKind ? CRAFT_AFFIXES.find(affix => affix.kind === lockKind) : CRAFT_AFFIXES.find(affix => (r -= affix.weight) < 0) ?? CRAFT_AFFIXES.at(-1);
+    if (!pick) throw new Error(`製作詞綴「${lockKind}」不存在`);
     const rolled = pick.max * scale * (ROLL_MIN + (1 - ROLL_MIN) * rng());
     const value = pick.fixed ? pick.max : rolled;
     affixes.push({ scope: 'effect', kind: pick.kind, value: Math.round(value * 10000) / 10000, source: `craft:${pick.kind}` });
@@ -5699,14 +5698,14 @@ function rollCraft(slot, engravings, rng = Math.random) {
 }
 
 /**
- * 依投入的刻印重擲製作詞綴（存檔遷移用：v7 把舊的「異常持續時間」改擲成目前的種類）。
+ * 依投入的刻印重擲製作詞綴（存檔 v7 遷移、黑骰重骰用）。lockKind：只重擲這個種類的數值。
  * @param {string[]} materials 「種類@階級」；沒有或格式不對時當作第 3 階
  */
-function rerollCraftAffixes(materials, rng) {
+function rerollCraftAffixes(materials, rng, { lockKind = null } = {}) {
   const inputs = Array.isArray(materials) && materials.length
     ? materials.map(key => ({ tier: Number(String(key).split('@')[1]) })).map(({ tier }) => ({ tier: TIER_SCALE[tier] ? tier : 3 }))
     : [{ tier: 3 }];
-  return rollCraftAffixes(inputs, rng);
+  return rollCraftAffixes(inputs, rng, lockKind);
 }
 
 module.exports = { rerollCraftAffixes, CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, SALVAGE_RETURN, CRAFT_AFFIXES, CRAFT_STATS, STAT_UNIT, KIND_SHARES, SLOT_MULT, QUALITIES, WEIGHT, rawBase, rollQuality, rollCraft };
@@ -5872,7 +5871,7 @@ module.exports = { MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, open
  * 能量表（純資料，不依賴框架）。數值都是佔位。
  *
  * ── 規則（使用者決定）──────────────────────────────────────────
- *   玩家有一個**有上限**的能量槽（存檔的 energy）。
+ *   玩家有一個能量槽（存檔的 energy）。2026-11-20 使用者移除上限（原本 500，超過作廢）。
  *   取得：打怪（勝利，隨掉落一起給：dropTable.rollDrops 的 energy，grantDrops 加進存檔）、分解刻印（saveLayer.salvageEngravings）。
  *   消耗：清除裝備上的刻印（saveLayer.clearEngraving），**清除的刻印階級越高，消耗越多**。
  *
@@ -5882,21 +5881,23 @@ module.exports = { MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, open
  *   清除：第 t 階 = 分解 2 顆同階的能量（2、6、18、54、162）。
  *   勝利：依該難度已開放的最高階（dropTable.openTier）給（1、2、5、14、40），約等於半顆該階刻印的分解值。
  *         難度 15 約 4 場勝利可以清一次第 5 階。打輸不給。
- *   上限 ENERGY_CAP = 500（約 3 次第 5 階清除）。超過上限的部分**作廢**，操作會回報作廢多少，讓介面提醒。
+ *   沒有上限（2026-11-20）。addEnergy 仍回傳 wasted（永遠 0），讓呼叫端不用改。
  */
 
-const ENERGY_CAP = 500;
 const SALVAGE_ENERGY = { 1: 1, 2: 3, 3: 9, 4: 27, 5: 81 };
 const CLEAR_COST = { 1: 2, 2: 6, 3: 18, 4: 54, 5: 162 };
-const WIN_ENERGY = { 1: 1, 2: 2, 3: 5, 4: 14, 5: 40 };   // 鍵是 openTier(難度)；換算在 dropTable.energyForWin
+const WIN_ENERGY = { 1: 1, 2: 2, 3: 5, 4: 14, 5: 40 };
+// 2026-11-20 使用者：轉移刻印到另一件同部位裝備，固定 500（不看階級）；目標刻滿時另外加清除那個刻印的 CLEAR_COST
+const TRANSFER_ENERGY = 500;
+// 黑骰重骰製作詞綴時「鎖定種類、只重擲數值」額外消耗的能量（使用者：要額外花能量；數字是我擬的佔位）
+const CRAFT_REROLL_LOCK_ENERGY = 100;   // 鍵是 openTier(難度)；換算在 dropTable.energyForWin
 
-/** 加上能量並夾在上限：回傳 { energy, gained, wasted }。 */
+/** 加上能量：回傳 { energy, gained, wasted }（沒有上限，wasted 永遠是 0）。 */
 function addEnergy(current, amount) {
-  const energy = Math.min(ENERGY_CAP, current + amount);
-  return { energy, gained: energy - current, wasted: current + amount - energy };
+  return { energy: current + amount, gained: amount, wasted: 0 };
 }
 
-module.exports = { ENERGY_CAP, SALVAGE_ENERGY, CLEAR_COST, WIN_ENERGY, addEnergy };
+module.exports = { SALVAGE_ENERGY, CLEAR_COST, WIN_ENERGY, TRANSFER_ENERGY, CRAFT_REROLL_LOCK_ENERGY, addEnergy };
 
 },
 "gem/legendaryTable.js": function (module, exports, require) {
@@ -6299,10 +6300,23 @@ module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, DEF_PER_LEVEL, MIN_DIFFICULT
  */
 
 const { Entity, Skill } = require('../src');
+
+// 閃避反擊的點數曲線（gem 自己的，和框架的 Formulas.counterChance 同型、常數可以自由改；使用者之後決定）：
+//   chance = ceiling / (1 + e^(−(守方點數 − 攻方點數) / scale))；守方 0 點 = 不反擊
+// 2026-11-20 使用者：調高一倍——點數相同 20%、上限 40%
+const EVADE_COUNTER = { ceiling: 0.4, scale: 50 };
+function evadeCounterChance(points, attackerPoints = 0) {
+  if (!(points > 0)) return 0;
+  return EVADE_COUNTER.ceiling / (1 + Math.exp(-(points - attackerPoints) / EVADE_COUNTER.scale));
+}
 const { scaleMonster } = require('./difficulty');
 
 // 基準怪（強度 1）：與 affix-budget.js 的 FOE 相同
-const BASE_MONSTER = { hp: 3000, atk: 90, int: 90, def: 50, spd: 180, sp: 200 };
+// sp 200 → 800（2026-11-20）：修正怪物技能 spCost 沒生效後，200 會讓怪物很快掉到疲累（≤50% SP 全屬性 ×0.8），難度大降；800 讓各地區勝率回到修正前的水準
+const BASE_MONSTER = { hp: 3000, atk: 90, int: 90, def: 50, spd: 180, sp: 800 };
+// 怪物 SP 隨難度：沒寫 stats.sp 的怪物 SP = base + perLevel × (難度 − 1)。王與寫了 stats.sp 的怪不受影響。
+// 2026-11-20 使用者選線性（前期選擇少時更好上手）：難度 1 是 200、每級 +50、難度 15 是 900。perLevel 0 就是固定。
+const MONSTER_SP = { base: 200, perLevel: 50 };
 const RARE_CHANCE = 0.03;
 const ELITE_CHANCE = 0.15;
 
@@ -6429,7 +6443,7 @@ function buildSkill(spec, def, stats, casterName) {
   const spell = spec.spell ?? def.spell;
   const stat = spell ? 'int' : 'atk';
   const spellFlags = spell ? { uncritable: true, uncounterable: true } : {};
-  const base = { id: `${def.id}_${spec.id}`, name: spec.name, spCost: spec.spCost ?? 0 };
+  const base = { id: `${def.id}_${spec.id}`, name: spec.name };
   if (spec.kind === 'attack') {
     const intro = spec.intro !== undefined ? [{ type: 'TEXT', text: { action: template(spec.intro, casterName) } }] : [];
     if (spec.target === 'random') {
@@ -6512,6 +6526,12 @@ function buildEnragePassive(trait, def) {
  *     繼承王的防禦；被打倒後，在下一個行動結束（或回合開始）時對王造成 breakRatio 的傷害（直接扣血，不吃防禦與減傷）。
  *     有 drain：輪到它時只會用這一招——讓對面的主角失去 sp 點 SP（不夠就扣到 0；不造成傷害、不會落空）；沒有 drain 就不行動。
  *   文字裡的 {caster} 是王的名字、{player} 是對面主角的名字、{summon} 是召喚物的名字。
+ *
+ * ── 閃避反擊 evadeCounter（選填，2026-11-20 使用者：反擊必須先閃避成功）──────────
+ *   { points, skill?, text? }：這隻怪閃避掉一擊之後，依 EVADE_COUNTER 的點數曲線擲反擊（攻擊方沒有點數＝0），
+ *   成功就立刻還擊攻擊者一下：有 skill（attack 技能格式）且 SP 夠就用它並扣 SP，否則用預設反擊（普攻倍率一擊，text 是開頭）。
+ *   還擊必定命中、不會再被反擊（框架的 counterSource）；法術（uncounterable）被躲開也不反擊。
+ *   框架原本「命中才判定」的反擊不用：所有單位的 stats.counter 保持 0。
  */
 // 旁白裡的 {player}：對面隊伍的主角（id 'hero'，沒有就第一個）的名字——玩家可以改名，所以不能寫死「玩家」
 function playerNameFor(self, engine) {
@@ -6612,6 +6632,41 @@ function buildSpDrainSkill(spec, def) {
   return skill;
 }
 
+function withSpCost(skill, cost) {
+  if (cost > 0) skill.actions[0] = { ...skill.actions[0], spCost: cost };
+  return skill;
+}
+
+// 閃避反擊（見檔頭 evadeCounter）
+function buildEvadeCounterPassive(def, stats, entityName) {
+  const spec = def.evadeCounter;
+  const stat = def.spell ? 'int' : 'atk';
+  const flags = def.spell ? { uncritable: true } : {};
+  const basic = new Skill({ id: `${def.id}_evade_counter`, name: '反擊', ...flags,
+    actions: [{ type: 'DAMAGE', stat, power: 1, ...flags, text: { action: template(spec.text ?? '{caster} 趁隙反擊，', entityName) } }] });
+  const special = spec.skill ? buildSkill(spec.skill, def, stats, entityName) : null;
+  return {
+    id: `monster_evade_counter:${def.id}`,
+    trigger: 'AFTER_EVADE',
+    enabled: (self, evasion) => Boolean(evasion.caster?.isAlive) && !(evasion.skill?.uncounterable || evasion.action?.uncounterable),
+    action(self, evasion, logger, engine) {
+      if (!engine || engine.result || engine.counterSource || !self.canAct()) return;
+      const attacker = evasion.caster;
+      const chance = evadeCounterChance(spec.points, attacker.evadeCounterPoints ?? 0);
+      if (!((engine.rng ?? Math.random)() < chance)) return;
+      // 怪物技能的 spCost 寫在技能規格上（框架的 Skill 只看 action.spCost），這裡自己扣
+      const cost = spec.skill?.spCost ?? 0;
+      const useSpecial = special && self.stats.sp >= cost;
+      const reply = useSpecial ? special : basic;
+      if (useSpecial) self.stats.sp -= cost;
+      const source = { actorId: self.id, targetId: attacker.id, incomingSkillId: evasion.skill?.id };
+      const allies = self.team === 'A' ? engine.teamA : engine.teamB;
+      const enemies = self.team === 'A' ? engine.teamB : engine.teamA;
+      engine.withCounterSource(source, () => reply.execute(self, allies, enemies, logger, engine, { targets: [attacker], ignoreSp: true }));
+    }
+  };
+}
+
 // 伏擊：開戰時攻擊力 × mult，撐到自己的第一個行動槽結束
 function buildAmbushPassive(trait, def) {
   return {
@@ -6639,7 +6694,7 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
     hp: BASE_MONSTER.hp * def.stats.hp * scale,
     atk: BASE_MONSTER.atk * (def.stats.atk ?? 0) * scale,
     int: BASE_MONSTER.int * (def.stats.int ?? 0) * scale,
-    def: def.stats.def ?? BASE_MONSTER.def, spd: def.stats.spd ?? BASE_MONSTER.spd, sp: def.stats.sp ?? BASE_MONSTER.sp,
+    def: def.stats.def ?? BASE_MONSTER.def, spd: def.stats.spd ?? BASE_MONSTER.spd, sp: def.stats.sp ?? Math.round(MONSTER_SP.base + MONSTER_SP.perLevel * (difficulty - 1)),
     eva: def.stats.eva ?? 0, hit: def.stats.hit ?? 0
   };
   const stats = scaleMonster({ ...raw, hp: Math.round(raw.hp), maxHp: Math.round(raw.hp) }, difficulty);
@@ -6649,13 +6704,15 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
   const normalAttack = new Skill({ id: `${def.id}_attack`, name: '攻擊', actions: [{ type: 'DAMAGE', stat, ...(def.spell ? { uncritable: true, uncounterable: true } : {}),
     ...(def.normalAttackText !== undefined ? { text: { action: template(def.normalAttackText, entityName) } } : {}) }],
     ...(def.spell ? { uncritable: true, uncounterable: true } : {}) });
-  const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => buildSkill(spec, def, stats, entityName));
+  // spCost 要放在第一個 action 上框架才會扣（Skill 只讀 action.spCost）。2026-11-20 修正：之前寫在技能層級，怪物放技能從來不扣 SP。
+  const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => withSpCost(buildSkill(spec, def, stats, entityName), spec.spCost));
   const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives };
   const passives = (def.traits ?? []).filter(trait => difficulty >= (trait.from ?? 1)).flatMap(trait => {
     if (!TRAIT_BUILDERS[trait.kind]) throw new Error(`怪物「${def.id}」的特性種類不明：${trait.kind}`);
     return TRAIT_BUILDERS[trait.kind](trait, def, { difficulty, stats, entityName });
   });
   passives.push(...buildNarrationPassives(def.texts));
+  if (def.evadeCounter) passives.push(buildEvadeCounterPassive(def, stats, entityName));
   return new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack, normalAttackSpCost: 2, skills, passives, stats });
 }
 
@@ -6721,7 +6778,7 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   return { monsters, summonFactory, info: { ids: picks.map(def => def.id), rare: hasRare, elite: hasElite, totalCost, scale } };
 }
 
-module.exports = { BASE_MONSTER, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, buildMonster, buildFromDef, availableMonsters, rollEncounter };
+module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildMonster, buildFromDef, availableMonsters, rollEncounter };
 
 },
 "gem/bosses.js": function (module, exports, require) {
@@ -6744,9 +6801,9 @@ module.exports = { BASE_MONSTER, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, b
  *
  * ── 「廢都中央廳」的數值怎麼定的（node gem/boss-check.js gatekeeper 240）──────────
  *   目標：難度 6、拿第 2 階整套（講究配方）「有機會打贏」；第 1 階打不贏、第 3 階穩贏。
- *   生命 1.7、攻擊 0.65、智力 0.65、速度 160；電光 80%＋麻痺（速度 ×0.75，2 槽）；五重魔法飛彈每發 30%；
+ *   生命 1.7、攻擊 0.65、智力 0.65、速度 160、SP 1000（2026-11-20 技能開始扣 SP 後調整）；電光 80%＋麻痺（速度 ×0.75，2 槽）；五重魔法飛彈每發 30%；
  *   半血：速度 ×1.5、攻擊與智力 ×1.15，召喚應急動力源（使用者：18% 生命、同防禦、減傷 40%，打倒後中央廳受 30%）。
- *   第 2 階：物理旋風斬 60%、物理撕裂 75%、法術魔法飛彈 84%；第 1 階都是 0%、第 3 階都是 100%（各約 120 場）。
+ *   第 2 階：物理旋風斬 60%、物理撕裂 63%、法術魔法飛彈 76%；第 1 階都是 0%、第 3 階都是 100%（240 場；動力源改扣 SP、技能扣 SP 之後）。
  *   （減傷 60% 時生命 1.4 是 53%／75%／82%；改成 40% 後同生命變成 84%／92%／98%，所以生命調到 1.7。）
  *   （舊的守門者：旋風斬 34%、法術 89%。動力源讓群攻有發揮空間，旋風斬比較打得動。）
  */
@@ -6762,7 +6819,7 @@ const BOSSES = [
     difficulty: 6,
     monsters: [{
       id: 'centralhall', name: '中央廳',
-      stats: { hp: 1.7, atk: 0.65, int: 0.65, def: 80, spd: 160 },
+      stats: { hp: 1.7, atk: 0.65, int: 0.65, def: 80, spd: 160, sp: 1000 },   // sp 1000：技能開始扣 SP 後，讓勝率維持修正前的水準
       skillCastRate: 0.4,
       normalAttackText: '中央廳的雕像揮出長矛，',
       // 旁白（使用者寫，2026-11-20）。death＝中央廳倒下（玩家獲勝）、victory＝中央廳打贏（玩家戰敗）；{player} 是玩家的名字
@@ -6844,7 +6901,7 @@ module.exports = { BOSSES, findBoss, buildBossEncounter };
  *   equipped    { weapon, helmet, armor, boots }：穿戴中的裝備 id 或 null
  *   progress    defeatedBosses、unlockedRegions、unlockedMonsters（id 字串陣列）
  *   settings    difficulty（1～15）；playerName（選填，1～PLAYER_NAME_MAX 字；沒有就用遊戲層的預設名，不需要遷移）
- *   energy      能量槽（0～ENERGY_CAP 的整數；v2 新增）。勝利與分解刻印取得，清除裝備上的刻印時消耗（見 energyTable.js）
+ *   energy      能量槽（不小於 0 的整數，沒有上限；v2 新增，2026-11-20 移除上限 500）。勝利與分解刻印取得，清除裝備上的刻印時消耗（見 energyTable.js）
  *   blackDice   黑骰數量（不小於 0 的整數；v8 新增）。分解傳說裝備得 1 顆，用來重置一件傳說裝備的數值（rerollLegendary）
  *
  * 不存：編譯後的技能、最終屬性、戰報、掉落表。這些讀檔後重新計算。
@@ -6861,13 +6918,13 @@ module.exports = { BOSSES, findBoss, buildBossEncounter };
 
 const { ACTIVE_GEMS, SUPPORT_GEMS, STARTING_ACTIVE_GEMS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBonuses } = require('./statLayer');
-const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, ENGRAVING_TYPES, canEngrave, sumEffectAffixes, rollCombine, rollEngraving } = require('./affixTable');
+const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, ENGRAVING_TYPES, canEngrave, sumEffectAffixes, rollCombine, rollEngraving, COMBINE_INPUTS } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
 const { QUALITIES, CRAFT_AFFIX_SLOTS, CRAFT_INPUTS, SALVAGE_RETURN, rollCraft, rerollCraftAffixes } = require('./craftTable');
 const { ACCESSORIES, STARTING_ACCESSORIES, accessoryAffixes } = require('./accessoryTable');
 const { createSeededRandom } = require('../src');
 const { LEGENDARIES, rollLegendary, pickLegendary, mechanicsOf, rerollLegendaryValues, inferLegendaryTier } = require('./legendaryTable');
-const { ENERGY_CAP, SALVAGE_ENERGY, CLEAR_COST, addEnergy } = require('./energyTable');
+const { SALVAGE_ENERGY, CLEAR_COST, TRANSFER_ENERGY, CRAFT_REROLL_LOCK_ENERGY, addEnergy } = require('./energyTable');
 const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
@@ -7121,8 +7178,8 @@ function validateSave(save) {
   }
 
   if (!(Number.isInteger(save.blackDice) && save.blackDice >= 0)) problems.push(`blackDice 必須是不小於 0 的整數（收到 ${JSON.stringify(save.blackDice)}）`);
-  if (!(Number.isInteger(save.energy) && save.energy >= 0 && save.energy <= ENERGY_CAP)) {
-    problems.push(`energy 必須是 0～${ENERGY_CAP} 的整數（收到 ${JSON.stringify(save.energy)}）`);
+  if (!(Number.isInteger(save.energy) && save.energy >= 0)) {
+    problems.push(`energy 必須是不小於 0 的整數（收到 ${JSON.stringify(save.energy)}）`);
   }
 
   problems.push(...validateStacks(save.gems, 'gems', id => (isGemId(id) ? null : '不是已知的寶石')));
@@ -7421,7 +7478,25 @@ function combineEngravings(save, types, tier, rng = Math.random, { pool } = {}) 
 }
 
 /**
- * 把一場的掉落（dropTable.rollDrops 的結果）放進背包：刻印、輔助寶石、傳說裝備，以及能量（超過上限的作廢）。
+ * 批量合成（2026-11-20 使用者）：把背包裡某種某階的刻印全部同種合成，每 3 顆換 1 顆高一階；湊不滿 3 顆的留著。
+ * 例：14 顆第 1 階猛攻 → 4 顆第 2 階猛攻，剩 2 顆第 1 階。不用亂數。
+ * 少於 3 顆、第 5 階、種類不存在丟 SaveError，原存檔不變。回傳 { save, type, tier（產出的階級）, made, used, left }。
+ */
+function combineAllEngravings(save, type, tier) {
+  try { rollCombine([type, type, type], tier); } catch (error) { throw new SaveError(error.message); }
+  const key = stackKey(type, tier);
+  const have = save.engravings?.[key] ?? 0;
+  const made = Math.floor(have / COMBINE_INPUTS);
+  if (made < 1) throw new SaveError(`刻印「${key}」不到 ${COMBINE_INPUTS} 顆，不能合成`);
+  return mutate(save, draft => {
+    takeFromStack(draft.engravings, key, made * COMBINE_INPUTS, `刻印「${key}」`);
+    addToStack(draft.engravings, stackKey(type, tier + 1), made);
+    return { type, tier: tier + 1, made, used: made * COMBINE_INPUTS, left: have - made * COMBINE_INPUTS };
+  });
+}
+
+/**
+ * 把一場的掉落（dropTable.rollDrops 的結果）放進背包：刻印、輔助寶石、傳說裝備，以及能量（沒有上限）。
  * 傳說裝備（drops.legendary 件）從 legendaryTable 平均抽、依掉落難度縮放，所以有傳說裝備時**一定要傳 difficulty**，
  * 沒傳會丟錯（不會默默丟掉玩家的掉落）。內容不合法丟 SaveError，原存檔不變。
  * @param {{ difficulty?: number, rng?: () => number }} [options] rng 只用在傳說裝備（每件：抽種類 1 次，再照 rollLegendary 的順序）
@@ -7445,7 +7520,7 @@ function grantDrops(save, drops, { difficulty, rng = Math.random } = {}) {
     for (const key of keys) addToStack(draft.engravings, key, 1);
     for (const gemId of supportGems) addToStack(draft.gems, gemId, 1);
     for (const item of legendaries) draft.equipment.push({ id: `eq${draft.meta.nextId++}`, ...item, links: [] });
-    draft.energy = addEnergy(draft.energy, energyGain).energy;   // 超過上限的部分作廢
+    draft.energy = addEnergy(draft.energy, energyGain).energy;
   });
 }
 
@@ -7587,7 +7662,73 @@ function rerollLegendary(save, id, rng = Math.random) {
 }
 
 /**
- * 分解背包裡的刻印換能量：每個第 t 階給 energyTable.SALVAGE_ENERGY[t]。超過上限的部分作廢（回傳 wasted，讓介面提醒）。
+ * 黑骰重骰製作詞綴（2026-11-20 使用者）：消耗 1 顆黑骰，照製作時投入的刻印階級重擲製作詞綴。
+ *   lockKind: false → 種類與數值一起重抽；true → 種類不變、只重擲數值，另外消耗 CRAFT_REROLL_LOCK_ENERGY 能量。
+ * 只有製作裝備能用；黑骰或能量不夠丟 SaveError，原存檔不變。回傳 { save, before, after, energyCost }（before／after 是製作詞綴陣列）。
+ */
+function rerollCraftAffix(save, id, { lockKind = false } = {}, rng = Math.random) {
+  return mutate(save, draft => {
+    const item = findItem(draft, id);
+    if (item.origin !== 'craft') throw new SaveError(`裝備「${id}」不是製作裝備，沒有製作詞綴`);
+    const positions = item.affixes.map((affix, i) => (String(affix.source ?? '').startsWith('craft:') ? i : -1)).filter(i => i >= 0);
+    if (!positions.length) throw new SaveError(`裝備「${id}」沒有製作詞綴`);
+    if (draft.blackDice < BLACK_DICE_REROLL_COST) throw new SaveError(`黑骰不足：重骰要 ${BLACK_DICE_REROLL_COST} 顆，目前有 ${draft.blackDice} 顆`);
+    const energyCost = lockKind ? CRAFT_REROLL_LOCK_ENERGY : 0;
+    if (draft.energy < energyCost) throw new SaveError(`能量不足：鎖定種類要 ${energyCost}，目前只有 ${draft.energy}`);
+    const before = positions.map(i => structuredClone(item.affixes[i]));
+    const after = positions.map(i => rerollCraftAffixes(item.materials, rng, { lockKind: lockKind ? item.affixes[i].kind : null })[0]);
+    positions.forEach((pos, k) => { item.affixes[pos] = after[k]; });
+    draft.blackDice -= BLACK_DICE_REROLL_COST;
+    draft.energy -= energyCost;
+    return { before, after: structuredClone(after), energyCost };
+  });
+}
+
+/**
+ * 轉移刻印（2026-11-20 使用者）：把一件裝備的第 index 個刻印（連同擲出的數值）移到另一件**同部位**的可刻印裝備，固定花 TRANSFER_ENERGY。
+ * 目標已刻滿時必須指定 replaceIndex：先清除目標的那個刻印（另外花它的 CLEAR_COST，刻印不退回）再轉移；沒指定就丟 SaveError。
+ * 傳說裝備（不能刻刻印）不能當來源或目標。回傳 { save, moved, replaced, cost }。
+ */
+function transferEngraving(save, fromId, index, toId, { replaceIndex = null } = {}) {
+  return mutate(save, draft => {
+    if (fromId === toId) throw new SaveError('來源和目標是同一件裝備');
+    const from = findItem(draft, fromId);
+    const to = findItem(draft, toId);
+    for (const item of [from, to]) if (!ENGRAVABLE_ORIGINS.includes(item.origin)) throw new SaveError(`裝備「${item.id}」不能刻刻印，不能轉移`);
+    if (from.slot !== to.slot) throw new SaveError(`只能轉移到相同部位的裝備（${SLOT_NAMES[from.slot]} → ${SLOT_NAMES[to.slot]}）`);
+    const groups = item => {
+      const positions = item.affixes.map((affix, i) => (ENGRAVING_SOURCE.test(affix?.source ?? '') ? i : -1)).filter(i => i >= 0);
+      return Array.from({ length: positions.length / LINES_PER_ITEM_ENGRAVING }, (_, g) => positions.slice(g * LINES_PER_ITEM_ENGRAVING, (g + 1) * LINES_PER_ITEM_ENGRAVING));
+    };
+    const fromGroups = groups(from);
+    if (!Number.isInteger(index) || index < 0 || index >= fromGroups.length) throw new SaveError(`刻印位置必須是 0～${fromGroups.length - 1} 的整數（收到 ${index}）`);
+    const toKeys = itemEngravings(to);
+    let cost = TRANSFER_ENERGY;
+    let replaced = null;
+    if (toKeys.length >= ENGRAVINGS_PER_ITEM) {
+      if (!(Number.isInteger(replaceIndex) && replaceIndex >= 0 && replaceIndex < toKeys.length)) {
+        throw new SaveError(`目標裝備已經有 ${ENGRAVINGS_PER_ITEM} 個刻印，要指定清除哪一個才能轉移`);
+      }
+      replaced = toKeys[replaceIndex];
+      cost += CLEAR_COST[Number(replaced.split('@')[1])];
+    }
+    if (draft.energy < cost) throw new SaveError(`能量不足：轉移要 ${cost}，目前只有 ${draft.energy}`);
+    const moving = fromGroups[index];
+    const moved = itemEngravings(from)[index];
+    const lines = moving.map(i => from.affixes[i]);
+    from.affixes = from.affixes.filter((_, i) => !moving.includes(i));
+    if (replaced !== null) {
+      const drop = groups(to)[replaceIndex];
+      to.affixes = to.affixes.filter((_, i) => !drop.includes(i));
+    }
+    to.affixes.push(...lines);
+    draft.energy -= cost;
+    return { moved, replaced, cost };
+  });
+}
+
+/**
+ * 分解背包裡的刻印換能量：每個第 t 階給 energyTable.SALVAGE_ENERGY[t]（能量沒有上限；回傳的 wasted 永遠是 0）。
  * 背包不夠、格式不對丟 SaveError，原存檔不變。回傳 { save, gained, wasted }。
  */
 function salvageEngravings(save, type, tier, count = 1) {
@@ -7929,7 +8070,7 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
-  convertGems, GEM_CONVERT_INPUTS, rerollLegendary, BLACK_DICE_PER_SALVAGE, BLACK_DICE_REROLL_COST, equipAccessory, addAccessory, equippedAccessoryAffixes, addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
+  convertGems, GEM_CONVERT_INPUTS, combineAllEngravings, rerollLegendary, rerollCraftAffix, transferEngraving, BLACK_DICE_PER_SALVAGE, BLACK_DICE_REROLL_COST, equipAccessory, addAccessory, equippedAccessoryAffixes, addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
   setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedMechanics, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };
@@ -8330,7 +8471,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   let tab = 'adventure';
   let history = [];
   const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], convertPicks: [], salvage: { kind: null, tier: 1, count: 1 },
-    workshopTab: 'craft', engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, linkErrors: {} };
+    workshopTab: 'craft', engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, batchCombine: false, transfer: null, linkErrors: {} };
 
   function loadHistory() {
     try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (e) { history = []; }
@@ -8376,9 +8517,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
       loadout.compiled.length ? h('ul', {}, loadout.compiled.map(c => h('li', { text: `${c.skill.name}（SP ${c.spCost}）` }))) : h('div', { class: 'muted', text: '沒有技能：到「寶石」頁把主動寶石連到穿著的裝備上' }),
       ...(fxLines.length ? [h('h3', { style: 'margin-top:12px', text: '裝備效果' }), h('ul', {}, fxLines)] : [])
     ]);
-    const e = state.energy, cap = energyTable.ENERGY_CAP;
-    $('energy-fill').style.width = `${(e / cap) * 100}%`;
-    $('energy-text').textContent = `${e} / ${cap}`;
+    $('energy-text').textContent = String(state.energy);
     $('dice-text').textContent = String(state.blackDice);
   }
 
@@ -8695,12 +8834,43 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
           const tier = Number(key.split('@')[1]);
           const cost = energyTable.CLEAR_COST[tier];
           return h('div', { class: 'row' }, h('span', { text: engravingLabel(key) }),
+            h('button', { class: 'small' + (ui.transfer?.fromId === item.id && ui.transfer.index === i ? ' primary' : ''), text: `轉移（${energyTable.TRANSFER_ENERGY} 能量）`,
+              onclick: () => { ui.transfer = ui.transfer?.fromId === item.id && ui.transfer.index === i ? null : { fromId: item.id, index: i }; render(); } }),
             h('button', { class: 'small danger', text: `清除（${cost} 能量）`, onclick: async () => {
               if (e < cost) { toast(`能量不足：清除第 ${tier} 階刻印要 ${cost}，目前只有 ${e}`, true); return; }
               if (await ask(`清除「${engravingLabel(key)}」？刻印不會退回，消耗 ${cost} 能量。`, '清除')) apply(s => S.clearEngraving(s, item.id, i), v => `已清除 ${engravingLabel(v.removed)}（−${v.cost} 能量）`);
             } }));
         })) : h('div', { class: 'muted', text: '還沒有刻印' }),
-        h('p', { class: 'muted', style: 'margin:8px 0 0', text: `清除費用（1～5 階）：${Object.values(energyTable.CLEAR_COST).join('／')} 能量；目前 ${e} / ${energyTable.ENERGY_CAP}。` })));
+        h('p', { class: 'muted', style: 'margin:8px 0 0', text: `清除費用（1～5 階）：${Object.values(energyTable.CLEAR_COST).join('／')} 能量；目前 ${e}。` }),
+        transferPanel(item, current, crafted)));
+  }
+  // 轉移刻印：選了來源刻印後，列出同部位的其他可刻印裝備（目標刻滿時要選清除哪一個，另外花清除費）
+  function transferPanel(item, current, crafted) {
+    const tr = ui.transfer;
+    if (!tr || tr.fromId !== item.id || !current[tr.index]) { if (tr?.fromId === item.id) ui.transfer = null; return null; }
+    const key = current[tr.index];
+    const targets = crafted.filter(x => x.id !== item.id && x.slot === item.slot);
+    const base = energyTable.TRANSFER_ENERGY;
+    const go = async (target, replaceIndex = null) => {
+      const replaced = replaceIndex === null ? null : S.itemEngravings(target)[replaceIndex];
+      const cost = base + (replaced ? energyTable.CLEAR_COST[Number(replaced.split('@')[1])] : 0);
+      if (state.energy < cost) return toast(`能量不足：轉移要 ${cost}，目前只有 ${state.energy}`, true);
+      const msg = replaced
+        ? `${itemName(target)}已經刻滿，會先清除「${engravingLabel(replaced)}」（不退回），再把「${engravingLabel(key)}」轉移過去（數值不變）。共花 ${cost} 能量。`
+        : `把「${engravingLabel(key)}」轉移到 ${itemName(target)}（數值不變）？花 ${cost} 能量。`;
+      if (await ask(msg, '轉移')) apply(s => S.transferEngraving(s, item.id, tr.index, target.id, { replaceIndex }), v => { ui.transfer = null; return `已轉移 ${engravingLabel(v.moved)}（−${v.cost} 能量）`; });
+    };
+    return h('div', { style: 'margin-top:12px' },
+      h('h3', { text: `轉移「${engravingLabel(key)}」到…` }),
+      targets.length ? h('div', { class: 'stack' }, targets.map(target => {
+        const keys = S.itemEngravings(target);
+        const full = keys.length >= affix.ENGRAVINGS_PER_ITEM;
+        return h('div', { class: 'row', style: 'flex-wrap:wrap' },
+          h('span', { text: `${itemName(target)}${state.equipped[target.slot] === target.id ? '（穿著）' : ''}　${keys.map(engravingLabel).join('、') || '沒有刻印'}` }),
+          full ? keys.map((k, j) => h('button', { class: 'small danger', text: `清除「${engravingLabel(k)}」後轉移（${base + energyTable.CLEAR_COST[Number(k.split('@')[1])]}）`, onclick: () => go(target, j) }))
+            : h('button', { class: 'small primary', text: `轉移到這件（${base}）`, onclick: () => go(target) }));
+      })) : h('div', { class: 'muted', text: `沒有其他${SLOT_NAMES[item.slot]}可以轉移（傳說裝備不能刻刻印）` }),
+      h('button', { class: 'small', style: 'margin-top:6px', text: '取消', onclick: () => { ui.transfer = null; render(); } }));
   }
 
   function combineView() {
@@ -8709,15 +8879,27 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     const preview = cp.length === affix.COMBINE_INPUTS
       ? (cp.every(p => p.kind === cp[0].kind) ? `→ ${kindName(cp[0].kind)} ${tier + 1} 階` : `→ 隨機種類 ${tier + 1} 階`) : null;
     return h('div', { class: 'panel' }, h('h2', { text: `刻印合成（${affix.COMBINE_INPUTS} → 高一階）` }),
-      bagHint(`點刻印表放入 ${affix.COMBINE_INPUTS} 個同階刻印（${cp.length} / ${affix.COMBINE_INPUTS}），點上面的移除。三個同種 → 同種高一階；不是三個同種 → 高一階隨機種類。第 5 階不能合成。`),
+      bagHint(ui.batchCombine ? `批量合成：點一種刻印，把它全部同種合成（每 ${affix.COMBINE_INPUTS} 個 → 1 個高一階，湊不滿的留著）。第 5 階不能合成。`
+        : `點刻印表放入 ${affix.COMBINE_INPUTS} 個同階刻印（${cp.length} / ${affix.COMBINE_INPUTS}），點上面的移除。三個同種 → 同種高一階；不是三個同種 → 高一階隨機種類。第 5 階不能合成。`),
       h('div', { class: 'chips' }, cp.map((p, i) => h('span', { class: 'chip', text: `${kindName(p.kind)} ${p.tier}`, onclick: () => { cp.splice(i, 1); render(); } }))),
-      renderBag({ onPick: (kind, t) => { cp.push({ kind, tier: t }); render(); }, used: cp.map(p => `${p.kind}@${p.tier}`),
-        allowed: (kind, t) => t < affix.MAX_TIER && cp.length < affix.COMBINE_INPUTS && (tier === null || t === tier) }),
+      renderBag(ui.batchCombine
+        // 批量合成：點一種刻印就問要不要把它全部合成（每 3 顆 → 1 顆高一階，湊不滿的留著）
+        ? { onPick: async (kind, t) => {
+            const have = bagCount(kind, t), made = Math.floor(have / affix.COMBINE_INPUTS);
+            if (made < 1) return toast(`${kindName(kind)} ${t} 階不到 ${affix.COMBINE_INPUTS} 個`, true);
+            if (await ask(`把所有 ${kindName(kind)} ${t} 階（${have} 個）合成？會得到 ${made} 個 ${kindName(kind)} ${t + 1} 階，剩下 ${have - made * affix.COMBINE_INPUTS} 個 ${t} 階不動。`, '全部合成'))
+              apply(s => S.combineAllEngravings(s, kind, t), v => `合成出 ${v.made} 個 ${kindName(v.type)} ${v.tier} 階（剩 ${v.left} 個 ${v.tier - 1} 階）`);
+          }, allowed: (kind, t) => t < affix.MAX_TIER && bagCount(kind, t) >= affix.COMBINE_INPUTS }
+        : { onPick: (kind, t) => { cp.push({ kind, tier: t }); render(); }, used: cp.map(p => `${p.kind}@${p.tier}`),
+          allowed: (kind, t) => t < affix.MAX_TIER && cp.length < affix.COMBINE_INPUTS && (tier === null || t === tier) }),
       h('div', { class: 'row', style: 'margin-top:8px' },
         h('button', { class: 'primary', disabled: cp.length !== affix.COMBINE_INPUTS, text: '合成', onclick: () => apply(s => S.combineEngravings(s, cp.map(p => p.kind), tier),
           v => { ui.combinePicks = []; return `合成出 ${kindName(v.type)} ${v.tier} 階${v.mode === 'mixed' ? '（隨機）' : ''}`; }) }),
         h('button', { class: 'small', disabled: !cp.length, text: '清空', onclick: () => { ui.combinePicks = []; render(); } }),
-        preview ? h('span', { class: 'muted', text: preview }) : null));
+        preview ? h('span', { class: 'muted', text: preview }) : null,
+        h('button', { class: 'toggle' + (ui.batchCombine ? ' active' : ''), style: 'margin-left:auto',
+          text: ui.batchCombine ? '批量合成：開' : '批量合成：關',
+          onclick: () => { ui.batchCombine = !ui.batchCombine; ui.combinePicks = []; render(); } })));
   }
 
   function salvageView() {
@@ -8726,7 +8908,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     if (sv.kind && have <= 0) sv.kind = null;
     if (sv.kind) sv.count = Math.min(Math.max(1, sv.count), have);
     return h('div', { class: 'panel' }, h('h2', { text: '分解刻印（換能量）' }),
-      bagHint(`點刻印表選一種，設定數量後分解。分解 1 個（1～5 階）：${Object.values(energyTable.SALVAGE_ENERGY).join('／')} 能量，超過上限 ${energyTable.ENERGY_CAP} 的部分作廢。`),
+      bagHint(`點刻印表選一種，設定數量後分解。分解 1 個（1～5 階）：${Object.values(energyTable.SALVAGE_ENERGY).join('／')} 能量。`),
       renderBag({ onPick: (kind, tier) => { ui.salvage = { kind, tier, count: 1 }; render(); }, selected: sv.kind ? sv : null }),
       sv.kind ? h('div', { class: 'row', style: 'margin-top:8px' },
         h('strong', { text: `${kindName(sv.kind)} ${sv.tier} 階` }), h('span', { class: 'muted', text: `（有 ${have}）` }), '數量',
@@ -8734,13 +8916,13 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
         h('button', { class: 'small', text: '全部', onclick: () => { sv.count = have; render(); } }),
         h('span', { class: 'muted', text: `= ${energyTable.SALVAGE_ENERGY[sv.tier] * sv.count} 能量` }),
         h('button', { class: 'primary', text: '分解', onclick: () => apply(s => S.salvageEngravings(s, sv.kind, sv.tier, sv.count),
-          v => v.wasted > 0 ? `能量 +${v.gained}（滿了，${v.wasted} 作廢）` : `能量 +${v.gained}`) }))
+          v => `能量 +${v.gained}`) }))
         : h('div', { class: 'muted', style: 'margin-top:8px', text: '還沒選刻印' }));
   }
 
   // 換分頁時清掉所有選擇（不清的話，別頁用掉同一批刻印會讓這頁的數量變負數）
   function clearWorkshopPicks() {
-    ui.craftPicks = []; ui.combinePicks = []; ui.engraveSel = null; ui.salvage = { kind: null, tier: 1, count: 1 };
+    ui.craftPicks = []; ui.combinePicks = []; ui.engraveSel = null; ui.transfer = null; ui.salvage = { kind: null, tier: 1, count: 1 };
   }
   // 保險：選了但背包已經不夠（例如匯入存檔、分解或戰鬥改了背包）的選擇丟掉，數量不會出現負數
   function prunePicks(list, keyOf) {
@@ -8787,6 +8969,15 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
               const old = state.equipment.find(x => x.id === state.equipped[item.slot]);
               apply(s => S.equip(s, item.id), old?.links?.length ? `已換上，${itemName(old)}的寶石退回背包` : null);
             } }),
+        !ui.salvageMode && item.origin === 'craft' && item.affixes.some(a => a.source?.startsWith('craft:')) ? h('span', { class: 'row', style: 'gap:4px' },
+          h('button', { class: 'small', disabled: state.blackDice < S.BLACK_DICE_REROLL_COST, title: state.blackDice < S.BLACK_DICE_REROLL_COST ? '沒有黑骰：分解傳說裝備可以拿到' : null,
+            text: `黑骰重骰詞綴（${S.BLACK_DICE_REROLL_COST} 顆）`,
+            onclick: async () => { if (await ask(`用 ${S.BLACK_DICE_REROLL_COST} 顆黑骰重骰 ${itemName(item)} 的製作詞綴？種類和數值都重新抽（照製作時投入的刻印階級）。`, '重骰'))
+              apply(s => S.rerollCraftAffix(s, item.id), v => '重骰後：' + v.after.map(describeAffix).join('、')); } }),
+          h('button', { class: 'small', disabled: state.blackDice < S.BLACK_DICE_REROLL_COST || state.energy < energyTable.CRAFT_REROLL_LOCK_ENERGY,
+            text: `鎖定種類重擲數值（${S.BLACK_DICE_REROLL_COST} 顆＋${energyTable.CRAFT_REROLL_LOCK_ENERGY} 能量）`,
+            onclick: async () => { if (await ask(`用 ${S.BLACK_DICE_REROLL_COST} 顆黑骰和 ${energyTable.CRAFT_REROLL_LOCK_ENERGY} 能量重擲 ${itemName(item)} 的製作詞綴數值？種類不變。`, '重擲'))
+              apply(s => S.rerollCraftAffix(s, item.id, { lockKind: true }), v => '重擲後：' + v.after.map(describeAffix).join('、')); } })) : null,
         !ui.salvageMode && item.legendaryId ? h('button', { class: 'small', disabled: state.blackDice < S.BLACK_DICE_REROLL_COST,
           title: state.blackDice < S.BLACK_DICE_REROLL_COST ? '沒有黑骰：分解傳說裝備可以拿到' : null,
           text: `黑骰重置數值（${S.BLACK_DICE_REROLL_COST} 顆）`,
@@ -8798,7 +8989,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     return [h('div', { class: 'panel' },
       h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:10px' },
         h('h2', { style: 'margin:0', text: `裝備（${state.equipment.length} 件）` }),
-        h('button', { class: 'toggle danger' + (ui.salvageMode ? ' active' : ''), text: ui.salvageMode ? '分解模式：開（點按鈕分解）' : '分解模式：關', onclick: () => { ui.salvageMode = !ui.salvageMode; render(); } })),
+        h('button', { class: 'toggle danger' + (ui.salvageMode ? ' active' : ''), text: ui.salvageMode ? '分解模式：開' : '分解模式：關', onclick: () => { ui.salvageMode = !ui.salvageMode; render(); } })),
       h('div', { class: 'grid4' }, Object.entries(SLOT_NAMES).map(([slot, name]) => h('div', { class: 'slot-col' },
         h('h3', {}, name, h('span', { class: 'muted', style: 'font-weight:normal', text: `${bySlot(slot).length} 件` })),
         h('div', { class: 'stack' }, bySlot(slot).length ? bySlot(slot).map(item => itemCard(item)) : h('div', { class: 'muted', text: '沒有' })))))),

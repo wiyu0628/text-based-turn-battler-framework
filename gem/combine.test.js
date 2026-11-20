@@ -77,3 +77,20 @@ test('combine fails without changing the save when the bag is short, tier is max
   assert.throws(() => save.combineEngravings(state, 'fury', 1), save.SaveError);
   assert.deepEqual(state.engravings, { 'fury@1': 2, 'fury@5': 3 });
 });
+
+test('批量合成（2026-11-20）：同種全部合成，每 3 顆換 1 顆高一階，湊不滿的留著', () => {
+  const save = require('./saveLayer');
+  let state = save.addEngraving(save.addEngraving(save.createEmptySave({ now: '2026-11-20T00:00:00Z' }), 'fury', 1, 14), 'fury', 2, 1);
+  const r = save.combineAllEngravings(state, 'fury', 1);
+  assert.deepEqual([r.type, r.tier, r.made, r.used, r.left], ['fury', 2, 4, 12, 2]);
+  assert.equal(r.save.engravings['fury@1'], 2);
+  assert.equal(r.save.engravings['fury@2'], 5);                               // 原本 1 顆 + 4 顆
+  assert.equal(state.engravings['fury@1'], 14);                              // 原存檔不變
+  const exact = save.combineAllEngravings(save.addEngraving(save.createEmptySave({ now: '2026-11-20T00:00:00Z' }), 'vital', 3, 6), 'vital', 3);
+  assert.equal(exact.save.engravings['vital@3'], undefined);
+  assert.equal(exact.save.engravings['vital@4'], 2);
+  assert.throws(() => save.combineAllEngravings(r.save, 'fury', 1), /不到 3 顆/);
+  assert.throws(() => save.combineAllEngravings(save.addEngraving(state, 'fury', 5, 9), 'fury', 5), save.SaveError);
+  assert.throws(() => save.combineAllEngravings(state, 'nope', 1), save.SaveError);
+  assert.deepEqual(save.validateSave(r.save), []);
+});

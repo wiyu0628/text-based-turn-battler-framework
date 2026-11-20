@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>刷怪打王</title>
+<title>我的翼識界</title>
 <script>
 // 主題在畫面出來前就套上，避免閃一下淺色。沒選過就跟系統設定。
 (function () {
@@ -64,8 +64,6 @@
   nav button { border: none; background: transparent; padding: 6px 14px; border-radius: 6px; }
   nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .energy { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .energy .bar { width: 160px; height: 10px; border-radius: 5px; background: var(--energy-track); overflow: hidden; }
-  .energy .bar > div { height: 100%; background: var(--energy); }
   .energy .dice { white-space: nowrap; margin-left: 4px; }
   .header-actions { display: flex; gap: 6px; }
 
@@ -172,7 +170,6 @@
     header { position: static; flex-wrap: wrap; gap: 8px 10px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); }
     header h1 { font-size: 16px; }
     .energy { gap: 6px; font-size: 13px; }
-    .energy .bar { width: 72px; }
     .header-actions { order: 3; width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
     .header-actions button { flex: none; }
     nav { order: 4; width: 100%; margin: 0; }
@@ -215,7 +212,7 @@
     <button data-tab="gems">寶石</button>
   </nav>
   <div class="energy" title="能量：勝利與分解刻印取得，清除裝備上的刻印時消耗">
-    <span>能量</span><div class="bar"><div id="energy-fill"></div></div><span id="energy-text"></span>
+    <span>能量</span><strong id="energy-text"></strong>
     <span class="dice" title="黑骰：分解傳說裝備取得，用來重置一件傳說裝備的數值">黑骰 <strong id="dice-text">0</strong></span>
   </div>
   <div class="header-actions">
@@ -434,7 +431,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   let tab = 'adventure';
   let history = [];
   const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], convertPicks: [], salvage: { kind: null, tier: 1, count: 1 },
-    workshopTab: 'craft', engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, linkErrors: {} };
+    workshopTab: 'craft', engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, batchCombine: false, transfer: null, linkErrors: {} };
 
   function loadHistory() {
     try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (e) { history = []; }
@@ -480,9 +477,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
       loadout.compiled.length ? h('ul', {}, loadout.compiled.map(c => h('li', { text: `${c.skill.name}（SP ${c.spCost}）` }))) : h('div', { class: 'muted', text: '沒有技能：到「寶石」頁把主動寶石連到穿著的裝備上' }),
       ...(fxLines.length ? [h('h3', { style: 'margin-top:12px', text: '裝備效果' }), h('ul', {}, fxLines)] : [])
     ]);
-    const e = state.energy, cap = energyTable.ENERGY_CAP;
-    $('energy-fill').style.width = `${(e / cap) * 100}%`;
-    $('energy-text').textContent = `${e} / ${cap}`;
+    $('energy-text').textContent = String(state.energy);
     $('dice-text').textContent = String(state.blackDice);
   }
 
@@ -799,12 +794,43 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
           const tier = Number(key.split('@')[1]);
           const cost = energyTable.CLEAR_COST[tier];
           return h('div', { class: 'row' }, h('span', { text: engravingLabel(key) }),
+            h('button', { class: 'small' + (ui.transfer?.fromId === item.id && ui.transfer.index === i ? ' primary' : ''), text: `轉移（${energyTable.TRANSFER_ENERGY} 能量）`,
+              onclick: () => { ui.transfer = ui.transfer?.fromId === item.id && ui.transfer.index === i ? null : { fromId: item.id, index: i }; render(); } }),
             h('button', { class: 'small danger', text: `清除（${cost} 能量）`, onclick: async () => {
               if (e < cost) { toast(`能量不足：清除第 ${tier} 階刻印要 ${cost}，目前只有 ${e}`, true); return; }
               if (await ask(`清除「${engravingLabel(key)}」？刻印不會退回，消耗 ${cost} 能量。`, '清除')) apply(s => S.clearEngraving(s, item.id, i), v => `已清除 ${engravingLabel(v.removed)}（−${v.cost} 能量）`);
             } }));
         })) : h('div', { class: 'muted', text: '還沒有刻印' }),
-        h('p', { class: 'muted', style: 'margin:8px 0 0', text: `清除費用（1～5 階）：${Object.values(energyTable.CLEAR_COST).join('／')} 能量；目前 ${e} / ${energyTable.ENERGY_CAP}。` })));
+        h('p', { class: 'muted', style: 'margin:8px 0 0', text: `清除費用（1～5 階）：${Object.values(energyTable.CLEAR_COST).join('／')} 能量；目前 ${e}。` }),
+        transferPanel(item, current, crafted)));
+  }
+  // 轉移刻印：選了來源刻印後，列出同部位的其他可刻印裝備（目標刻滿時要選清除哪一個，另外花清除費）
+  function transferPanel(item, current, crafted) {
+    const tr = ui.transfer;
+    if (!tr || tr.fromId !== item.id || !current[tr.index]) { if (tr?.fromId === item.id) ui.transfer = null; return null; }
+    const key = current[tr.index];
+    const targets = crafted.filter(x => x.id !== item.id && x.slot === item.slot);
+    const base = energyTable.TRANSFER_ENERGY;
+    const go = async (target, replaceIndex = null) => {
+      const replaced = replaceIndex === null ? null : S.itemEngravings(target)[replaceIndex];
+      const cost = base + (replaced ? energyTable.CLEAR_COST[Number(replaced.split('@')[1])] : 0);
+      if (state.energy < cost) return toast(`能量不足：轉移要 ${cost}，目前只有 ${state.energy}`, true);
+      const msg = replaced
+        ? `${itemName(target)}已經刻滿，會先清除「${engravingLabel(replaced)}」（不退回），再把「${engravingLabel(key)}」轉移過去（數值不變）。共花 ${cost} 能量。`
+        : `把「${engravingLabel(key)}」轉移到 ${itemName(target)}（數值不變）？花 ${cost} 能量。`;
+      if (await ask(msg, '轉移')) apply(s => S.transferEngraving(s, item.id, tr.index, target.id, { replaceIndex }), v => { ui.transfer = null; return `已轉移 ${engravingLabel(v.moved)}（−${v.cost} 能量）`; });
+    };
+    return h('div', { style: 'margin-top:12px' },
+      h('h3', { text: `轉移「${engravingLabel(key)}」到…` }),
+      targets.length ? h('div', { class: 'stack' }, targets.map(target => {
+        const keys = S.itemEngravings(target);
+        const full = keys.length >= affix.ENGRAVINGS_PER_ITEM;
+        return h('div', { class: 'row', style: 'flex-wrap:wrap' },
+          h('span', { text: `${itemName(target)}${state.equipped[target.slot] === target.id ? '（穿著）' : ''}　${keys.map(engravingLabel).join('、') || '沒有刻印'}` }),
+          full ? keys.map((k, j) => h('button', { class: 'small danger', text: `清除「${engravingLabel(k)}」後轉移（${base + energyTable.CLEAR_COST[Number(k.split('@')[1])]}）`, onclick: () => go(target, j) }))
+            : h('button', { class: 'small primary', text: `轉移到這件（${base}）`, onclick: () => go(target) }));
+      })) : h('div', { class: 'muted', text: `沒有其他${SLOT_NAMES[item.slot]}可以轉移（傳說裝備不能刻刻印）` }),
+      h('button', { class: 'small', style: 'margin-top:6px', text: '取消', onclick: () => { ui.transfer = null; render(); } }));
   }
 
   function combineView() {
@@ -813,15 +839,27 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     const preview = cp.length === affix.COMBINE_INPUTS
       ? (cp.every(p => p.kind === cp[0].kind) ? `→ ${kindName(cp[0].kind)} ${tier + 1} 階` : `→ 隨機種類 ${tier + 1} 階`) : null;
     return h('div', { class: 'panel' }, h('h2', { text: `刻印合成（${affix.COMBINE_INPUTS} → 高一階）` }),
-      bagHint(`點刻印表放入 ${affix.COMBINE_INPUTS} 個同階刻印（${cp.length} / ${affix.COMBINE_INPUTS}），點上面的移除。三個同種 → 同種高一階；不是三個同種 → 高一階隨機種類。第 5 階不能合成。`),
+      bagHint(ui.batchCombine ? `批量合成：點一種刻印，把它全部同種合成（每 ${affix.COMBINE_INPUTS} 個 → 1 個高一階，湊不滿的留著）。第 5 階不能合成。`
+        : `點刻印表放入 ${affix.COMBINE_INPUTS} 個同階刻印（${cp.length} / ${affix.COMBINE_INPUTS}），點上面的移除。三個同種 → 同種高一階；不是三個同種 → 高一階隨機種類。第 5 階不能合成。`),
       h('div', { class: 'chips' }, cp.map((p, i) => h('span', { class: 'chip', text: `${kindName(p.kind)} ${p.tier}`, onclick: () => { cp.splice(i, 1); render(); } }))),
-      renderBag({ onPick: (kind, t) => { cp.push({ kind, tier: t }); render(); }, used: cp.map(p => `${p.kind}@${p.tier}`),
-        allowed: (kind, t) => t < affix.MAX_TIER && cp.length < affix.COMBINE_INPUTS && (tier === null || t === tier) }),
+      renderBag(ui.batchCombine
+        // 批量合成：點一種刻印就問要不要把它全部合成（每 3 顆 → 1 顆高一階，湊不滿的留著）
+        ? { onPick: async (kind, t) => {
+            const have = bagCount(kind, t), made = Math.floor(have / affix.COMBINE_INPUTS);
+            if (made < 1) return toast(`${kindName(kind)} ${t} 階不到 ${affix.COMBINE_INPUTS} 個`, true);
+            if (await ask(`把所有 ${kindName(kind)} ${t} 階（${have} 個）合成？會得到 ${made} 個 ${kindName(kind)} ${t + 1} 階，剩下 ${have - made * affix.COMBINE_INPUTS} 個 ${t} 階不動。`, '全部合成'))
+              apply(s => S.combineAllEngravings(s, kind, t), v => `合成出 ${v.made} 個 ${kindName(v.type)} ${v.tier} 階（剩 ${v.left} 個 ${v.tier - 1} 階）`);
+          }, allowed: (kind, t) => t < affix.MAX_TIER && bagCount(kind, t) >= affix.COMBINE_INPUTS }
+        : { onPick: (kind, t) => { cp.push({ kind, tier: t }); render(); }, used: cp.map(p => `${p.kind}@${p.tier}`),
+          allowed: (kind, t) => t < affix.MAX_TIER && cp.length < affix.COMBINE_INPUTS && (tier === null || t === tier) }),
       h('div', { class: 'row', style: 'margin-top:8px' },
         h('button', { class: 'primary', disabled: cp.length !== affix.COMBINE_INPUTS, text: '合成', onclick: () => apply(s => S.combineEngravings(s, cp.map(p => p.kind), tier),
           v => { ui.combinePicks = []; return `合成出 ${kindName(v.type)} ${v.tier} 階${v.mode === 'mixed' ? '（隨機）' : ''}`; }) }),
         h('button', { class: 'small', disabled: !cp.length, text: '清空', onclick: () => { ui.combinePicks = []; render(); } }),
-        preview ? h('span', { class: 'muted', text: preview }) : null));
+        preview ? h('span', { class: 'muted', text: preview }) : null,
+        h('button', { class: 'toggle' + (ui.batchCombine ? ' active' : ''), style: 'margin-left:auto',
+          text: ui.batchCombine ? '批量合成：開' : '批量合成：關',
+          onclick: () => { ui.batchCombine = !ui.batchCombine; ui.combinePicks = []; render(); } })));
   }
 
   function salvageView() {
@@ -830,7 +868,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     if (sv.kind && have <= 0) sv.kind = null;
     if (sv.kind) sv.count = Math.min(Math.max(1, sv.count), have);
     return h('div', { class: 'panel' }, h('h2', { text: '分解刻印（換能量）' }),
-      bagHint(`點刻印表選一種，設定數量後分解。分解 1 個（1～5 階）：${Object.values(energyTable.SALVAGE_ENERGY).join('／')} 能量，超過上限 ${energyTable.ENERGY_CAP} 的部分作廢。`),
+      bagHint(`點刻印表選一種，設定數量後分解。分解 1 個（1～5 階）：${Object.values(energyTable.SALVAGE_ENERGY).join('／')} 能量。`),
       renderBag({ onPick: (kind, tier) => { ui.salvage = { kind, tier, count: 1 }; render(); }, selected: sv.kind ? sv : null }),
       sv.kind ? h('div', { class: 'row', style: 'margin-top:8px' },
         h('strong', { text: `${kindName(sv.kind)} ${sv.tier} 階` }), h('span', { class: 'muted', text: `（有 ${have}）` }), '數量',
@@ -838,13 +876,13 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
         h('button', { class: 'small', text: '全部', onclick: () => { sv.count = have; render(); } }),
         h('span', { class: 'muted', text: `= ${energyTable.SALVAGE_ENERGY[sv.tier] * sv.count} 能量` }),
         h('button', { class: 'primary', text: '分解', onclick: () => apply(s => S.salvageEngravings(s, sv.kind, sv.tier, sv.count),
-          v => v.wasted > 0 ? `能量 +${v.gained}（滿了，${v.wasted} 作廢）` : `能量 +${v.gained}`) }))
+          v => `能量 +${v.gained}`) }))
         : h('div', { class: 'muted', style: 'margin-top:8px', text: '還沒選刻印' }));
   }
 
   // 換分頁時清掉所有選擇（不清的話，別頁用掉同一批刻印會讓這頁的數量變負數）
   function clearWorkshopPicks() {
-    ui.craftPicks = []; ui.combinePicks = []; ui.engraveSel = null; ui.salvage = { kind: null, tier: 1, count: 1 };
+    ui.craftPicks = []; ui.combinePicks = []; ui.engraveSel = null; ui.transfer = null; ui.salvage = { kind: null, tier: 1, count: 1 };
   }
   // 保險：選了但背包已經不夠（例如匯入存檔、分解或戰鬥改了背包）的選擇丟掉，數量不會出現負數
   function prunePicks(list, keyOf) {
@@ -891,6 +929,15 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
               const old = state.equipment.find(x => x.id === state.equipped[item.slot]);
               apply(s => S.equip(s, item.id), old?.links?.length ? `已換上，${itemName(old)}的寶石退回背包` : null);
             } }),
+        !ui.salvageMode && item.origin === 'craft' && item.affixes.some(a => a.source?.startsWith('craft:')) ? h('span', { class: 'row', style: 'gap:4px' },
+          h('button', { class: 'small', disabled: state.blackDice < S.BLACK_DICE_REROLL_COST, title: state.blackDice < S.BLACK_DICE_REROLL_COST ? '沒有黑骰：分解傳說裝備可以拿到' : null,
+            text: `黑骰重骰詞綴（${S.BLACK_DICE_REROLL_COST} 顆）`,
+            onclick: async () => { if (await ask(`用 ${S.BLACK_DICE_REROLL_COST} 顆黑骰重骰 ${itemName(item)} 的製作詞綴？種類和數值都重新抽（照製作時投入的刻印階級）。`, '重骰'))
+              apply(s => S.rerollCraftAffix(s, item.id), v => '重骰後：' + v.after.map(describeAffix).join('、')); } }),
+          h('button', { class: 'small', disabled: state.blackDice < S.BLACK_DICE_REROLL_COST || state.energy < energyTable.CRAFT_REROLL_LOCK_ENERGY,
+            text: `鎖定種類重擲數值（${S.BLACK_DICE_REROLL_COST} 顆＋${energyTable.CRAFT_REROLL_LOCK_ENERGY} 能量）`,
+            onclick: async () => { if (await ask(`用 ${S.BLACK_DICE_REROLL_COST} 顆黑骰和 ${energyTable.CRAFT_REROLL_LOCK_ENERGY} 能量重擲 ${itemName(item)} 的製作詞綴數值？種類不變。`, '重擲'))
+              apply(s => S.rerollCraftAffix(s, item.id, { lockKind: true }), v => '重擲後：' + v.after.map(describeAffix).join('、')); } })) : null,
         !ui.salvageMode && item.legendaryId ? h('button', { class: 'small', disabled: state.blackDice < S.BLACK_DICE_REROLL_COST,
           title: state.blackDice < S.BLACK_DICE_REROLL_COST ? '沒有黑骰：分解傳說裝備可以拿到' : null,
           text: `黑骰重置數值（${S.BLACK_DICE_REROLL_COST} 顆）`,
@@ -902,7 +949,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     return [h('div', { class: 'panel' },
       h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:10px' },
         h('h2', { style: 'margin:0', text: `裝備（${state.equipment.length} 件）` }),
-        h('button', { class: 'toggle danger' + (ui.salvageMode ? ' active' : ''), text: ui.salvageMode ? '分解模式：開（點按鈕分解）' : '分解模式：關', onclick: () => { ui.salvageMode = !ui.salvageMode; render(); } })),
+        h('button', { class: 'toggle danger' + (ui.salvageMode ? ' active' : ''), text: ui.salvageMode ? '分解模式：開' : '分解模式：關', onclick: () => { ui.salvageMode = !ui.salvageMode; render(); } })),
       h('div', { class: 'grid4' }, Object.entries(SLOT_NAMES).map(([slot, name]) => h('div', { class: 'slot-col' },
         h('h3', {}, name, h('span', { class: 'muted', style: 'font-weight:normal', text: `${bySlot(slot).length} 件` })),
         h('div', { class: 'stack' }, bySlot(slot).length ? bySlot(slot).map(item => itemCard(item)) : h('div', { class: 'muted', text: '沒有' })))))),

@@ -110,13 +110,15 @@ function rollQuality(r) {
 }
 
 // 製作詞綴：依 weight 抽種類，數值 = 上限 × 平均階級縮放 × (ROLL_MIN～1)。
-function rollCraftAffixes(inputs, rng) {
+// lockKind：指定種類時不抽種類（黑骰鎖定種類重擲用），只擲數值（少用一個亂數）
+function rollCraftAffixes(inputs, rng, lockKind = null) {
   const scale = inputs.reduce((sum, { tier }) => sum + TIER_SCALE[tier], 0) / inputs.length;
   const total = CRAFT_AFFIXES.reduce((sum, affix) => sum + affix.weight, 0);
   const affixes = [];
   for (let i = 0; i < CRAFT_AFFIX_SLOTS; i++) {
-    let r = rng() * total;
-    const pick = CRAFT_AFFIXES.find(affix => (r -= affix.weight) < 0) ?? CRAFT_AFFIXES.at(-1);
+    let r = lockKind ? 0 : rng() * total;
+    const pick = lockKind ? CRAFT_AFFIXES.find(affix => affix.kind === lockKind) : CRAFT_AFFIXES.find(affix => (r -= affix.weight) < 0) ?? CRAFT_AFFIXES.at(-1);
+    if (!pick) throw new Error(`製作詞綴「${lockKind}」不存在`);
     const rolled = pick.max * scale * (ROLL_MIN + (1 - ROLL_MIN) * rng());
     const value = pick.fixed ? pick.max : rolled;
     affixes.push({ scope: 'effect', kind: pick.kind, value: Math.round(value * 10000) / 10000, source: `craft:${pick.kind}` });
@@ -150,14 +152,14 @@ function rollCraft(slot, engravings, rng = Math.random) {
 }
 
 /**
- * 依投入的刻印重擲製作詞綴（存檔遷移用：v7 把舊的「異常持續時間」改擲成目前的種類）。
+ * 依投入的刻印重擲製作詞綴（存檔 v7 遷移、黑骰重骰用）。lockKind：只重擲這個種類的數值。
  * @param {string[]} materials 「種類@階級」；沒有或格式不對時當作第 3 階
  */
-function rerollCraftAffixes(materials, rng) {
+function rerollCraftAffixes(materials, rng, { lockKind = null } = {}) {
   const inputs = Array.isArray(materials) && materials.length
     ? materials.map(key => ({ tier: Number(String(key).split('@')[1]) })).map(({ tier }) => ({ tier: TIER_SCALE[tier] ? tier : 3 }))
     : [{ tier: 3 }];
-  return rollCraftAffixes(inputs, rng);
+  return rollCraftAffixes(inputs, rng, lockKind);
 }
 
 module.exports = { rerollCraftAffixes, CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, SALVAGE_RETURN, CRAFT_AFFIXES, CRAFT_STATS, STAT_UNIT, KIND_SHARES, SLOT_MULT, QUALITIES, WEIGHT, rawBase, rollQuality, rollCraft };
