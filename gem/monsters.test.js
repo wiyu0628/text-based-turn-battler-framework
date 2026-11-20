@@ -150,7 +150,16 @@ test('skill kinds: rat plague bite adds a DOT only on hit; circle ward shields a
   assert.ok(ward.actions[0].buffs[0].shield > 0);
   const doll = buildMonster('doll', 3);
   assert.equal(doll.skills[0].actions[0].type, 'HEAL');
+  assert.equal(doll.skills[0].actions[0].power, 3);                    // 修補：智力 300%（2026-11-20）
   assert.equal(doll.stats.skillCastRate, 0.5);
+  const doll13 = buildMonster('doll', 13);
+  assert.equal(doll13.skills.find(s => s.name === '加固').actions[0].buffs[0].shield, Math.round(doll13.stats.maxHp * 0.25));   // 加固：人偶最大生命 25%
+  assert.equal(doll13.skills.find(s => s.name === '緊急修復').actions[0].power, 3);   // 緊急修復：智力 300%（2026-11-20）
+  // 護盾寫 power 時改吃施放者攻擊／智力（目前沒有怪用，機制保留）
+  const { buildFromDef } = require('./monsters');
+  const custom = buildFromDef({ ...MONSTERS.doll, id: 'doll_test', skills: [{ kind: 'shield', id: 's', name: '測試盾', from: 1, spCost: 10, target: 'allySingle', power: 3, duration: 3 }] }, 7);
+  assert.equal(custom.skills[0].actions[0].buffs[0].shield, Math.round(custom.stats.int * 3));
+  assert.equal(ward.actions[0].buffs[0].shield, Math.round(buildMonster('circle', 7).stats.maxHp * 0.08));   // 寫 ratio 的仍是最大生命 × ratio
 });
 
 // ── 掉落 ──────────────────────────────────────────────────

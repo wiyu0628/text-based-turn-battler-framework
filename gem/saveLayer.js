@@ -29,6 +29,7 @@
  *   progress    defeatedBosses、unlockedRegions、unlockedMonsters（id 字串陣列）
  *   settings    difficulty（1～15）；playerName（選填，1～PLAYER_NAME_MAX 字；沒有就用遊戲層的預設名，不需要遷移）
  *   energy      能量槽（0～ENERGY_CAP 的整數；v2 新增）。勝利與分解刻印取得，清除裝備上的刻印時消耗（見 energyTable.js）
+ *   blackDice   黑骰數量（不小於 0 的整數；v8 新增）。分解傳說裝備得 1 顆，用來重置一件傳說裝備的數值（rerollLegendary）
  *
  * 不存：編譯後的技能、最終屬性、戰報、掉落表。這些讀檔後重新計算。
  *
@@ -46,14 +47,16 @@ const { ACTIVE_GEMS, SUPPORT_GEMS, STARTING_ACTIVE_GEMS, MAX_SUPPORTS, DEFAULT_W
 const { validateBonuses } = require('./statLayer');
 const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, ENGRAVING_TYPES, canEngrave, sumEffectAffixes, rollCombine, rollEngraving } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
-const { QUALITIES, CRAFT_AFFIX_SLOTS, CRAFT_INPUTS, SALVAGE_RETURN, rollCraft } = require('./craftTable');
-const { LEGENDARIES, rollLegendary, pickLegendary, mechanicsOf } = require('./legendaryTable');
+const { QUALITIES, CRAFT_AFFIX_SLOTS, CRAFT_INPUTS, SALVAGE_RETURN, rollCraft, rerollCraftAffixes } = require('./craftTable');
+const { ACCESSORIES, STARTING_ACCESSORIES, accessoryAffixes } = require('./accessoryTable');
+const { createSeededRandom } = require('../src');
+const { LEGENDARIES, rollLegendary, pickLegendary, mechanicsOf, rerollLegendaryValues, inferLegendaryTier } = require('./legendaryTable');
 const { ENERGY_CAP, SALVAGE_ENERGY, CLEAR_COST, addEnergy } = require('./energyTable');
 const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 6;
+const SAVE_VERSION = 8;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -103,6 +106,7 @@ const isGemId = id => Object.hasOwn(ACTIVE_GEMS, id) || Object.hasOwn(SUPPORT_GE
 function createStarterSave(options = {}) {
   const save = createEmptySave(options);
   for (const gemId of STARTING_ACTIVE_GEMS) save.gems[gemId] = (save.gems[gemId] ?? 0) + 1;
+  save.accessories = { owned: [...STARTING_ACCESSORIES], equipped: STARTING_ACCESSORIES[0] ?? null };   // 開局飾品，第一個直接穿上
   return save;
 }
 
@@ -120,7 +124,9 @@ function createEmptySave({ now = new Date().toISOString(), gameVersion = null } 
     equipped: Object.fromEntries(SLOTS.map(slot => [slot, null])),
     progress: Object.fromEntries(PROGRESS_KEYS.map(key => [key, []])),
     settings: { difficulty: MIN_DIFFICULTY },
-    energy: 0
+    energy: 0,
+    blackDice: 0,   // 黑骰（v8）
+    accessories: { owned: [], equipped: null }   // 飾品：擁有制，只記 id（詞綴查 accessoryTable）
   };
 }
 
@@ -240,7 +246,8 @@ function validateEquipmentItem(item, where, nextId) {
     if (!def) problems.push(`${where}的 legendaryId「${item.legendaryId}」不存在`);
     else if (def.slot !== item.slot) problems.push(`${where}是傳說裝備「${def.name}」，部位必須是 ${def.slot}`);
     if (item.origin !== 'drop') problems.push(`${where}有 legendaryId，origin 必須是 drop`);
-  }
+    if (!(Number.isInteger(item.tier) && item.tier >= 1 && item.tier <= 5)) problems.push(`${where}是傳說裝備，tier 必須是 1～5 的整數`);
+  } else if (item.tier !== undefined) problems.push(`${where}不是傳說裝備，不能有 tier`);
   if (item.materials !== undefined) {
     if (item.origin !== 'craft') problems.push(`${where}不是製作裝備，不能有 materials`);
     else if (!Array.isArray(item.materials) || item.materials.length !== CRAFT_INPUTS || item.materials.some(key => typeof key !== 'string' || !ENGRAVING_KEY.test(key))) {
@@ -297,6 +304,7 @@ function validateSave(save) {
     }
   }
 
+  if (!(Number.isInteger(save.blackDice) && save.blackDice >= 0)) problems.push(`blackDice 必須是不小於 0 的整數（收到 ${JSON.stringify(save.blackDice)}）`);
   if (!(Number.isInteger(save.energy) && save.energy >= 0 && save.energy <= ENERGY_CAP)) {
     problems.push(`energy 必須是 0～${ENERGY_CAP} 的整數（收到 ${JSON.stringify(save.energy)}）`);
   }
@@ -309,6 +317,16 @@ function validateSave(save) {
         if (isActiveGem(link?.active) && !(save.gems[link.active] > 0)) problems.push(`裝備 ${item.id} 鑲著還沒擁有的主動寶石「${link.active}」`);
       }
     }
+  }
+  const acc = save.accessories;
+  if (!isObject(acc)) problems.push('accessories 必須是物件 { owned, equipped }');
+  else {
+    if (!Array.isArray(acc.owned)) problems.push('accessories.owned 必須是陣列');
+    else {
+      for (const id of acc.owned) if (!Object.hasOwn(ACCESSORIES, id)) problems.push(`accessories.owned 有不存在的飾品「${id}」`);
+      if (new Set(acc.owned).size !== acc.owned.length) problems.push('accessories.owned 有重複的飾品');
+    }
+    if (acc.equipped !== null && !(Array.isArray(acc.owned) && acc.owned.includes(acc.equipped))) problems.push(`accessories.equipped「${acc.equipped}」不是擁有的飾品`);
   }
   problems.push(...validateStacks(save.engravings, 'engravings', key => (ENGRAVING_KEY.test(key) ? null : `格式必須是「種類@階級」，階級 ${MIN_TIER}～${MAX_TIER}`)));
 
@@ -397,7 +415,26 @@ const MIGRATIONS = {
     const gems = { ...(save.gems ?? {}) };
     if ((save.progress?.defeatedBosses ?? []).includes('gatekeeper') && !gems.firestorm) gems.firestorm = 1;
     return { ...save, version: 6, gems };
-  }
+  },
+  // v6 → v7：加回飾品欄（2026-11-20）。給開局飾品並穿上；打贏過守門者的補發 hourglass（「烈風爪痕」的碎片）。
+  // 製作詞綴「異常持續時間」移到飾品：舊裝備上的這條依當初投入的刻印改擲成目前的製作詞綴（亂數以裝備 id 當種子，結果固定）。
+  6: save => {
+    const owned = ['focus'];
+    if ((save.progress?.defeatedBosses ?? []).includes('gatekeeper')) owned.push('hourglass');
+    const equipment = (save.equipment ?? []).map(item => {
+      if (!(item.affixes ?? []).some(affix => affix.source === 'craft:ailmentDuration')) return item;
+      const rng = createSeededRandom(7000 + Number(String(item.id).replace(/\D/g, '') || 0));
+      const [replacement] = rerollCraftAffixes(item.materials, rng);
+      return { ...item, affixes: item.affixes.map(affix => (affix.source === 'craft:ailmentDuration' ? replacement : affix)) };
+    });
+    return { ...save, version: 7, equipment, accessories: { owned, equipped: 'focus' } };
+  },
+  // v7 → v8：黑骰（2026-11-20）。加 blackDice: 0；傳說裝備補記掉落階級 tier（從數值反推，黑骰重置時沿用）。
+  7: save => ({
+    ...save, version: 8, blackDice: 0,
+    equipment: (save.equipment ?? []).map(item => (item.legendaryId !== undefined && LEGENDARIES[item.legendaryId] && item.tier === undefined
+      ? { ...item, tier: inferLegendaryTier(item) } : item))
+  })
 };
 
 /** 從背包與所有裝備連結裡刪掉指定的輔助寶石（遷移用；不改傳入的物件）。 */
@@ -499,6 +536,8 @@ function removeGems(save, gemId, count = 1) {
 
 /** 寶石轉換一次要投入幾顆輔助寶石（使用者 2026-11-19：重複寶石的用途，3 換 1）。 */
 const GEM_CONVERT_INPUTS = 3;
+const BLACK_DICE_PER_SALVAGE = 1;   // 分解一件傳說裝備得到的黑骰（使用者，2026-11-20）
+const BLACK_DICE_REROLL_COST = 1;   // 重置一次消耗的黑骰
 
 /**
  * 寶石轉換：投入 GEM_CONVERT_INPUTS 顆輔助寶石（可以同種、可以混），換 1 顆輔助寶石。
@@ -690,7 +729,15 @@ function engraveEquipment(save, id, type, tier, rng = Math.random) {
 function salvageEquipment(save, id, rng = Math.random) {
   return mutate(save, draft => {
     const item = findItem(draft, id);
-    if (item.origin !== 'craft' || !Array.isArray(item.materials)) throw new SaveError(`裝備「${id}」不是製作裝備，不能分解`);
+    // 傳說裝備可以分解（2026-11-20 使用者）：得 1 顆黑骰，鑲著的寶石退回背包。
+    if (item.legendaryId !== undefined) {
+      for (const [gemId, count] of Object.entries(linkGemCounts(item.links))) addToStack(draft.gems, gemId, count);
+      for (const slot of SLOTS) if (draft.equipped[slot] === id) draft.equipped[slot] = null;
+      draft.equipment = draft.equipment.filter(entry => entry.id !== id);
+      draft.blackDice += BLACK_DICE_PER_SALVAGE;
+      return { returned: [], legendary: true, blackDice: BLACK_DICE_PER_SALVAGE };
+    }
+    if (item.origin !== 'craft' || !Array.isArray(item.materials)) throw new SaveError(`裝備「${id}」不是製作裝備或傳說裝備，不能分解`);
     const pool = [...item.materials];
     const returned = [];
     for (let i = 0; i < Math.min(SALVAGE_RETURN, pool.length); i++) {
@@ -702,6 +749,24 @@ function salvageEquipment(save, id, rng = Math.random) {
     for (const slot of SLOTS) if (draft.equipped[slot] === id) draft.equipped[slot] = null;
     draft.equipment = draft.equipment.filter(entry => entry.id !== id);
     return { returned };
+  });
+}
+
+/**
+ * 黑骰：消耗 1 顆，依裝備記的掉落階級重擲一件傳說裝備的所有數值（基礎與特殊詞綴；施放權重、鑲的寶石不變）。
+ * 回傳 { save, before: { base, affixes }, after: { base, affixes } }。不是傳說裝備、黑骰不夠丟 SaveError，原存檔不變。
+ */
+function rerollLegendary(save, id, rng = Math.random) {
+  return mutate(save, draft => {
+    const item = findItem(draft, id);
+    if (item.legendaryId === undefined) throw new SaveError(`裝備「${id}」不是傳說裝備，不能用黑骰`);
+    if (draft.blackDice < BLACK_DICE_REROLL_COST) throw new SaveError(`黑骰不足：重置要 ${BLACK_DICE_REROLL_COST} 顆，目前有 ${draft.blackDice} 顆`);
+    const before = { base: structuredClone(item.base), affixes: structuredClone(item.affixes) };
+    const after = rerollLegendaryValues(item, rng);
+    item.base = after.base;
+    item.affixes = after.affixes;
+    draft.blackDice -= BLACK_DICE_REROLL_COST;
+    return { before, after: structuredClone(after) };
   });
 }
 
@@ -829,6 +894,18 @@ function equip(save, id) {
   });
 }
 
+/** 穿上飾品（只有 1 個飾品欄；換上新的會取代原本的）。id 是 null 就脫下。沒擁有的丟 SaveError。 */
+function equipAccessory(save, id) {
+  if (id !== null && !save.accessories?.owned?.includes(id)) throw new SaveError(`還沒有${ACCESSORIES[id]?.name ?? `「${id}」`}`);
+  return mutate(save, draft => { draft.accessories.equipped = id; });
+}
+
+/** 給一個飾品（測試、工具用；已經有就不變）。 */
+function addAccessory(save, id) {
+  if (!Object.hasOwn(ACCESSORIES, id)) throw new SaveError(`飾品「${id}」不存在`);
+  return mutate(save, draft => { if (!draft.accessories.owned.includes(id)) draft.accessories.owned.push(id); });
+}
+
 /** 脫下：寶石退回背包。 */
 function unequip(save, slot) {
   if (!SLOTS.includes(slot)) throw new SaveError(`未知的部位「${slot}」`);
@@ -880,13 +957,15 @@ function recordBossVictory(save, bossId) {
   if (!status.available) throw new SaveError(`王「${status.name}」還沒開放（要先擊敗前一隻王）`);
   const boss = BOSSES.find(entry => entry.id === bossId);
   return mutate(save, draft => {
-    if (status.defeated) return { firstClear: false, rewards: { gems: [], unlockRegions: [] } };
+    if (status.defeated) return { firstClear: false, rewards: { gems: [], unlockRegions: [], accessories: [] } };
     draft.progress.defeatedBosses.push(bossId);
     const gems = [...(boss.rewards?.gems ?? [])];
     const unlockRegions = (boss.rewards?.unlockRegions ?? []).filter(id => !draft.progress.unlockedRegions.includes(id));
     for (const gemId of gems) giveGem(draft, gemId, 1);
     draft.progress.unlockedRegions.push(...unlockRegions);
-    return { firstClear: true, rewards: { gems, unlockRegions } };
+    const accessories = (boss.rewards?.accessories ?? []).filter(id => !draft.accessories.owned.includes(id));
+    draft.accessories.owned.push(...accessories);
+    return { firstClear: true, rewards: { gems, unlockRegions, accessories } };
   });
 }
 
@@ -912,10 +991,18 @@ function equippedItems(save) {
  * 沒寫 source 的加成會用裝備 id 當來源。
  */
 function equippedBonuses(save) {
-  return equippedItems(save).flatMap(item => [
-    ...item.base,
-    ...item.affixes.filter(affix => affix.scope === 'wearer')
-  ].map(({ stat, op, value, source }) => ({ stat, op, value, source: source ?? item.id })));
+  return [
+    ...equippedItems(save).flatMap(item => [
+      ...item.base,
+      ...item.affixes.filter(affix => affix.scope === 'wearer')
+    ].map(({ stat, op, value, source }) => ({ stat, op, value, source: source ?? item.id }))),
+    ...equippedAccessoryAffixes(save).filter(affix => affix.scope === 'wearer').map(({ stat, op, value, source }) => ({ stat, op, value, source }))
+  ];
+}
+
+/** 穿著的飾品的詞綴（查 accessoryTable；沒穿是空陣列）。 */
+function equippedAccessoryAffixes(save) {
+  return accessoryAffixes(save.accessories?.equipped);
 }
 
 /**
@@ -923,7 +1010,7 @@ function equippedBonuses(save) {
  * 傳給 compileLoadout 的 options.equipment；或直接用 compileEquipped。
  */
 function equippedEffects(save) {
-  return sumEffectAffixes(equippedItems(save).flatMap(item => item.affixes));
+  return sumEffectAffixes([...equippedItems(save).flatMap(item => item.affixes), ...equippedAccessoryAffixes(save)]);
 }
 
 /**
@@ -1026,7 +1113,7 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
-  convertGems, GEM_CONVERT_INPUTS, addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
+  convertGems, GEM_CONVERT_INPUTS, rerollLegendary, BLACK_DICE_PER_SALVAGE, BLACK_DICE_REROLL_COST, equipAccessory, addAccessory, equippedAccessoryAffixes, addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
   setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedMechanics, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };

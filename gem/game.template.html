@@ -66,6 +66,7 @@
   .energy { display: flex; align-items: center; gap: 8px; margin-left: auto; }
   .energy .bar { width: 160px; height: 10px; border-radius: 5px; background: var(--energy-track); overflow: hidden; }
   .energy .bar > div { height: 100%; background: var(--energy); }
+  .energy .dice { white-space: nowrap; margin-left: 4px; }
   .header-actions { display: flex; gap: 6px; }
 
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
@@ -215,6 +216,7 @@
   </nav>
   <div class="energy" title="能量：勝利與分解刻印取得，清除裝備上的刻印時消耗">
     <span>能量</span><div class="bar"><div id="energy-fill"></div></div><span id="energy-text"></span>
+    <span class="dice" title="黑骰：分解傳說裝備取得，用來重置一件傳說裝備的數值">黑骰 <strong id="dice-text">0</strong></span>
   </div>
   <div class="header-actions">
     <button class="small" id="theme-toggle"></button>
@@ -256,7 +258,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
 <script>
 (function () {
   'use strict';
-  const { game, save: S, gems: G, compiler, stats: statLayer, affix, craft, drops: dropTable, energy: energyTable, legendary, monsters: M, bosses: B } = window.Game;
+  const { game, save: S, gems: G, compiler, stats: statLayer, affix, craft, drops: dropTable, energy: energyTable, legendary, accessories: AC, monsters: M, bosses: B } = window.Game;
 
   // ── 小工具 ──────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
@@ -472,7 +474,8 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
       h('dl', {},
         row('生命', stats.maxHp ?? stats.hp), row('SP', stats.maxSp ?? stats.sp), row('攻擊', stats.atk), row('智力', stats.int), row('防禦', stats.def),
         row('速度', stats.spd), row('爆擊率', pct(stats.cri)), row('爆擊傷害', `×${stats.criDmg}`), row('命中', stats.hit ?? 0), row('閃避', stats.eva ?? 0),
-        row('普攻屬性', loadout.normalAttackStat === 'int' ? '智力' : '攻擊')),
+        row('普攻屬性', loadout.normalAttackStat === 'int' ? '智力' : '攻擊'),
+        row(AC.ACCESSORY_LABEL, AC.ACCESSORIES[state.accessories.equipped]?.name ?? '沒有')),
       h('h3', { style: 'margin-top:12px', text: '技能' }),
       loadout.compiled.length ? h('ul', {}, loadout.compiled.map(c => h('li', { text: `${c.skill.name}（SP ${c.spCost}）` }))) : h('div', { class: 'muted', text: '沒有技能：到「寶石」頁把主動寶石連到穿著的裝備上' }),
       ...(fxLines.length ? [h('h3', { style: 'margin-top:12px', text: '裝備效果' }), h('ul', {}, fxLines)] : [])
@@ -480,6 +483,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     const e = state.energy, cap = energyTable.ENERGY_CAP;
     $('energy-fill').style.width = `${(e / cap) * 100}%`;
     $('energy-text').textContent = `${e} / ${cap}`;
+    $('dice-text').textContent = String(state.blackDice);
   }
 
   // ── 冒險 ────────────────────────────────────────────────────
@@ -665,6 +669,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
       const r = result.rewards;
       box.append(h('div', { class: 'drop-row', style: 'margin-top:6px' }, h('strong', { text: '首次擊敗！' }),
         ...r.gems.map(id => dropChip(`主動寶石：${gemName(id)}`, () => showGemInfo(id))),
+        ...(r.accessories ?? []).map(id => dropChip(`${AC.ACCESSORY_LABEL}：${AC.ACCESSORIES[id]?.name ?? id}`, () => { tab = 'equipment'; render(); })),
         r.unlockRegions.length ? h('span', { text: '開放地區：' + r.unlockRegions.map(id => M.REGIONS[id]?.name ?? id).join('、') }) : null));
     }
     if (!result.victory) box.append(h('div', { class: 'muted', text: '沒有掉落' }));
@@ -875,14 +880,22 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
         links.length ? `｜寶石：${links.map(l => [l.active, ...(l.supports || [])].map(gemName).join('＋')).join('；')}` : ''),
       compact ? null : h('div', { class: 'actions' },
         ui.salvageMode
-          ? h('button', { class: 'small danger', disabled: !item.materials, title: item.materials ? null : '只有用刻印製作的裝備能分解',
-            text: item.materials ? `分解（退回 ${craft.SALVAGE_RETURN} 個刻印）` : '不能分解',
-            onclick: async () => { if (await ask(`分解 ${itemName(item)}？會隨機退回 ${craft.SALVAGE_RETURN} 個當初投入的刻印，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => '退回：' + v.returned.map(engravingLabel).join('、')); } })
+          ? (item.legendaryId
+            ? h('button', { class: 'small danger', text: `分解（得 ${S.BLACK_DICE_PER_SALVAGE} 顆黑骰）`,
+              onclick: async () => { if (await ask(`分解傳說裝備 ${itemName(item)}？得到 ${S.BLACK_DICE_PER_SALVAGE} 顆黑骰，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => `已分解 ${itemName(item)}，得到 ${v.blackDice} 顆黑骰`); } })
+            : h('button', { class: 'small danger', disabled: !item.materials, title: item.materials ? null : '只有用刻印製作的裝備與傳說裝備能分解',
+              text: item.materials ? `分解（退回 ${craft.SALVAGE_RETURN} 個刻印）` : '不能分解',
+              onclick: async () => { if (await ask(`分解 ${itemName(item)}？會隨機退回 ${craft.SALVAGE_RETURN} 個當初投入的刻印，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => '退回：' + v.returned.map(engravingLabel).join('、')); } }))
           : worn ? h('button', { class: 'small', text: '脫下', onclick: () => apply(s => S.unequip(s, item.slot), item.links?.length ? '已脫下，寶石退回背包' : null) })
             : h('button', { class: 'small primary', text: '穿上', onclick: () => {
               const old = state.equipment.find(x => x.id === state.equipped[item.slot]);
               apply(s => S.equip(s, item.id), old?.links?.length ? `已換上，${itemName(old)}的寶石退回背包` : null);
-            } })));
+            } }),
+        !ui.salvageMode && item.legendaryId ? h('button', { class: 'small', disabled: state.blackDice < S.BLACK_DICE_REROLL_COST,
+          title: state.blackDice < S.BLACK_DICE_REROLL_COST ? '沒有黑骰：分解傳說裝備可以拿到' : null,
+          text: `黑骰重置數值（${S.BLACK_DICE_REROLL_COST} 顆）`,
+          onclick: async () => { if (await ask(`用 ${S.BLACK_DICE_REROLL_COST} 顆黑骰重置 ${itemName(item)} 的所有數值？會依掉落時的階級重擲基礎數值與獨有詞綴，可能變高也可能變低；施放權重和鑲的寶石不變。`, '重置'))
+            apply(s => S.rerollLegendary(s, item.id), v => '重置後：' + [...v.after.base.map(b => statLayer.describeStatBonus(b).text), ...v.after.affixes.map(describeAffix)].join('、')); } }) : null));
   }
   function renderEquipment() {
     const bySlot = slot => state.equipment.filter(item => item.slot === slot).sort((a, b) => (state.equipped[slot] === b.id) - (state.equipped[slot] === a.id));
@@ -892,7 +905,23 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
         h('button', { class: 'toggle danger' + (ui.salvageMode ? ' active' : ''), text: ui.salvageMode ? '分解模式：開（點按鈕分解）' : '分解模式：關', onclick: () => { ui.salvageMode = !ui.salvageMode; render(); } })),
       h('div', { class: 'grid4' }, Object.entries(SLOT_NAMES).map(([slot, name]) => h('div', { class: 'slot-col' },
         h('h3', {}, name, h('span', { class: 'muted', style: 'font-weight:normal', text: `${bySlot(slot).length} 件` })),
-        h('div', { class: 'stack' }, bySlot(slot).length ? bySlot(slot).map(item => itemCard(item)) : h('div', { class: 'muted', text: '沒有' }))))))];
+        h('div', { class: 'stack' }, bySlot(slot).length ? bySlot(slot).map(item => itemCard(item)) : h('div', { class: 'muted', text: '沒有' })))))),
+      accessoryPanel()];
+  }
+  // 飾品：只有 1 欄、擁有制、只有固定的特殊詞綴（accessoryTable）
+  function accessoryPanel() {
+    const acc = state.accessories;
+    return h('div', { class: 'panel' },
+      h('h2', { text: `${AC.ACCESSORY_LABEL}（1 欄；擁有 ${acc.owned.length} 個）` }),
+      acc.owned.length ? h('div', { class: 'grid4' }, acc.owned.map(id => {
+        const def = AC.ACCESSORIES[id];
+        const worn = acc.equipped === id;
+        return h('div', { class: 'item' + (worn ? ' worn' : '') },
+          h('strong', { text: def.name + (worn ? '（穿著）' : '') }),
+          h('ul', { style: 'margin:4px 0;padding-left:18px' }, def.affixes.map(a => h('li', { text: describeAffix(a) }))),
+          h('button', { class: 'small' + (worn ? '' : ' primary'), text: worn ? '脫下' : '穿上',
+            onclick: () => apply(s => S.equipAccessory(s, worn ? null : id), worn ? `脫下${def.name}` : `穿上${def.name}`) }));
+      })) : h('div', { class: 'muted', text: `沒有${AC.ACCESSORY_LABEL}（打王首次擊敗可以拿到）` }));
   }
 
   // ── 寶石 ────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ node gem/gems-ui-build.js
 node gem/game-build.js                                  # 正式遊戲介面
 ```
 
-**預期**：`npm test` 680 項全過；`gem/` 內各測試檔：affixTable 12、ailment 14、bosses 3、castWeight 22、combine 8、craft 17、deft 3、difficulty 2、dropTable 9、energy 6、engrave 12、equipment 12、game 13、gems 107、legendary 9、monsters 10、saveLayer 52、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 440 KB、25 個模組）。
+**預期**：`npm test` 696 項全過；`gem/` 內各測試檔：accessory 7、affixTable 12、ailment 15、bosses 8、castWeight 22、combine 8、craft 17、deft 3、difficulty 2、dropTable 9、energy 6、engrave 12、equipment 12、game 13、gems 107、legendary 12、monsters 10、saveLayer 52、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 500 KB、26 個模組）。
 
 **如果結果不同，先判斷是哪一種情況：**
 
@@ -73,7 +73,7 @@ node gem/game-build.js                                  # 正式遊戲介面
 | `../tests/uncritable.test.js`、`../tests/ignoreDefenseRatio.test.js`、`../tests/hitFormula.test.js` | 框架層新機制的測試（8 項、5 項、4 項） |
 
 **目前的寶石**（數值皆為佔位）：
-- 主動：magicmissile 魔法飛彈（**法術**：吃智力、不可暴擊、不可反擊；SP 10、單體）、whirlwind 旋風斬（**物理**：吃攻擊力、可暴擊；全體、SP 12；**平衡後倍率 0.9 → 1.2 → 1.0**）、**rend 撕裂**（物理、單體、**SP 14**〔平衡後：10 → 16 → 14〕、120%，命中附加裂傷）、**pursuit 追刃**（物理、單體、SP 15、90%，命中附加殘刃）（兩者見 3-E）、mend 治癒術（法術、治療，回復量讀智力；SP 8）。治癒術沒有傷害段，所以只能連佈局與撒手鐧。
+- 主動：magicmissile 魔法飛彈（**法術**：吃智力、不可暴擊、不可反擊；SP 10、單體）、whirlwind 旋風斬（**物理**：吃攻擊力、可暴擊；全體、SP 12；**平衡後倍率 0.9 → 1.2 → 1.0**）、**rend 撕裂**（物理、單體、**SP 14**〔平衡後：10 → 16 → 14〕、120%，命中附加裂傷）、**pursuit 追刃**（物理、單體、SP 15、**100%**〔2026-11-20：90% → 100%〕，命中附加殘刃）（兩者見 3-E）、mend 治癒術（法術、治療，回復量讀智力；SP 8）。治癒術沒有傷害段，所以只能連佈局與撒手鐧。
 - 輔助：heavy 強力、lean 節能（互斥組 economy）、amp 增幅、~~wide 擴散~~（2026-11-18 移除）、**pierce 穿甲**（`ignoreDefense: 0.5`，無視一半防禦，傷害 −10%）、shock 感電（限法術）、focus 聚焦（限全體）、charge 蓄力、layout 佈局、trump 撒手鐧、leech 汲取（限非法術）、critup 爆擊強化（使用時爆擊率 +15%，只撐這次施放；**沒有提示文字**）。連到法術沒有效果（法術不擲爆擊骰）。
 - 機制已實作但沒有正式寶石使用：`proc`（機率附加）、`castCondition`（施放條件）。
 
@@ -230,7 +230,7 @@ node gem/game-build.js                                  # 正式遊戲介面
 
 1. **主動寶石（使用者設計）**：
    - **撕裂 rend**：物理、單體、SP 10、傷害 120%；命中附加「**裂傷**」：目標行動槽開始時受到**施放者攻擊力 × 20%**，持續 3 槽（發作 3 次）。
-   - **追刃 pursuit**：物理、單體、SP 15、傷害 90%；命中附加「**殘刃**」：目標行動槽開始時受到**這一擊傷害的 100%**，持續 1 槽。
+   - **追刃 pursuit**：物理、單體、SP 15、傷害 90%；命中附加「**殘刃**」：目標行動槽開始時受到**這一擊傷害的 60%**（2026-11-20：100% → 60%），持續 1 槽，**吃異常持續時間**。
    - 兩者都是**重複獲得可疊加、每層持續時間分別計算**。
 2. **算法（使用者決定）**，命中當下結算、之後固定；**都不暴擊、沒有 ±10% 浮動、不多擲骰**：
    - `basis: 'stat'`（裂傷）：施放者**有效**能力值（同該段 `stat`，含疲勞與 STAT Buff——這點是我的解讀）× power。**不吃**寶石 inc／more、裝備物理／法術傷害提高，**不看目標防禦**。
@@ -268,7 +268,7 @@ node gem/game-build.js                                  # 正式遊戲介面
 3. **普攻屬性（使用者決定）**：武器的 `attackStat`（`'atk'`／`'int'`）決定普攻吃哪個屬性；沒穿武器是 `atk`。製作武器時玩家選（`craftEquipment(..., rng, { attackStat })`，預設 `atk`，其他部位不能寫）；傳說武器每件固定。`compileEquipped` 回傳多一個 `normalAttackStat`，**普攻 Skill 由遊戲自己建立**（傷害段寫 `stat`）。只改屬性：吃智力的普攻**仍可暴擊、可被反擊**（不算法術，我的解讀）。
 
 4. **製作詞綴第二、三種（使用者選，數值我擬，已實作）**：三種平均抽（各 1/3）。
-   - **異常持續時間 `ailmentDuration`**：固定 +1 槽（不縮放、不擲值，但 rng 照樣呼叫一次）；整套合計上限 `AILMENT_DURATION_CAP = 2`（我的決定）；`AILMENTS` 標 `extendable: false` 的不受影響——**殘刃不延長**（我的決定：殘刃是「下一槽再打一次 100%」，延長會讓它重複多次）。裂傷 3 → 最多 5 槽。
+   - **異常持續時間 `ailmentDuration`**：固定 +1 槽（不縮放、不擲值，但 rng 照樣呼叫一次）；整套合計上限 `AILMENT_DURATION_CAP = 2`（我的決定）；`AILMENTS` 標 `extendable: false` 的不受影響——~~殘刃不延長~~（2026-11-20 使用者改成可延長，殘刃同時降到 60%）。裂傷（2026-11-20 改成基礎 2 槽）最多 3 槽、殘刃最多 2 槽。**2026-11-20 起異常持續時間不再是製作詞綴，改由飾品「烈風爪痕」的碎片（hourglass）給 +1，合計上限 1**（見 CONTENT-HANDOFF）。
    - **行動回復 SP `spRegen`**：每個**自己的**行動槽結束時（`AFTER_ACTION` 且 actor 是自己；喘息的槽不算）回復；上限 1 點（第 5 階滿骰）× 平均階級縮放 × 0.7～1.0，小數累積到下次；**不寫戰報**（框架 `restoreSp` 只同步疲勞）。
    - 模擬（滿裝、只改 spRegen）：物理每槽 1 點 ×1.04、2 點 ×1.067、3 點以上約 ×1.08 飽和；**法術沒有影響**（SP 415，本來就用不完）。所以上限從 1.5 降到 1。`affix-budget.js --craft` 物理 build 從 ×4.95～5.16 升到 ×5.12～5.29（因為製作詞綴可能抽到 SP 回復），法術不變。
 5. **命中與閃避（使用者設計公式、同意動 `src/`，已實作；框架 1.0.59）**：

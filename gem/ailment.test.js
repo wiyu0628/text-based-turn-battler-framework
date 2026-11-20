@@ -25,7 +25,7 @@ const targetSlot = (target, log) => {
 
 // ── 編譯 ──────────────────────────────────────────────────
 
-test('rend is a physical single-target 120% hit costing 14 SP (balanced from 10) that carries a 20% / 3-slot bleed', () => {
+test('rend is a physical single-target 120% hit costing 14 SP (balanced from 10) that carries a 20% / 2-slot bleed (3 → 2, 2026-11-20)', () => {
   const gem = ACTIVE_GEMS.rend;
   assert.equal(gem.name, '撕裂');
   assert.equal(gem.spCost, 14);   // 平衡：10 → 16（第一輪方案 A）→ 14（第二輪，使用者決定）
@@ -36,28 +36,28 @@ test('rend is a physical single-target 120% hit costing 14 SP (balanced from 10)
   assert.equal(action.targetType, 'ENEMY_SINGLE');
   assert.equal(action.stat, undefined);           // 吃 atk、可暴擊
   assert.equal(action.ailments, undefined);       // 資料欄位不送進框架
-  assert.deepEqual(action.gemAilments, [{ kind: 'bleed', basis: 'stat', power: 0.2, duration: 3 }]);
+  assert.deepEqual(action.gemAilments, [{ kind: 'bleed', basis: 'stat', power: 0.2, duration: 2 }]);
   assert.equal(compiled.spCost, 14);
   assert.equal(compiled.passives.length, 1);
   assert.equal(compileSkill('whirlwind').passives.length, 0);   // 沒有異常的技能不多掛被動
 });
 
-test('pursuit is a physical single-target 90% hit costing 15 SP that carries a 100%-of-hit / 1-slot lingering blade', () => {
+test('pursuit is a physical single-target 100% hit costing 15 SP that carries a 60%-of-hit / 1-slot lingering blade (2026-11-20)', () => {
   const gem = ACTIVE_GEMS.pursuit;
   assert.equal(gem.name, '追刃');
   assert.equal(gem.spCost, 15);
   assert.ok(gem.tags.includes('attack') && !gem.tags.includes('spell'));
   const action = damageAction(compileSkill('pursuit'));
-  assert.equal(action.power, 0.9);
+  assert.equal(action.power, 1.0);
   assert.equal(action.targetType, 'ENEMY_SINGLE');
-  assert.deepEqual(action.gemAilments, [{ kind: 'lingering', basis: 'hit', power: 1, duration: 1 }]);
+  assert.deepEqual(action.gemAilments, [{ kind: 'lingering', basis: 'hit', power: 0.6, duration: 1 }]);
 });
 
 test('ailment power is not scaled by gem inc / more or equipment damage (the hit power still is)', () => {
   for (const options of [{}, { equipment: { physDmg: 0.5 } }]) {
     for (const supports of [[], ['amp'], ['heavy']]) {
       assert.equal(damageAction(compileSkill('rend', supports, options)).gemAilments[0].power, 0.2);
-      assert.equal(damageAction(compileSkill('pursuit', supports, options)).gemAilments[0].power, 1);
+      assert.equal(damageAction(compileSkill('pursuit', supports, options)).gemAilments[0].power, 0.6);
     }
   }
   assert.equal(damageAction(compileSkill('rend', ['amp'])).power, 1.44);
@@ -65,7 +65,7 @@ test('ailment power is not scaled by gem inc / more or equipment damage (the hit
 
 test('equipment ailment damage multiplies both bleed and lingering blade in their own additive zone', () => {
   assert.equal(damageAction(compileSkill('rend', [], { equipment: { ailmentDmg: 0.5 } })).gemAilments[0].power, 0.3);
-  assert.equal(damageAction(compileSkill('pursuit', [], { equipment: { ailmentDmg: 0.5 } })).gemAilments[0].power, 1.5);
+  assert.equal(damageAction(compileSkill('pursuit', [], { equipment: { ailmentDmg: 0.5 } })).gemAilments[0].power, 0.9);
   // 與物理傷害提高分開：物理提高只改命中，異常增加只改異常
   const both = damageAction(compileSkill('rend', ['amp'], { equipment: { physDmg: 0.3, ailmentDmg: 0.2 } }));
   assert.equal(both.power, 1.8);                     // 1.2 × (1 + 0.2 + 0.3)
@@ -79,23 +79,23 @@ test('ailment damage boosts the snapshot value in battle terms', () => {
   const foe = unit('f', 'B', {});
   strike(compileSkill('rend', [], { equipment: { ailmentDmg: 0.5 } }), unit('h', 'A', { atk: 100 }), foe, log);
   strike(compileSkill('pursuit', [], { equipment: { ailmentDmg: 0.5 } }), unit('h', 'A', {}), foe, log, 80);
-  assert.deepEqual(foe.buffs.map(b => b.value), [30, 120]);   // 100 × 0.2 × 1.5、80 × 1 × 1.5
+  assert.deepEqual(foe.buffs.map(b => b.value), [30, 72]);   // 100 × 0.2 × 1.5、80 × 0.6 × 1.5
 });
 
-test('equipment ailment duration adds slots to bleed but not to the lingering blade; capped at +2 in the sum', () => {
-  assert.equal(damageAction(compileSkill('rend', [], { equipment: { ailmentDuration: 2 } })).gemAilments[0].duration, 5);
-  assert.equal(damageAction(compileSkill('pursuit', [], { equipment: { ailmentDuration: 2 } })).gemAilments[0].duration, 1);
+test('equipment ailment duration adds slots to both bleed and the lingering blade (extendable since 2026-11-20); capped at +1 in the sum (2026-11-20)', () => {
+  assert.equal(damageAction(compileSkill('rend', [], { equipment: { ailmentDuration: 2 } })).gemAilments[0].duration, 4);
+  assert.equal(damageAction(compileSkill('pursuit', [], { equipment: { ailmentDuration: 2 } })).gemAilments[0].duration, 3);
   assert.throws(() => compileSkill('rend', [], { equipment: { ailmentDuration: 1.5 } }), /整數/);
   const { sumEffectAffixes, AILMENT_DURATION_CAP } = require('./affixTable');
   const line = { scope: 'effect', kind: 'ailmentDuration', value: 1 };
-  assert.equal(AILMENT_DURATION_CAP, 2);
-  assert.equal(sumEffectAffixes([line, line, line, line]).ailmentDuration, 2);
-  // 延長後實際多發作：+1 槽 → 4 次
+  assert.equal(AILMENT_DURATION_CAP, 1);
+  assert.equal(sumEffectAffixes([line, line, line, line]).ailmentDuration, 1);
+  // 延長後實際多發作：+1 槽 → 3 次
   const log = logger();
   const foe = unit('f', 'B', {});
   strike(compileSkill('rend', [], { equipment: { ailmentDuration: 1 } }), unit('h', 'A', { atk: 100 }), foe, log);
-  const ticks = [1, 2, 3, 4, 5].map(() => targetSlot(foe, log));
-  assert.deepEqual(ticks, [1, 1, 1, 1, 0]);
+  const ticks = [1, 2, 3, 4].map(() => targetSlot(foe, log));
+  assert.deepEqual(ticks, [1, 1, 1, 0]);
 });
 
 test('rend links with physical supports and rejects spell-only ones; charge release keeps the bleed', () => {
@@ -137,20 +137,20 @@ test('bleed damage = caster effective atk × 20%, ignoring defense and damage bo
   assert.equal(foe.buffs[1].value, 30);
 });
 
-test('lingering blade damage = 100% of the hit damage shown in the log, ticking once', () => {
+test('lingering blade damage = 60% of the hit damage shown in the log (floored), ticking once', () => {
   const log = logger();
   const foe = unit('f', 'B', { def: 300 });
   strike(compileSkill('pursuit'), unit('h', 'A', {}), foe, log, 137);
-  assert.equal(foe.buffs[0].value, 137);
+  assert.equal(foe.buffs[0].value, 82);   // floor(137 × 0.6)
   assert.equal(foe.buffs[0].name, '殘刃');
   assert.equal(log.logs[0].message, 'f 陷入「殘刃」！');
   strike(compileSkill('pursuit'), unit('h', 'A', {}), foe, log, 90);   // 疊第二層，各自計時
   assert.equal(targetSlot(foe, log), 2);
   assert.equal(targetSlot(foe, log), 0);
-  assert.equal(1e6 - foe.stats.hp, 137 + 90);
+  assert.equal(1e6 - foe.stats.hp, 82 + 54);
 });
 
-test('each bleed ticks at the start of the target slot three times, and stacks keep their own timers', () => {
+test('each bleed ticks at the start of the target slot twice, and stacks keep their own timers', () => {
   const log = logger();
   const hero = unit('h', 'A', { atk: 100 });
   const foe = unit('f', 'B', {});
@@ -159,14 +159,13 @@ test('each bleed ticks at the start of the target slot three times, and stacks k
   assert.equal(targetSlot(foe, log), 1);
   strike(compiled, hero, foe, log);           // 第二層，與第一層各自倒數
   assert.equal(foe.buffs.length, 2);
-  assert.equal(targetSlot(foe, log), 2);
-  assert.equal(targetSlot(foe, log), 2);      // 第一層第 3 次發作後消失
-  assert.equal(targetSlot(foe, log), 1);      // 只剩第二層的第 3 次
+  assert.equal(targetSlot(foe, log), 2);      // 第一層第 2 次發作後消失
+  assert.equal(targetSlot(foe, log), 1);      // 只剩第二層的第 2 次
   assert.equal(targetSlot(foe, log), 0);
   assert.equal(foe.buffs.length, 0);
   const ticks = log.logs.filter(l => l.type === 'BUFF_EFFECT');
   assert.ok(ticks.every(l => l.value === 20));   // 100 × 0.2
-  assert.equal(1e6 - foe.stats.hp, 6 * 20);
+  assert.equal(1e6 - foe.stats.hp, 4 * 20);
 });
 
 // ── 實際戰鬥 ──────────────────────────────────────────────
@@ -192,23 +191,31 @@ function fight(t, hit, active = 'rend') {
   };
 }
 
-test('in battle every rend hit applies a bleed, and every applied bleed ticks 3 times (minus what is left at the end)', t => {
+test('in battle every rend hit applies a bleed, and every applied bleed ticks 2 times (minus what is left at the end)', t => {
   const { applied, ticks, hits, remaining } = fight(t, true);
   assert.ok(hits.length >= 3, `casts ${hits.length}`);
   assert.equal(applied, hits.length);
-  assert.equal(ticks, applied * 3 - remaining);
+  assert.equal(ticks, applied * 2 - remaining);
 });
 
-test('in battle every pursuit hit is repeated once by its lingering blade at the target slot start', t => {
+test('in battle every pursuit hit is followed once by its 60% lingering blade at the target slot start', t => {
   const { applied, hits, tickLogs, left } = fight(t, true, 'pursuit');
   assert.ok(hits.length >= 3, `casts ${hits.length}`);
   assert.equal(applied, hits.length);
   const pending = left.map(b => b.value);
-  assert.deepEqual([...tickLogs.map(l => l.value), ...pending].sort(), hits.map(l => l.value).sort());
+  assert.deepEqual([...tickLogs.map(l => l.value), ...pending].sort(), hits.map(l => Math.max(1, Math.floor(l.value * 0.6))).sort());
 });
 
 test('a missed rend applies nothing', t => {
   const { applied, ticks } = fight(t, false);
   assert.equal(applied, 0);
   assert.equal(ticks, 0);
+});
+
+test('an ailment marked extendable: false ignores equipment ailment duration (mechanism kept; no live ailment uses it now)', t => {
+  const { AILMENTS } = require('./gems');
+  AILMENTS.lingering.extendable = false;
+  t.after(() => { delete AILMENTS.lingering.extendable; });
+  assert.equal(damageAction(compileSkill('pursuit', [], { equipment: { ailmentDuration: 2 } })).gemAilments[0].duration, 1);
+  assert.equal(damageAction(compileSkill('rend', [], { equipment: { ailmentDuration: 2 } })).gemAilments[0].duration, 4);
 });

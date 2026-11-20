@@ -16,8 +16,9 @@
  *     目前只有疾風、精準提高權重（WEIGHT.bonus）。
  *   製作出來的裝備帶 CRAFT_AFFIX_SLOTS（1）條「製作詞綴」，放不適合做成刻印的效果（CRAFT_AFFIXES，依 weight 抽 1 種）。
  *     數值 = 上限 × 投入刻印的平均階級縮放（10 個刻印的 TIER_SCALE 平均）× (ROLL_MIN～1 隨機，與刻印詞綴相同)；品質不影響。
- *     目前三種（各 1/3）：異常傷害增加 ailmentDmg（上限 25%）、異常持續時間 ailmentDuration（固定 +1 槽，
- *     不縮放不擲值；整套合計上限 +2；殘刃不受影響）、行動回復 SP spRegen（每個自己的行動槽，上限 1 點；物理每槽 3 點左右就飽和）。source 是 'craft:種類'。
+ *     目前三種（各 1/3）：異常傷害增加 ailmentDmg（上限 25%）、減傷 reduction（上限 5%，和刻印的減傷相加，合計上限 REDUCTION_CAP）、
+ *     行動回復 SP spRegen（每個自己的行動槽，上限 1.25 點）。source 是 'craft:種類'。
+ *     異常持續時間 2026-11-20 移到飾品（舊存檔的這條詞綴在 v7 遷移時改擲成目前三種之一）。fixed: true 的詞綴數值固定為 max（目前沒有）。
  *   之後仍可另外刻 2 個刻印（詞綴），與掉落裝備相同。
  *
  * ── 預算校準 ──────────────────────────────────────────────────
@@ -37,10 +38,11 @@ const SALVAGE_RETURN = 3;
 
 // 製作詞綴表：kind 是 affixTable 的 EFFECT_KINDS（scope 'effect'）；max 是第 5 階、滿骰的值；weight 是抽中的相對機率。
 // fixed: true 的數值固定為 max（不乘階級縮放、不擲值），但仍照樣呼叫 rng 一次，讓擲取順序不變。
+// 2026-11-20（使用者）：異常持續時間移到飾品（accessoryTable）；新增減傷（每件最高 5%，四件 20%）；行動回復 SP 上限 1 → 1.25。
 const CRAFT_AFFIXES = [
   { kind: 'ailmentDmg',      name: '異常傷害增加', max: 0.25, weight: 100 },
-  { kind: 'ailmentDuration', name: '異常持續時間', max: 1,    weight: 100, fixed: true },
-  { kind: 'spRegen',         name: '行動回復 SP',  max: 1,    weight: 100 }
+  { kind: 'reduction',       name: '減傷',        max: 0.05, weight: 100 },
+  { kind: 'spRegen',         name: '行動回復 SP',  max: 1.25, weight: 100 }
 ];
 const CRAFT_STATS = ['hp', 'sp', 'atk', 'int', 'def', 'spd'];
 
@@ -147,4 +149,15 @@ function rollCraft(slot, engravings, rng = Math.random) {
   return { slot, base, castWeight, quality: quality.id, affixes: rollCraftAffixes(inputs, rng) };
 }
 
-module.exports = { CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, SALVAGE_RETURN, CRAFT_AFFIXES, CRAFT_STATS, STAT_UNIT, KIND_SHARES, SLOT_MULT, QUALITIES, WEIGHT, rawBase, rollQuality, rollCraft };
+/**
+ * 依投入的刻印重擲製作詞綴（存檔遷移用：v7 把舊的「異常持續時間」改擲成目前的種類）。
+ * @param {string[]} materials 「種類@階級」；沒有或格式不對時當作第 3 階
+ */
+function rerollCraftAffixes(materials, rng) {
+  const inputs = Array.isArray(materials) && materials.length
+    ? materials.map(key => ({ tier: Number(String(key).split('@')[1]) })).map(({ tier }) => ({ tier: TIER_SCALE[tier] ? tier : 3 }))
+    : [{ tier: 3 }];
+  return rollCraftAffixes(inputs, rng);
+}
+
+module.exports = { rerollCraftAffixes, CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, SALVAGE_RETURN, CRAFT_AFFIXES, CRAFT_STATS, STAT_UNIT, KIND_SHARES, SLOT_MULT, QUALITIES, WEIGHT, rawBase, rollQuality, rollCraft };

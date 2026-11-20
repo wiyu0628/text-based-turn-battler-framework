@@ -288,3 +288,77 @@ test('幻影戰斧：自己倒下時幻影一起消失，勝負只看自己；�
   assert.equal(save.equippedEffects(state).summonHp, LEGENDARIES.phantomaxe.unique[1].max);
   assert.ok(save.compileEquipped(state).passives.some(p => p.id === 'legend_phantom'));
 });
+
+test('分解傳說裝備（2026-11-20）：鑲著的寶石退回背包、穿著的會脫下；獎勵還沒定，不給刻印', () => {
+  let state = save.addGems(save.addGems(save.createEmptySave({ now: '2026-11-20T00:00:00Z' }), 'magicmissile', 1), 'heavy', 1);
+  const legend = save.addLegendary(state, 'omen', 15);
+  state = save.equip(legend.save, legend.id);
+  state = save.setLinks(state, legend.id, [{ active: 'magicmissile', supports: ['heavy'] }]);
+  assert.equal(state.gems.heavy ?? 0, 0);
+  const result = save.salvageEquipment(state, legend.id);
+  assert.equal(result.save.equipped.weapon, null);
+  assert.equal(result.save.gems.heavy, 1);
+  assert.equal(result.save.equipment.length, 0);
+  assert.deepEqual(result.save.engravings, state.engravings);
+  assert.deepEqual(save.validateSave(result.save), []);
+});
+
+test('黑骰（2026-11-20）：分解傳說裝備得 1 顆；重置消耗 1 顆，依掉落階級重擲基礎與特殊詞綴，權重與連結不變', () => {
+  const { BLACK_DICE_PER_SALVAGE, BLACK_DICE_REROLL_COST } = save;
+  assert.equal(BLACK_DICE_PER_SALVAGE, 1);
+  assert.equal(BLACK_DICE_REROLL_COST, 1);
+  let state = save.addGems(save.addGems(save.createEmptySave({ now: '2026-11-20T00:00:00Z' }), 'magicmissile', 1), 'heavy', 1);
+  assert.equal(state.blackDice, 0);
+  const keep = save.addLegendary(state, 'omen', 15, () => 0);              // 第 5 階、最低值
+  assert.equal(keep.save.equipment[0].tier, 5);
+  const junk = save.addLegendary(keep.save, 'linkdagger', 3);
+  state = save.setLinks(junk.save, keep.id, [{ active: 'magicmissile', supports: ['heavy'] }]);
+  assert.throws(() => save.rerollLegendary(state, keep.id), /黑骰不足/);
+  const salvaged = save.salvageEquipment(state, junk.id);
+  assert.equal(salvaged.blackDice, 1);
+  assert.equal(salvaged.save.blackDice, 1);
+  const before = salvaged.save.equipment.find(i => i.id === keep.id);
+  const rolled = save.rerollLegendary(salvaged.save, keep.id, () => 0.9999999);
+  const after = rolled.save.equipment.find(i => i.id === keep.id);
+  assert.equal(rolled.save.blackDice, 0);
+  assert.deepEqual(after.base, [{ stat: 'int', op: 'flat', value: OMEN_INT }]);   // 第 5 階滿值
+  assert.deepEqual(after.affixes, [{ scope: 'wearer', stat: 'int', op: 'inc', value: OMEN_INC, source: 'legendary:omen' }]);
+  assert.deepEqual(rolled.before.base, before.base);
+  assert.deepEqual(rolled.after.base, after.base);
+  assert.equal(after.castWeight, before.castWeight);
+  assert.deepEqual(after.links, before.links);
+  assert.equal(after.tier, 5);
+  assert.equal(salvaged.save.blackDice, 1);                                  // 原存檔不變
+  assert.throws(() => save.rerollLegendary(rolled.save, keep.id), /黑骰不足/);
+  const craftId = save.addEquipment({ ...salvaged.save }, { slot: 'weapon', origin: 'drop', base: [], affixes: [] });
+  assert.throws(() => save.rerollLegendary(craftId.save, craftId.id), /不是傳說裝備/);
+  // 低階掉落的重置仍是低階縮放
+  const low = save.addLegendary({ ...salvaged.save }, 'omen', 1, () => 0.9999999);
+  const lowRolled = save.rerollLegendary(low.save, low.id, () => 0.9999999).save.equipment.find(i => i.id === low.id);
+  assert.equal(lowRolled.base[0].value, Math.round(OMEN_INT * TIER_SCALE[1]));
+  assert.deepEqual(save.validateSave(rolled.save), []);
+});
+
+test('存檔 v8 遷移：加 blackDice: 0，舊傳說裝備從數值反推掉落階級', () => {
+  const { inferLegendaryTier } = require('./legendaryTable');
+  for (const difficulty of [1, 4, 7, 10, 13, 15]) {
+    for (const r of [0, 0.5, 0.9999999]) {
+      for (const id of Object.keys(LEGENDARIES)) {
+        const item = rollLegendary(id, difficulty, () => r);
+        const { tier, ...old } = item;
+        const guess = inferLegendaryTier(old);
+        // 0.7～1 的區間在相鄰階級邊界會重疊（例如第 4 階滿值 ≈ 第 5 階最低），重疊時取高階；其餘必須猜對
+        assert.ok(guess === tier || guess === tier + 1, `${id} 難度 ${difficulty} r=${r}：猜 ${guess}，實際 ${tier}`);
+      }
+    }
+  }
+  const legend = save.addLegendary(save.createEmptySave({ now: '2026-11-20T00:00:00Z' }), 'omen', 7, () => 0.5);
+  const v7 = structuredClone(legend.save);
+  v7.version = 7;
+  delete v7.blackDice;
+  delete v7.equipment[0].tier;
+  const upgraded = save.migrateSave(v7);
+  assert.equal(upgraded.blackDice, 0);
+  assert.equal(upgraded.equipment[0].tier, 3);
+  assert.deepEqual(save.validateSave(upgraded), []);
+});

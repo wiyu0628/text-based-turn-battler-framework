@@ -21,7 +21,7 @@
  *   reduction 減傷率（開戰時掛常駐的 damageTaken Buff，各件相加、上限 REDUCTION_CAP），scope 'effect'
  *   ailmentDmg 異常傷害增加（裂傷、殘刃等持續傷害；自己一個加算區，與物理／法術傷害提高分開），scope 'effect'。
  *             目前只出現在製作詞綴（craftTable.js 的 CRAFT_AFFIXES），刻印沒有這一行。
- *   ailmentDuration 異常持續時間 +N 槽（整數；各件相加、上限 AILMENT_DURATION_CAP；AILMENTS 標了 extendable: false 的不受影響，例如殘刃），scope 'effect'
+ *   ailmentDuration 異常持續時間 +N 槽（整數；各件相加、上限 AILMENT_DURATION_CAP；AILMENTS 標了 extendable: false 的不受影響；目前沒有），scope 'effect'
  *   spRegen   每個自己的行動槽結束時回復 N 點 SP（可以有小數，小數部分累積到下次；不寫戰報），scope 'effect'
  *             這兩種也只出現在製作詞綴。
  *   接線：saveLayer.equippedEffects(save) 取總和 → compileLoadout(links, { equipment }) 或 saveLayer.compileEquipped(save)
@@ -88,7 +88,7 @@ for (const type of Object.keys(ENGRAVING_TYPES)) {
 const ENGRAVINGS_PER_ITEM = 2;
 const LINES_PER_ENGRAVING = 3;      // 每種刻印固定的詞綴行數；刻印時落選 1 行、取 2 行
 const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg', 'ailmentDuration', 'spRegen', 'summonHp'];   // summonHp：召喚物生命增加（2026-11-19，幻影戰斧）
-const AILMENT_DURATION_CAP = 2;   // 異常持續時間加成合計上限（槽）
+const AILMENT_DURATION_CAP = 1;   // 異常持續時間加成合計上限（槽）；2026-11-20 改成 1（只有飾品給，使用者）
 
 // 裝備基底（固定值，第 5 階滿骰）。階級用同一個 TIER_SCALE；擲值同 ROLL_MIN。
 const BASE_BY_SLOT = {

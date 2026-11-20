@@ -208,8 +208,8 @@ const GROUPS = {
 // 異常效果登錄表（見檔頭「異常效果」）。目前都是持續傷害（DOT），每次命中獨立疊一層。
 const AILMENTS = {
   bleed:     { id: 'bleed',     name: '裂傷', tags: ['bleed'] },
-  // extendable: false：不吃「異常持續時間」加成（殘刃是「下一槽再打一次」，延長會讓 100% 傷害重複多次）
-  lingering: { id: 'lingering', name: '殘刃', tags: ['lingering'], extendable: false }
+  // extendable: false 可讓異常不吃「異常持續時間」加成（編譯器支援）；殘刃 2026-11-20 起改成可延長（使用者）
+  lingering: { id: 'lingering', name: '殘刃', tags: ['lingering'] }
 };
 
 const ACTIVE_GEMS = {
@@ -280,13 +280,13 @@ const ACTIVE_GEMS = {
         type: 'DAMAGE',
         targetType: 'ENEMY_SINGLE',
         power: 1.2,
-        ailments: [{ kind: 'bleed', basis: 'stat', power: 0.2, duration: 3 }],
+        ailments: [{ kind: 'bleed', basis: 'stat', power: 0.2, duration: 2 }],   // 2026-11-20 使用者：3 → 2 槽
         text: { action: '{caster} 使出撕裂，' }
       }
     ]
   },
 
-  // 追刃：物理單體，命中時附加殘刃（下一個行動槽開始時，再受到一次這一擊的傷害）。
+  // 追刃：物理單體，命中時附加殘刃（目標的行動槽開始時，再受到這一擊傷害的 60%；吃異常持續時間）。
   pursuit: {
     id: 'pursuit',
     name: '追刃',
@@ -297,8 +297,8 @@ const ACTIVE_GEMS = {
       {
         type: 'DAMAGE',
         targetType: 'ENEMY_SINGLE',
-        power: 0.9,
-        ailments: [{ kind: 'lingering', basis: 'hit', power: 1, duration: 1 }],
+        power: 1.0,   // 2026-11-20 使用者：0.9 → 1.0；殘刃 100% → 60%、改成可延長
+        ailments: [{ kind: 'lingering', basis: 'hit', power: 0.6, duration: 1 }],
         text: { action: '{caster} 使出追刃，' }
       }
     ]

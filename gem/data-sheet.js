@@ -13,6 +13,7 @@ const C = require('./craftTable');
 const D = require('./dropTable');
 const E = require('./energyTable');
 const L = require('./legendaryTable');
+const AC = require('./accessoryTable');
 const { describeMechanic } = L;
 const S = require('./statLayer');
 const { describeSupport, describePlayer } = require('./gemCompiler');
@@ -22,7 +23,7 @@ const game = require('./game');
 
 const SHOW_DIFFS = [1, 4, 7, 10, 13, 15];
 const SLOT = { weapon: '武器', helmet: '頭盔', armor: '護甲', boots: '鞋子' };
-const TARGET = { single: '敵方單體', all: '敵方全體', self: '自己', enemy: '敵方單體', allySingle: '我方單體', allyAll: '我方全體' };
+const TARGET = { single: '敵方單體', all: '敵方全體', self: '自己', enemy: '敵方單體', allySingle: '我方單體', allyAll: '我方全體', random: '敵方隨機（每發）' };
 const EFFECT = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '行動回復 SP' };
 const statName = key => S.STAT_DEFS[key]?.name ?? key;
 const r2 = x => Math.round(x * 100) / 100;
@@ -70,9 +71,13 @@ add('怪物', '怪物屬性', `倍率欄以基準怪（HP ${M.BASE_MONSTER.hp}�
 
 // ── 怪物技能與特性（Boss 一起列） ──
 function skillEffect(s) {
-  if (s.kind === 'attack') return [`${Math.round(s.power * 100)}%${s.hits ? ` × ${s.hits} 段` : ''}`, s.dot ? `命中附加「${s.dot.name}」：每槽 攻擊/智力 × ${Math.round(s.dot.power * 100)}%，${s.dot.duration} 槽` : ''];
+  if (s.kind === 'attack') return [`${Math.round(s.power * 100)}%${s.hits ? ` × ${s.hits} ${s.target === 'random' ? '發' : '段'}` : ''}`, [
+    s.spell !== undefined ? (s.spell ? '法術（智力，不可暴擊、不可反擊）' : '物理（攻擊）') : '',
+    s.target === 'random' ? '每一發各自隨機挑目標' : '',
+    s.dot ? `命中附加「${s.dot.name}」：每槽 攻擊/智力 × ${Math.round(s.dot.power * 100)}%，${s.dot.duration} 槽` : '',
+    s.debuff ? `命中附加「${s.debuff.name}」：${statName(s.debuff.stat)} × ${s.debuff.mult}，${s.debuff.duration} 槽` : ''].filter(Boolean).join('；')];
   if (s.kind === 'buff') return ['', `${statName(s.stat)} × ${s.mult}，${s.duration} 槽`];
-  if (s.kind === 'shield') return ['', `護盾 = 施放者最大 HP × ${Math.round(s.ratio * 100)}%，${s.duration} 槽`];
+  if (s.kind === 'shield') return ['', s.power != null ? `護盾 = 施放者攻擊/智力 × ${Math.round(s.power * 100)}%，${s.duration} 槽` : `護盾 = 施放者最大 HP × ${Math.round(s.ratio * 100)}%，${s.duration} 槽`];
   if (s.kind === 'heal') return [`${Math.round(s.power * 100)}%`, '治療（讀施放者的攻擊/智力）'];
   return ['', JSON.stringify(s)];
 }
@@ -88,6 +93,8 @@ function traitText(t) {
   if (t.kind === 'split') return `HP 第一次低於 ${pct(t.at)} 時分裂出 ${t.count} 隻「${t.name}」（HP ${pct(t.hpRatio)}、攻擊/智力 ${pct(t.statRatio)}）`;
   if (t.kind === 'ambush') return `伏擊：戰鬥開始時攻擊力 × ${t.mult}，持續 1 個行動槽（第一次行動）`;
   if (t.kind === 'enrage') return `HP 低於 ${pct(t.at)} 時 ${statName(t.stat)} × ${t.mult}`;
+  if (t.kind === 'phase') return `HP 第一次低於 ${pct(t.at)} 時轉階段：${Object.entries(t.mults ?? {}).map(([k, m]) => `${statName(k)} × ${m}`).join('、')}` +
+    (t.summon ? `；召喚「${t.summon.name}」（本體最大 HP ${pct(t.summon.hpRatio)}、同防禦、攻擊傷害減 ${pct(t.summon.reduction)}、${t.summon.drain ? `只會用「${t.summon.drain.name}」讓玩家失去 ${t.summon.drain.sp} 點 SP` : '不行動'}；打倒後本體受到本體最大 HP ${pct(t.summon.breakRatio)} 的傷害）` : '');
   return JSON.stringify(t);
 }
 add('怪物特性', '怪物特性', '', ['怪物', '特性', '解鎖難度', '內容'],
@@ -98,8 +105,8 @@ add('Boss', 'Boss', 'Boss 難度固定；勝利掉落比照菁英（+1 個刻印
   B.BOSSES.flatMap(b => b.monsters.map(m => {
     const s = M.buildFromDef(m, b.difficulty, { id: 'x' }).stats;
     return [b.id, m.name, b.difficulty, s.maxHp, s.atk, s.int, s.def, s.spd, m.skillCastRate ?? 0.35,
-      [b.rewards.gems.length ? '主動寶石：' + b.rewards.gems.map(g => G.ACTIVE_GEMS[g]?.name ?? g).join('、') : '', b.rewards.unlockRegions.length ? '開放地區：' + b.rewards.unlockRegions.join('、') : ''].filter(Boolean).join('；'),
-      b.placeholder ? '佔位，待重新設計' : ''];
+      [b.rewards.gems.length ? '主動寶石：' + b.rewards.gems.map(g => G.ACTIVE_GEMS[g]?.name ?? g).join('、') : '', b.rewards.unlockRegions.length ? '開放地區：' + b.rewards.unlockRegions.join('、') : '', b.rewards.accessories?.length ? '飾品：' + b.rewards.accessories.map(a => AC.ACCESSORIES[a]?.name ?? a).join('、') : ''].filter(Boolean).join('；'),
+      b.placeholder ? '佔位，待重新設計' : '普攻物理；技能法術'];
   })));
 
 // ── 刻印 ──
@@ -140,7 +147,7 @@ function activeRow(id, gem) {
     gem.critEcho ? `施放後依爆擊率再打一次 ${Math.round(gem.critEcho.power * 100)}%（不連鎖）` : '',
     gem.tags.join('、'), source];
 }
-add('主動寶石', '主動寶石', '倍率是攻擊或智力的百分比；異常傷害吃裝備的「異常傷害增加」，持續時間吃「異常持續時間」（殘刃不延長）。',
+add('主動寶石', '主動寶石', '倍率是攻擊或智力的百分比；異常傷害吃裝備的「異常傷害增加」，持續時間吃「異常持續時間」。',
   ['id', '名稱', '類型', 'SP', '目標', '倍率', '附加異常', '特殊效果', '標籤', '取得'],
   Object.entries(G.ACTIVE_GEMS).map(([id, gem]) => activeRow(id, gem)));
 const reqText = req => {
@@ -164,11 +171,20 @@ add('異常', '異常狀態', '持續時間以中招者的行動槽計；重複�
    ['lingering', AIL.lingering.name, AIL.lingering.extendable === false ? '否' : '是', '命中時以這次命中傷害 × 比例算出每次傷害，之後固定']]);
 
 // ── 傳說裝備 ──
-add('傳說裝備', '傳說裝備', '只能掉落，不能刻刻印、沒有製作詞綴、不能分解。數值依掉落難度的最高刻印階縮放，再擲 0.7～1（標「固定區間」的不縮放）。施放權重 60～120。',
+add('傳說裝備', '傳說裝備', '只能掉落，不能刻刻印、沒有製作詞綴。分解得 1 顆黑骰；黑骰可依掉落時的階級重置一件傳說裝備的數值（施放權重不變）。數值依掉落難度的最高刻印階縮放，再擲 0.7～1（標「固定區間」的不縮放）。施放權重 60～120。',
   ['id', '名稱', '部位', '普攻屬性', '基底（上限）', '獨有詞綴（上限）', '機制'],
   Object.values(L.LEGENDARIES).map(l => [l.id, l.name, SLOT[l.slot], l.attackStat === 'int' ? '智力' : '攻擊',
     l.base.map(b => `${statName(b.stat)} +${b.max}`).join('、'), l.unique.map(u => u.scope === 'effect' ? `${{ summonHp: '召喚物生命', physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷' }[u.kind] ?? u.kind} +${pct(u.max)}` : u.range ? `${statName(u.stat)} ${pct(u.range[0])}～${pct(u.range[1])}（固定區間）` : ['cri', 'criDmg'].includes(u.stat) ? `${statName(u.stat)} +${pct(u.max)}` : `${statName(u.stat)}${u.op === 'inc' ? '提高 ' + pct(u.max) : ' +' + u.max}`).join('、'),
     l.mechanics.map(m => describeMechanic(m, id => G.SUPPORT_GEMS[id]?.name ?? id).replace('獲得護盾', m.type === 'spShield' ? `獲得護盾（智力 × SP × ${m.ratio}）` : '獲得護盾') + (m.type === 'phantom' ? `（幻影屬性 × 玩家：${['hp', 'spd', 'atk', 'int', 'def'].map(k => `${statName(k)} ${m.ratios?.[k] ?? (k === 'spd' ? 1 : m.ratio)}`).join('、')}；生命再乘 1 + 召喚物生命）` : '')).join('；')]));   // 後台多寫護盾倍率；玩家說明不寫
+
+// ── 飾品 ──
+const accessoryLine = a => a.scope === 'effect'
+  ? (a.kind === 'ailmentDuration' ? `異常持續時間 +${a.value} 槽` : `${a.kind} +${a.value}`)
+  : (['cri', 'criDmg', 'skillCastRate'].includes(a.stat) ? `${statName(a.stat)} +${pct(a.value)}` : `${statName(a.stat)} +${a.value}`);
+const accessorySource = id => (AC.STARTING_ACCESSORIES.includes(id) ? '開局' : B.BOSSES.filter(b => b.rewards.accessories?.includes(id)).map(b => `${b.name}首次擊敗`).join('、') || '暫不可取得');
+add('飾品', '飾品', `玩家看到的類別名是${AC.ACCESSORY_LABEL}。飾品欄只有 1 個；飾品沒有基礎數值、刻印與寶石，只有固定的特殊詞綴（擁有制，每種最多 1 個）。`,
+  ['id', '名稱', '特殊詞綴', '取得'],
+  Object.values(AC.ACCESSORIES).map(a => [a.id, a.name, a.affixes.map(accessoryLine).join('、'), accessorySource(a.id)]));
 
 // ── 能量 ──
 add('能量', '能量', `上限 ${E.ENERGY_CAP}，超過的部分作廢。勝利能量依該難度的最高刻印階。`,

@@ -116,22 +116,62 @@ function round(stat, op, value) {
  * @param {string} legendaryId LEGENDARIES 的鍵
  * @param {number} difficulty 掉落難度 1～15（決定階級縮放）
  * @param {() => number} [rng]
- * @returns {{ slot, origin: 'drop', legendaryId, attackStat?, base, affixes, castWeight }}
+ * @returns {{ slot, origin: 'drop', legendaryId, tier, attackStat?, base, affixes, castWeight }}
+ *   tier：掉落時的階級縮放（之後用黑骰重置數值時沿用）
  */
 function rollLegendary(legendaryId, difficulty, rng = Math.random) {
   const def = LEGENDARIES[legendaryId];
   if (!def) throw new Error(`找不到傳說裝備「${legendaryId}」`);
-  const scale = TIER_SCALE[openTier(difficulty)];
+  const tier = openTier(difficulty);
+  const { base, affixes } = rollValues(def, tier, rng);
+  const castWeight = Math.round(LEGENDARY_WEIGHT.low + (LEGENDARY_WEIGHT.high - LEGENDARY_WEIGHT.low) * rng());   // 一樣只用一個亂數
+  return { slot: def.slot, origin: 'drop', legendaryId, tier, ...(def.attackStat ? { attackStat: def.attackStat } : {}), base, affixes, castWeight };
+}
+
+/**
+ * 黑骰：依裝備記的 tier 重擲傳說裝備的所有數值行（base 與 unique；施放權重不動）。不碰存檔，回傳 { base, affixes }。
+ * rng 順序和掉落時相同（base、unique 各 1 個）。
+ */
+function rerollLegendaryValues(item, rng = Math.random) {
+  const def = LEGENDARIES[item?.legendaryId];
+  if (!def) throw new Error(`「${item?.id ?? '?'}」不是傳說裝備`);
+  if (!TIER_SCALE[item.tier]) throw new Error(`傳說裝備「${item.id}」沒有記錄階級`);
+  return rollValues(def, item.tier, rng);
+}
+
+/**
+ * 從數值反推舊傳說裝備的掉落階級（存檔 v8 遷移用；之前的存檔沒有記 tier）。
+ * 每條非固定區間的行都要落在「上限 × 縮放 × 0.7～1」內（容許取整誤差）；都符合的取最高階，沒有可推的行（全是固定區間）回傳 5。
+ */
+function inferLegendaryTier(item) {
+  const def = LEGENDARIES[item.legendaryId];
+  const pairs = [...def.base.map((line, i) => [line, item.base?.[i]]), ...def.unique.map((line, i) => [line, item.affixes?.[i]])]
+    .filter(([line, got]) => !line.range && got && Number.isFinite(got.value));
+  if (!pairs.length) return 5;
+  const fits = tier => pairs.every(([line, got]) => {
+    const hi = line.max * TIER_SCALE[tier];
+    const slack = Math.max(0.6, hi * 0.01);
+    return got.value >= hi * ROLL_MIN - slack && got.value <= hi + slack;
+  });
+  const tiers = [5, 4, 3, 2, 1];
+  const ok = tiers.find(fits);
+  if (ok) return ok;
+  // 都不符合（資料改過上限）：取比例最接近的
+  const ratio = pairs[0][1].value / pairs[0][0].max;
+  return tiers.reduce((best, t) => (Math.abs(TIER_SCALE[t] * 0.85 - ratio) < Math.abs(TIER_SCALE[best] * 0.85 - ratio) ? t : best), 5);
+}
+
+function rollValues(def, tier, rng) {
+  const scale = TIER_SCALE[tier];
   const roll = () => ROLL_MIN + (1 - ROLL_MIN) * rng();
   // 每行 1 個亂數：一般行是 上限 × 階級縮放 × (0.7～1)；固定區間行直接在 range 內擲
   const raw = line => line.range ? line.range[0] + (line.range[1] - line.range[0]) * rng() : line.max * scale * roll();
   const base = def.base.map(line => ({ stat: line.stat, op: line.op, value: round(line.stat, line.op, raw(line)) }));
-  const source = `legendary:${legendaryId}`;
+  const source = `legendary:${def.id}`;
   const affixes = def.unique.map(line => line.scope === 'wearer'
     ? { scope: 'wearer', stat: line.stat, op: line.op, value: round(line.stat, line.op, raw(line)), source }
     : { scope: 'effect', kind: line.kind, value: round(null, null, raw(line)), source });
-  const castWeight = Math.round(LEGENDARY_WEIGHT.low + (LEGENDARY_WEIGHT.high - LEGENDARY_WEIGHT.low) * rng());   // 一樣只用一個亂數
-  return { slot: def.slot, origin: 'drop', legendaryId, ...(def.attackStat ? { attackStat: def.attackStat } : {}), base, affixes, castWeight };
+  return { base, affixes };
 }
 
 /** 從所有傳說裝備平均抽一件的 id（之後有部位或難度限制時再加條件）。呼叫 rng 1 次。 */
@@ -177,4 +217,4 @@ for (const def of Object.values(LEGENDARIES)) {
   }
 }
 
-module.exports = { LEGENDARIES, MECHANIC_TYPES, rollLegendary, pickLegendary, mechanicsOf, describeMechanic };
+module.exports = { LEGENDARIES, MECHANIC_TYPES, rollLegendary, rerollLegendaryValues, inferLegendaryTier, pickLegendary, mechanicsOf, describeMechanic };

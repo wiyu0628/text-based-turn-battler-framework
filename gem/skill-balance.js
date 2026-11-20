@@ -4,6 +4,7 @@
 // 用法：node gem/skill-balance.js [寶石,寶石…] [情境,情境…] [階級=3] [難度=9]（約 1～2 分鐘）
 //   情境：base（基準單隻怪）、ruins、sewer（monsters.js 組的戰鬥）、boss（第一隻王，用它自己的難度）
 //   物理寶石用物理裝備（猛攻配方）、魔法飛彈用法術裝備（奧術配方）；都不連輔助寶石。
+//   加 --acc=飾品id（例如 --acc=hourglass）讓角色穿著那個飾品；預設不穿。
 const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');
 const { compileLoadout } = require('./gemCompiler');
 const { gear, FOE } = require('./affix-budget');
@@ -17,6 +18,7 @@ const ENGR = {
   phys: { weapon: ['fury', 'fury'], helmet: ['precise', 'precise'], armor: ['vital', 'bulwark'], boots: ['vital', 'bulwark'] },
   spell: { weapon: ['arcane', 'arcane'], helmet: ['arcane', 'endure'], armor: ['vital', 'bulwark'], boots: ['vital', 'bulwark'] }
 };
+const ACCESSORY = process.argv.find(a => a.startsWith('--acc='))?.slice(6) || null;
 const N = 120;
 const SAMPLES = 3;
 
@@ -52,7 +54,7 @@ function fight(gemId, setup, context, difficulty, k, seed, supports = []) {
 function setups(gemId, tier) {
   const build = isSpell(gemId) ? 'spell' : 'phys';
   const rng = createSeededRandom(900 + tier);
-  return Array.from({ length: SAMPLES }, () => gear(ENGR[build], tier, rng, MIX(build === 'spell' ? 'arcane' : 'fury')));
+  return Array.from({ length: SAMPLES }, () => gear(ENGR[build], tier, rng, MIX(build === 'spell' ? 'arcane' : 'fury'), ACCESSORY));
 }
 
 function rateAt(gemId, list, context, difficulty, k, supports) {
@@ -75,11 +77,12 @@ function k50(gemId, context, tier = 3, difficulty = 9, supports = []) {
 }
 
 if (require.main === module) {
+  process.argv = process.argv.filter(a => !a.startsWith('--acc='));
   const gems = (process.argv[2] ?? 'whirlwind,rend,pursuit,magicmissile').split(',');
   const contexts = (process.argv[3] ?? 'base,ruins,sewer,boss').split(',');
   const tier = Number(process.argv[4] ?? 3);
   const difficulty = Number(process.argv[5] ?? 9);
-  console.log(`第 ${tier} 階整套、難度 ${difficulty}（王用自己的難度）；數字是勝率 50% 時敵方的強度倍率 k`);
+  console.log(`第 ${tier} 階整套、難度 ${difficulty}（王用自己的難度）${ACCESSORY ? `、飾品 ${ACCESSORY}` : ""}；數字是勝率 50% 時敵方的強度倍率 k`);
   console.log(['寶石'.padEnd(12), ...contexts.map(c => c.padStart(7)), '平均'.padStart(7)].join(''));
   for (const gemId of gems) {
     const ks = contexts.map(c => k50(gemId, c, tier, difficulty));

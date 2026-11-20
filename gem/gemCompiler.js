@@ -1431,7 +1431,7 @@ function buildWeightGuardPassive() {
  *   castOnEnemyDeath 裝備給的「敵人倒下時釋放一次」（見 buildEnemyDeathCastPassives）
  * @param {object} [options] 同 compileSkill 的 options；另有 equipment: { physDmg, spellDmg, reduction, ailmentDmg }（裝備的非屬性效果，見 affixTable.js）
  *   ailmentDmg 乘在每個異常效果的倍率上：power × (1 + ailmentDmg)（異常自己的加算區）
- *   ailmentDuration 加在每個異常的持續槽數上（殘刃這類 extendable: false 的除外）
+ *   ailmentDuration 加在每個異常的持續槽數上（AILMENTS 標 extendable: false 的除外；目前沒有）
  *   spRegen 變成「每個自己的行動槽結束時回復 SP」的被動（passives 裡多一個 gem_equipment_spRegen）
  *   physDmg／spellDmg 進每段傷害的加算區；reduction 變成開戰時掛上的常駐減傷 Buff（passives 裡多一個 gem_equipment_reduction）
  * @returns {{ skills: Skill[], passives: object[], resolver: Function, weights: object, releaseSkills: Skill[], compiled: object[] }}

@@ -91,20 +91,21 @@ test('one craft affix: ailment damage, max 25% × average tier scale × 0.7~1 ro
   const mixed = [...ten('fury', 5).slice(0, 5), ...ten('fury', 1).slice(0, 5)];                      // 平均縮放 (第 5 階 + 第 1 階) / 2
   assert.equal(rollCraft('weapon', mixed, scripted(0, 0, 0, 0.9999999)).affixes[0].value, Math.round(0.25 * (TIER_SCALE[5] + TIER_SCALE[1]) / 2 * 10000) / 10000);
   assert.equal(CRAFT_AFFIX_SLOTS, 1);
-  assert.deepEqual(CRAFT_AFFIXES.map(a => a.kind), ['ailmentDmg', 'ailmentDuration', 'spRegen']);
+  assert.deepEqual(CRAFT_AFFIXES.map(a => a.kind), ['ailmentDmg', 'reduction', 'spRegen']);
 });
 
-test('craft affix kinds are drawn evenly: ailment damage, ailment duration (fixed +1), SP regen (max 1 per slot)', () => {
-  // 種類骰 r × 300：0～100 異常傷害、100～200 持續時間、200～300 SP 回復
+test('craft affix kinds are drawn evenly: ailment damage, reduction (max 5%), SP regen (max 1.25 per slot) — 2026-11-20', () => {
+  // 種類骰 r × 300：0～100 異常傷害、100～200 減傷、200～300 SP 回復
   const affix = (pick, value, inputs = ten('fury')) => rollCraft('weapon', inputs, scripted(0, 0, pick, value)).affixes[0];
-  assert.equal(affix(0.4, 0).kind, 'ailmentDuration');
-  assert.equal(affix(0.4, 0).value, 1);                                        // 固定 +1：不擲值
-  assert.equal(affix(0.4, 0, ten('fury', 1)).value, 1);                        // 也不吃階級縮放
-  assert.deepEqual(affix(0.9, 0.9999999), { scope: 'effect', kind: 'spRegen', value: 1, source: 'craft:spRegen' });
-  assert.equal(affix(0.9, 0).value, 0.7);
-  assert.equal(affix(0.9, 0, ten('fury', 1)).value, Math.round(1 * TIER_SCALE[1] * 0.7 * 10000) / 10000);   // 1 × 第 1 階縮放 × 0.7
+  assert.deepEqual(affix(0.4, 0.9999999), { scope: 'effect', kind: 'reduction', value: 0.05, source: 'craft:reduction' });
+  assert.equal(affix(0.4, 0).value, 0.035);                                    // 0.05 × 0.7
+  assert.equal(affix(0.4, 0, ten('fury', 1)).value, Math.round(0.05 * TIER_SCALE[1] * 0.7 * 10000) / 10000);
+  assert.deepEqual(affix(0.9, 0.9999999), { scope: 'effect', kind: 'spRegen', value: 1.25, source: 'craft:spRegen' });
+  assert.equal(affix(0.9, 0).value, 0.875);
+  assert.equal(affix(0.9, 0, ten('fury', 1)).value, Math.round(1.25 * TIER_SCALE[1] * 0.7 * 10000) / 10000);   // 1.25 × 第 1 階縮放 × 0.7
+  assert.ok(!CRAFT_AFFIXES.some(a => a.kind === 'ailmentDuration'));          // 異常持續時間移到飾品
   const rng = createSeededRandom(8);
-  const counts = { ailmentDmg: 0, ailmentDuration: 0, spRegen: 0 };
+  const counts = { ailmentDmg: 0, reduction: 0, spRegen: 0 };
   for (let i = 0; i < 9000; i++) counts[rollCraft('weapon', ten('fury'), rng).affixes[0].kind]++;
   for (const kind of Object.keys(counts)) assert.ok(Math.abs(counts[kind] / 9000 - 1 / 3) < 0.02, kind);
 });
@@ -192,9 +193,14 @@ test('crafted items remember their ten materials; salvaging returns 3 of them at
   assert.equal(save.salvageEquipment(state, made.id, () => 0).returned.length, SALVAGE_RETURN);
 });
 
-test('only crafted items with materials can be salvaged; bad materials are rejected', () => {
+test('only crafted items with materials (and legendaries) can be salvaged; bad materials are rejected', () => {
   const legend = save.addLegendary(save.createEmptySave({ now: '2026-01-01T00:00:00Z' }), 'omen', 15);
-  assert.throws(() => save.salvageEquipment(legend.save, legend.id), err => err instanceof save.SaveError && /不能分解/.test(err.message));
+  // 傳說裝備可以分解（2026-11-20）：獎勵還沒定，目前只移除裝備
+  const gone = save.salvageEquipment(legend.save, legend.id);
+  assert.deepEqual(gone.returned, []);
+  assert.equal(gone.legendary, true);
+  assert.equal(gone.save.equipment.length, 0);
+  assert.equal(legend.save.equipment.length, 1);
   const add = spec => save.addEquipment(save.createEmptySave({ now: '2026-01-01T00:00:00Z' }), { slot: 'weapon', base: [], affixes: [], ...spec });
   assert.throws(() => add({ origin: 'craft', materials: ['fury@5'] }), /materials/);
   assert.throws(() => add({ origin: 'drop', materials: Array(10).fill('fury@5') }), /materials/);

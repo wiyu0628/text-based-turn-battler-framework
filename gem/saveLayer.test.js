@@ -422,7 +422,7 @@ test('遷移 v3 → v4：背包與裝備上的擴散（wide）都刪掉，其他
   assert.equal(upgraded.equipped.weapon, id);
   assert.equal(v3.gems.wide, 2);                       // 不改傳入的物件
   // 沒有擴散的 v3 存檔：只有版本號變
-  assert.deepEqual(migrateSave({ ...linked, version: 3 }), linked);
+  assert.deepEqual(migrateSave({ ...linked, version: 3 }), { ...linked, accessories: { owned: ['focus'], equipped: 'focus' } });   // v7 給開局飾品
 });
 
 test('遷移 v4 → v5：背包與裝備上的乘勢（oncrit）都刪掉，其他不變', () => {
@@ -437,7 +437,7 @@ test('遷移 v4 → v5：背包與裝備上的乘勢（oncrit）都刪掉，其�
   assert.equal(upgraded.version, SAVE_VERSION);
   assert.deepEqual(upgraded.gems, linked.gems);
   assert.deepEqual(upgraded.equipment[0].links, [{ active: 'rend', supports: ['heavy'] }]);
-  assert.deepEqual(migrateSave({ ...linked, version: 4 }), linked);
+  assert.deepEqual(migrateSave({ ...linked, version: 4 }), { ...linked, accessories: { owned: ['focus'], equipped: 'focus' } });
 });
 
 // ── 匯出與匯入 ───────────────────────────────────────────────

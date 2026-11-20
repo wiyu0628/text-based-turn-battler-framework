@@ -9,6 +9,7 @@ const { compileLoadout } = require('./gemCompiler');
 const { applyStatBonuses } = require('./statLayer');
 const { rollEngraving, rollBase, sumEffectAffixes } = require('./affixTable');
 const { rollCraft } = require('./craftTable');
+const { accessoryAffixes } = require('./accessoryTable');
 
 const BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 200, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };
 const FOE = { hp: 3000, sp: 200, atk: 90, int: 90, def: 50, spd: 180, cri: 0.05 };   // 速度 2026-11-19 加倍
@@ -31,18 +32,20 @@ const CRAFT_MIX = main => ({
 });
 const expand = (mix, tier) => mix.flatMap(([type, n]) => Array.from({ length: n }, () => ({ type, tier })));
 
-function gear(engr, tier, rng, craft = null) {
+// accessory：飾品 id（accessoryTable），詞綴照樣加進屬性與效果；不消耗 rng。
+function gear(engr, tier, rng, craft = null, accessory = null) {
   const bonuses = [], affixes = [];
   for (const [slot, types] of Object.entries(engr)) {
     if (craft) {
       const crafted = rollCraft(slot, expand(craft[slot], tier), rng);
       bonuses.push(...crafted.base);
-      affixes.push(...crafted.affixes);   // 製作詞綴（目前是異常傷害增加，對這裡的旋風斬與魔法飛彈沒有作用）
+      affixes.push(...crafted.affixes);   // 製作詞綴（異常傷害增加、減傷、行動回復 SP）
     } else {
       bonuses.push(...rollBase(slot, tier, rng));
     }
     affixes.push(...rollEngraving(types, tier, rng));
   }
+  if (accessory) affixes.push(...accessoryAffixes(accessory));
   bonuses.push(...affixes.filter(a => a.scope === 'wearer'));
   return { stats: applyStatBonuses(BASE, bonuses), fx: sumEffectAffixes(affixes), bonuses, affixes };
 }

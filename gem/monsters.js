@@ -19,11 +19,20 @@
  * ── 技能規格（純資料；buildSkill 轉成框架 Skill）──────────────────
  *   attack  { power, hits?, target: 'single'|'all', dot?: { name, power, duration } }  dot 的每槽傷害 = 施放者能力值 × power
  *   buff    { target: 'self'|'allyAll'|'enemy', stat, mult, duration, name }        STAT Buff（乘法）
- *   shield  { target: 'allySingle'|'allyAll', ratio, duration, name }               護盾 = 施放者最大生命 × ratio
+ *   shield  { target: 'allySingle'|'allyAll', ratio | power, duration, name }       護盾 = 施放者最大生命 × ratio；寫 power 時改成施放者能力值（攻擊或智力）× power
  *   heal    { target: 'allySingle'|'allyAll'|'self', power }                         回復 = 施放者能力值 × power
  *   共通：id、name、from（從第幾難度開始會用）、spCost。法術怪（spell: true）的傷害吃 int、不可暴擊、不可反擊。
  *   maxPerEncounter（選填，普通怪）：同一場最多出現幾隻；沒寫就不限。
- *   特性 traits：split（血量第一次低於一半時分裂）、ambush（第一個行動槽攻擊力 × mult）、enrage（血量第一次低於 at 時某屬性 × mult 到戰鬥結束，王用）。
+ *   特性 traits：split（血量第一次低於一半時分裂）、ambush（第一個行動槽攻擊力 × mult）、enrage（血量第一次低於 at 時某屬性 × mult 到戰鬥結束，王用）、
+ *     phase（王的轉階段，見 buildPhasePassive）。
+ *
+ * ── 王用的選填欄位（2026-11-20，中央廳）──────────────────────────
+ *   怪物：normalAttackText（普攻的開頭，例如「中央廳的雕像揮出長矛，」）、
+ *         texts: { opening, victory, death }（旁白整句：開戰、王打贏、王倒下時印；{caster} 換成怪物名字）。
+ *   attack 技能：spell（這招自己的傷害類型，蓋過怪物的 spell）、text（開頭，取代「X 使出Y，」）、
+ *         intro（先印一整句，再打）、hitText（命中的後半句，{target}／{value}）、missText（落空的後半句）、
+ *         target: 'random' ＋ hits：每一擊各自隨機挑一個目標（打過的也可能再挑到），hitTexts 是每一擊的開頭；
+ *         debuff: { stat, mult, duration, name, text }：命中才掛的減益（STAT 乘法），text 是掛上時的一句（{target}）。
  */
 
 const { Entity, Skill } = require('../src');
@@ -57,12 +66,14 @@ const MONSTERS = {
   doll: {
     // 一場最多 1 隻（使用者決定，2026-11-19）：兩隻會互相補到 40 回合平手
     id: 'doll', name: '修繕人偶', from: 3, cost: 0.3, spell: true, skillCastRate: 0.5, maxPerEncounter: 1,
-    stats: { hp: 0.35, atk: 0, int: 0.4, def: 40, spd: 200 },
+    // 智力 0.4 → 0.2（使用者，2026-11-20）：降低傷害，修補、緊急修復改成智力 300%，讓它主要靠回復撐場
+    stats: { hp: 0.35, atk: 0, int: 0.2, def: 40, spd: 200 },
     skills: [
       // 修補 300% → 200%（使用者，2026-11-19）：難度 10 倍之後「野犬＋人偶」在高難度太難打（難度 15 拿第 5 階只有 32%）
-      { kind: 'heal', id: 'mend_ally', name: '修補', from: 3, spCost: 10, target: 'allySingle', power: 2 },
+      // 2026-11-20（使用者）：修補 200% → 300%；加固維持人偶最大生命 25%（試過改成智力 300% 後改回）；緊急修復 200% → 300%
+      { kind: 'heal', id: 'mend_ally', name: '修補', from: 3, spCost: 10, target: 'allySingle', power: 3 },
       { kind: 'shield', id: 'reinforce', name: '加固', from: 7, spCost: 10, target: 'allySingle', ratio: 0.25, duration: 3 },
-      { kind: 'heal', id: 'overhaul', name: '緊急修復', from: 13, spCost: 20, target: 'allyAll', power: 2 }
+      { kind: 'heal', id: 'overhaul', name: '緊急修復', from: 13, spCost: 20, target: 'allyAll', power: 3 }
     ]
   },
   goblin: {
@@ -140,14 +151,38 @@ const REGIONS = {
 
 const TARGET = { single: 'ENEMY_SINGLE', all: 'ENEMY_ALL', self: 'SELF', allySingle: 'ALLY_SINGLE', allyAll: 'ALLY_ALL', enemy: 'ENEMY_SINGLE' };
 
+// 文字樣板：{caster}、{target}、{value} 換成戰報當下的值（框架的 text 收字串或函式）
+function template(str, casterName) {
+  if (str === undefined) return undefined;
+  const fixed = str.replaceAll('{caster}', casterName);
+  return fixed.includes('{') ? ctx => fixed.replaceAll('{target}', ctx.target?.name ?? '').replaceAll('{value}', String(ctx.value ?? '')) : fixed;
+}
+
 function buildSkill(spec, def, stats, casterName) {
   // 框架原樣使用 text，所以在這裡把施放者名字放進開頭（同一種怪有 A、B 時也分得出是誰）
-  const text = { action: `${casterName} 使出${spec.name}，` };
-  const stat = def.spell ? 'int' : 'atk';
-  const spellFlags = def.spell ? { uncritable: true, uncounterable: true } : {};
+  const text = { action: spec.text !== undefined ? template(spec.text, casterName) : `${casterName} 使出${spec.name}，`,
+    ...(spec.hitText !== undefined ? { hit: template(spec.hitText, casterName) } : {}),
+    ...(spec.missText !== undefined ? { miss: template(spec.missText, casterName) } : {}) };
+  const spell = spec.spell ?? def.spell;
+  const stat = spell ? 'int' : 'atk';
+  const spellFlags = spell ? { uncritable: true, uncounterable: true } : {};
   const base = { id: `${def.id}_${spec.id}`, name: spec.name, spCost: spec.spCost ?? 0 };
   if (spec.kind === 'attack') {
-    const actions = [{ type: 'DAMAGE', targetType: TARGET[spec.target], power: spec.power, stat, text, ...(spec.hits ? { hits: spec.hits } : {}), ...spellFlags }];
+    const intro = spec.intro !== undefined ? [{ type: 'TEXT', text: { action: template(spec.intro, casterName) } }] : [];
+    if (spec.target === 'random') {
+      // 每一擊各自挑目標（inheritTarget: false 讓框架每段重抽 ENEMY_SINGLE）
+      const hits = spec.hits ?? 1;
+      const actions = Array.from({ length: hits }, (_, i) => ({ type: 'DAMAGE', targetType: 'ENEMY_SINGLE', inheritTarget: false, power: spec.power, stat,
+        text: { ...text, ...(spec.hitTexts?.[i] !== undefined ? { action: template(spec.hitTexts[i], casterName) } : {}) }, ...spellFlags }));
+      return new Skill({ ...base, ...spellFlags, actions: [...intro, ...actions] });
+    }
+    const actions = [...intro, { type: 'DAMAGE', targetType: TARGET[spec.target], power: spec.power, stat, text, ...(spec.hits ? { hits: spec.hits } : {}), ...spellFlags }];
+    if (spec.debuff) {
+      const d = spec.debuff;
+      actions.push({ type: 'BUFF', targetType: TARGET[spec.target], requiresDamage: true, text: { action: '', buff: template(d.text ?? `{target} 受到了${d.name}！`, casterName) },
+        buffs: [{ id: `monster_debuff:${spec.id}`, name: d.name, type: 'STAT', duration: d.duration, stackPolicy: 'refresh', polarity: 'negative', dispellable: true,
+          effect: s => { s[d.stat] = (s[d.stat] ?? 0) * d.mult; } }] });
+    }
     if (spec.dot) {
       actions.push({ type: 'BUFF', targetType: TARGET[spec.target], requiresDamage: true, buffs: [{
         id: `monster_dot:${spec.dot.name}`, name: spec.dot.name, type: 'DOT', duration: spec.dot.duration,
@@ -164,7 +199,7 @@ function buildSkill(spec, def, stats, casterName) {
   if (spec.kind === 'shield') {
     return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: TARGET[spec.target], text, buffs: [{
       id: `monster_shield:${spec.id}`, name: spec.name, duration: spec.duration, stackPolicy: 'refresh',
-      shield: Math.max(1, Math.round(stats.maxHp * spec.ratio)), polarity: 'positive', dispellable: true }] }] });
+      shield: Math.max(1, Math.round(spec.power != null ? (stats[stat] ?? 0) * spec.power : stats.maxHp * spec.ratio)), polarity: 'positive', dispellable: true }] }] });
   }
   if (spec.kind === 'heal') {
     return new Skill({ ...base, actions: [{ type: 'HEAL', targetType: TARGET[spec.target], power: spec.power, stat, text }] });
@@ -205,6 +240,115 @@ function buildEnragePassive(trait, def) {
   };
 }
 
+/**
+ * 王的轉階段（phase）：血量第一次低於 at 時——
+ *   mults：屬性乘上倍率到戰鬥結束（例如 { spd: 1.5, atk: 1.15, int: 1.15 }）；text：旁白一句；
+ *   summon（選填）：在自己這一隊召喚一個不會行動的單位（例如應急動力源）：
+ *     { name, hpRatio（王最大生命的比例）, reduction（承受傷害減少）, spd, summonText, breakRatio（被打倒時王受到王最大生命的這個比例）, breakText,
+ *       drain?: { sp, name, text } }
+ *     繼承王的防禦；被打倒後，在下一個行動結束（或回合開始）時對王造成 breakRatio 的傷害（直接扣血，不吃防禦與減傷）。
+ *     有 drain：輪到它時只會用這一招——讓對面的主角失去 sp 點 SP（不夠就扣到 0；不造成傷害、不會落空）；沒有 drain 就不行動。
+ *   文字裡的 {caster} 是王的名字、{player} 是對面主角的名字、{summon} 是召喚物的名字。
+ */
+// 旁白裡的 {player}：對面隊伍的主角（id 'hero'，沒有就第一個）的名字——玩家可以改名，所以不能寫死「玩家」
+function playerNameFor(self, engine) {
+  const foes = !engine ? [] : self.team === 'A' ? engine.teamB : engine.teamA;
+  return (foes.find(e => e.id === 'hero') ?? foes[0])?.name ?? '玩家';
+}
+
+function buildPhasePassives(trait, def) {
+  let entered = false;
+  let source = null, paid = false;
+  let engineRef = null;
+  const fill = (str, self, extra = {}) => Object.entries({ player: playerNameFor(self, engineRef), ...extra })
+    .reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), str.replaceAll('{caster}', self.name));
+  const enter = {
+    id: `monster_phase:${def.id}`,
+    trigger: 'AFTER_DAMAGE_RECEIVED',
+    enabled: self => !entered && self.isAlive && self.stats.hp < self.stats.maxHp * trait.at,
+    action(self, hit, logger, engine) {
+      entered = true;
+      engineRef = engine;
+      const mults = trait.mults ?? {};
+      self.addBuff({ id: `monster_phase:${def.id}`, name: trait.name ?? '第二階段', type: 'STAT', duration: Infinity, polarity: 'positive', dispellable: false,
+        effect: s => { for (const [key, mult] of Object.entries(mults)) s[key] = (s[key] ?? 0) * mult; } });
+      if (trait.text) logger.addLog({ type: 'TEXT', actorId: self.id, message: fill(trait.text, self) });
+      const spec = trait.summon;
+      if (!spec || !engine) return;
+      const hp = Math.max(1, Math.round(self.stats.maxHp * spec.hpRatio));
+      source = new Entity({ id: `${self.id}_source`, name: spec.name, team: self.team, actionDisabled: !spec.drain, fatigueEnabled: false,
+        stats: { hp, maxHp: hp, atk: 0, int: 0, def: self.stats.def, spd: spec.spd ?? 50, sp: 0, maxSp: 0, eva: 0, hit: 0, skillCastRate: 0 },
+        normalAttack: spec.drain ? buildSpDrainSkill(spec.drain, def) : new Skill({ id: `${def.id}_source_idle`, name: '待機', actions: [{ type: 'TEXT', text: { action: '' } }] }),
+        normalAttackSpCost: 0 });
+      if (spec.reduction) source.addBuff({ id: `monster_source_guard:${def.id}`, name: '減傷', type: 'STAT', duration: Infinity, polarity: 'positive', dispellable: false,
+        effect: () => {}, damageTaken: { multiplier: 1 - spec.reduction } });
+      // 王倒下時動力源一起消失（勝負只看王；同幻影的做法）
+      let alive = source.isAlive;
+      Object.defineProperty(source, 'isAlive', { get: () => alive && self.isAlive, set: value => { alive = value; }, configurable: true });
+      source.summonerId = self.id;
+      source.phaseSource = true;
+      (self.team === 'A' ? engine.teamA : engine.teamB).push(source);
+      logger.addLog({ type: 'SUMMON', actorId: self.id, targetId: source.id, message: fill(spec.summonText ?? '{caster} 召喚了{summon}！', self, { summon: spec.name }) });
+    }
+  };
+  // 動力源倒下 → 王受傷：每個行動之後與回合開始時檢查（動力源被持續傷害打倒也算得到）
+  const check = (self, _ctx, logger, engine) => {
+    if (engine) engineRef = engine;
+    if (!source || paid || source.stats.hp > 0 || !self.isAlive || engine?.result) return;
+    paid = true;
+    const amount = Math.max(1, Math.round(self.stats.maxHp * trait.summon.breakRatio));
+    if (trait.summon.breakText) logger.addLog({ type: 'TEXT', actorId: self.id, message: fill(trait.summon.breakText, self, { summon: source.name }) });
+    const hit = self.takeDamage(amount, logger, { source: 'DIRECT' });
+    logger.addLog({ type: 'DAMAGE', actorId: source.id, targetId: self.id, value: hit.actualDamage, message: `${self.name} 受到了 ${hit.actualDamage} 點傷害！` });
+    self.finishDamage(hit, logger, engine);
+  };
+  if (!trait.summon) return [enter];
+  return [enter,
+    { id: `monster_phase_break:${def.id}`, trigger: 'AFTER_ACTION', action: check },
+    { id: `monster_phase_break_round:${def.id}`, trigger: 'ROUND_START', action: check }];
+}
+
+// 旁白（王用）：texts.opening 開戰時印；victory（王打贏）／death（王倒下）在戰鬥結束時依勝負印（倒下的單位也會跑 BATTLE_END）。
+// 每一項可以是字串或字串陣列（陣列一行一筆）；{caster} 換成王的名字、{player} 換成對面主角的名字。
+function buildNarrationPassives(texts) {
+  if (!texts) return [];
+  const say = (self, logger, engine, lines) => {
+    for (const line of [].concat(lines)) logger.addLog({ type: 'TEXT', actorId: self.id, message: line.replaceAll('{caster}', self.name).replaceAll('{player}', playerNameFor(self, engine)) });
+  };
+  const out = [];
+  if (texts.opening) out.push({ id: 'monster_text_opening', trigger: 'BATTLE_START', action: (self, _b, logger, engine) => say(self, logger, engine, texts.opening) });
+  if (texts.victory || texts.death) out.push({ id: 'monster_text_end', trigger: 'BATTLE_END', action: (self, { winner }, logger, engine) => {
+    if (winner === `TEAM_${self.team}` && texts.victory) say(self, logger, engine, texts.victory);
+    else if (winner && winner !== `TEAM_${self.team}` && winner !== 'DRAW' && texts.death && !self.isAlive) say(self, logger, engine, texts.death);
+  } });
+  return out;
+}
+
+/**
+ * 扣 SP 的招式（應急動力源用）：挑對面的主角（id 'hero'；沒有就隨機一個有 SP 的），扣 spec.sp 點（不夠扣到 0）。
+ * 不造成傷害、不會落空。文字 spec.text：{caster} 施放者、{target} 目標、{value} 實際扣掉的 SP。
+ */
+function buildSpDrainSkill(spec, def) {
+  let lost = 0;
+  let victim = null;
+  const skill = new Skill({ id: `${def.id}_source_drain`, name: spec.name, actions: [{ type: 'TEXT', targetType: 'ENEMY_SINGLE',
+    text: { action: ctx => spec.text.replaceAll('{caster}', ctx.caster?.name ?? '').replaceAll('{target}', victim?.name ?? '').replaceAll('{value}', String(lost)) } }] });
+  const base = skill.execute;
+  skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    const alive = enemies.filter(e => e.isAlive && (e.stats.maxSp ?? 0) > 0);
+    victim = alive.find(e => e.id === 'hero') ?? alive[Math.floor((context?.rng ?? Math.random)() * alive.length)] ?? null;
+    lost = 0;
+    if (victim && !caster.actionDisabled) {
+      lost = Math.min(spec.sp, Math.max(0, victim.stats.sp));
+      victim.stats.sp -= lost;
+      victim.syncFatigue?.(logger);
+    }
+    if (!victim) return base.call(this, caster, allies, [], logger, context, options);
+    return base.call(this, caster, allies, [victim], logger, context, options);
+  };
+  return skill;
+}
+
 // 伏擊：開戰時攻擊力 × mult，撐到自己的第一個行動槽結束
 function buildAmbushPassive(trait, def) {
   return {
@@ -238,15 +382,17 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
   const stats = scaleMonster({ ...raw, hp: Math.round(raw.hp), maxHp: Math.round(raw.hp) }, difficulty);
   Object.assign(stats, { maxSp: stats.sp, skillCastRate: def.skillCastRate ?? 0.35 });
   const stat = def.spell ? 'int' : 'atk';
-  const normalAttack = new Skill({ id: `${def.id}_attack`, name: '攻擊', actions: [{ type: 'DAMAGE', stat, ...(def.spell ? { uncritable: true, uncounterable: true } : {}) }],
-    ...(def.spell ? { uncritable: true, uncounterable: true } : {}) });
   const entityName = name ?? def.name;
+  const normalAttack = new Skill({ id: `${def.id}_attack`, name: '攻擊', actions: [{ type: 'DAMAGE', stat, ...(def.spell ? { uncritable: true, uncounterable: true } : {}),
+    ...(def.normalAttackText !== undefined ? { text: { action: template(def.normalAttackText, entityName) } } : {}) }],
+    ...(def.spell ? { uncritable: true, uncounterable: true } : {}) });
   const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => buildSkill(spec, def, stats, entityName));
-  const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive };
-  const passives = (def.traits ?? []).filter(trait => difficulty >= (trait.from ?? 1)).map(trait => {
+  const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives };
+  const passives = (def.traits ?? []).filter(trait => difficulty >= (trait.from ?? 1)).flatMap(trait => {
     if (!TRAIT_BUILDERS[trait.kind]) throw new Error(`怪物「${def.id}」的特性種類不明：${trait.kind}`);
-    return TRAIT_BUILDERS[trait.kind](trait, def);
+    return TRAIT_BUILDERS[trait.kind](trait, def, { difficulty, stats, entityName });
   });
+  passives.push(...buildNarrationPassives(def.texts));
   return new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack, normalAttackSpCost: 2, skills, passives, stats });
 }
 

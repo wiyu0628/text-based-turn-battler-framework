@@ -24,7 +24,7 @@ function listJs(dir) {
 
 // 遊戲層用到的模組（不含測試、模擬與打包腳本）
 const GAME_MODULES = ['statLayer', 'gems', 'gemCompiler', 'affixTable', 'craftTable', 'dropTable', 'energyTable',
-  'legendaryTable', 'difficulty', 'monsters', 'bosses', 'saveLayer', 'game'].map(name => `gem/${name}.js`);
+  'legendaryTable', 'accessoryTable', 'difficulty', 'monsters', 'bosses', 'saveLayer', 'game'].map(name => `gem/${name}.js`);
 const files = [...listJs('src'), ...GAME_MODULES];
 
 const modules = files.map(file => {
@@ -63,7 +63,7 @@ ${modules}
     framework: load('src/index.js'),
     game: load('gem/game.js'), save: load('gem/saveLayer.js'), gems: load('gem/gems.js'), compiler: load('gem/gemCompiler.js'),
     stats: load('gem/statLayer.js'), affix: load('gem/affixTable.js'), craft: load('gem/craftTable.js'), drops: load('gem/dropTable.js'),
-    energy: load('gem/energyTable.js'), legendary: load('gem/legendaryTable.js'), monsters: load('gem/monsters.js'), bosses: load('gem/bosses.js'),
+    energy: load('gem/energyTable.js'), legendary: load('gem/legendaryTable.js'), accessories: load('gem/accessoryTable.js'), monsters: load('gem/monsters.js'), bosses: load('gem/bosses.js'),
     difficulty: load('gem/difficulty.js')
   };
 })();`;
