@@ -22,8 +22,9 @@
 const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');
 const { applyStatBonuses } = require('./statLayer');
 const save = require('./saveLayer');
-const { rollEncounter, availableMonsters, REGIONS, buildPlayerEvadeCounterPassive } = require('./monsters');
+const { rollEncounter, availableMonsters, REGIONS, buildPlayerEvadeCounterPassive, monsterSkillResolver } = require('./monsters');
 const { applyResonance } = require('./resonance');
+const { buildChordPassives } = require('./chord');
 const { buildBossEncounter, findBoss } = require('./bosses');
 const { rollDrops } = require('./dropTable');
 
@@ -63,11 +64,16 @@ function buildHero(state) {
   const stat = loadout.normalAttackStat;
   const stats = heroStats(state);
   const passives = [...loadout.passives];
-  // 閃避反擊（第二區專屬刻印與傳說給反擊點數）：反擊 = 普攻屬性 × power；氣鳴楯【菲爾查哈】的 counterPower 提高倍率
+  const mechanics = save.equippedMechanics(state);
+  // 閃避反擊（第二區專屬刻印與傳說給反擊點數）：反擊 = 普攻屬性 × (1 + 反擊傷害)；氣鳴楯【菲爾查哈】讓反擊無視防禦
   if (stats.evadeCounter > 0) {
-    const power = save.equippedMechanics(state).filter(m => m.type === 'counterPower').reduce((p, m) => p * m.power, 1);
-    passives.push(buildPlayerEvadeCounterPassive({ stat, power, name: playerName(state) }));
+    const ignoreDefense = mechanics.some(m => m.type === 'counterIgnoreDefense');
+    // 菲爾查哈的反擊戰報（2026-11-21 使用者）
+    const text = ignoreDefense ? '{caster} 趁隙使用防禦性抓技反擊，這擊視防禦為無物，' : undefined;
+    passives.push(buildPlayerEvadeCounterPassive({ stat, power: 1 + (stats.counterDmg ?? 0), ignoreDefense, text, name: playerName(state) }));
   }
+  // 撥弦槍【鶴之聲援】的「妖精的和弦」（chord.js；法術傷害加成在 gemCompiler 的 withDynamicDamage）
+  for (const m of mechanics.filter(m => m.type === 'chord')) passives.push(...buildChordPassives(m));
   const hero = new Entity({
     id: 'hero', name: playerName(state), team: 'A', normalAttackSpCost: 2,
     normalAttack: new Skill({ id: 'hero_attack', name: '普攻', actions: [{ type: 'DAMAGE', stat }] }),
@@ -124,12 +130,18 @@ function prepareBattle(state, target, seed) {
     ({ monsters } = buildBossEncounter(target.id));
     info = { boss: true, elite: true };
   }
-  // 第二區的地區特色「共鳴」（resonance.js）：雙方每個單位都掛上共鳴被動
-  if (target.kind === 'region' && REGIONS[target.id].resonance) applyResonance([hero, ...monsters]);
+  // 第二區的地區特色「共鳴」（resonance.js）：雙方每個單位都掛上共鳴，戰鬥中召喚出來的也算
+  //（引擎召喚走 summonFactory；幻影戰斧的幻影是 gem 自己加進隊伍的，走 engine.onGemSummon）
+  const resonance = target.kind === 'region' && REGIONS[target.id].resonance;
+  if (resonance) applyResonance([hero, ...monsters]);
+  const factory = resonance && summonFactory ? (id, options) => { const e = summonFactory(id, options); if (e) applyResonance([e]); return e; } : summonFactory;
   const engine = new BattleEngine([hero], monsters, {
-    maxTurns: MAX_TURNS, rng: createSeededRandom(seed + 1), skillSelectionResolver: loadout.resolver,
-    hitFormula: 'contest', summonFactory
+    maxTurns: MAX_TURNS, rng: createSeededRandom(seed + 1),
+    // 怪物的蓄力與卡農（monsterSkillResolver）先問，玩家的蓄力等（loadout.resolver）再問
+    skillSelectionResolver: ctx => monsterSkillResolver(ctx) ?? loadout.resolver?.(ctx),
+    hitFormula: 'contest', summonFactory: factory
   });
+  if (resonance) engine.onGemSummon = entity => applyResonance([entity]);
   // 開場的敵人血量（介面只顯示血量，其他數值不顯示）
   const opening = monsters.map(hpOf);
   return { engine, hero, monsters, info, difficulty, name, opening };

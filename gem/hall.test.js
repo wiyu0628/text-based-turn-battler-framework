@@ -16,10 +16,11 @@ const hall = difficulty => ({ kind: 'region', id: 'hall', difficulty });
 const withHall = state => ({ ...state, progress: { ...state.progress, unlockedRegions: [...state.progress.unlockedRegions, 'hall'] } });
 const newGame = () => game.createNewGame({ now: '2026-01-01T00:00:00Z' });
 const text = logs => logs.map(l => l.message).join('\n');
+const burst = e => Math.round(e.stats.maxHp * RESONANCE.burstRatio * 300 / (e.getEffectiveStats().def + 300));   // 吃防禦
 
 // ── 共鳴 ──────────────────────────────────────────────────
 
-test('resonance: 4 stacks only show a badge; the 5th bursts for 8% max HP, resets, and leaves a monster vulnerable', () => {
+test('resonance: 4 stacks only show a badge; the 5th bursts for max HP × ratio reduced by defense, resets, and leaves a monster vulnerable', () => {
   const m = buildMonster('conductor', 5);
   const logger = quiet();
   for (let i = 0; i < 4; i++) assert.equal(addResonance(m, 1, logger, null), false);
@@ -30,7 +31,8 @@ test('resonance: 4 stacks only show a badge; the 5th bursts for 8% max HP, reset
   assert.equal(addResonance(m, 1, logger, null), true);
   assert.equal(m.resonance, 0);
   assert.ok(!m.buffs.some(b => b.id === 'resonance_badge'));
-  assert.equal(hp - m.stats.hp, Math.round(m.stats.maxHp * RESONANCE.burstRatio));
+  assert.equal(hp - m.stats.hp, burst(m));
+  assert.ok(burst(m) < Math.round(m.stats.maxHp * RESONANCE.burstRatio));
   const vul = m.buffs.find(b => b.id === 'resonance_vulnerable');
   assert.equal(vul.damageTaken.multiplier, 1 + RESONANCE.vulnerable);
   assert.equal(vul.dispellable, true);
@@ -51,12 +53,44 @@ test('resonance hits the player too (burst damage only, no vulnerability) and is
   const { hero } = game.buildHero(newGame());
   const hp = hero.stats.hp;
   addResonance(hero, 5, quiet(), null);
-  assert.equal(hp - hero.stats.hp, Math.round(hero.stats.maxHp * RESONANCE.burstRatio));
+  assert.equal(hp - hero.stats.hp, burst(hero));
   assert.ok(!hero.buffs.some(b => b.id === 'resonance_vulnerable'));
   const battle = game.prepareBattle(withHall(newGame()), hall(3), 7);
-  for (const unit of [...battle.engine.teamA, ...battle.engine.teamB]) assert.ok(unit.passives.some(p => p.id === 'resonance'), unit.name);
+  for (const unit of [...battle.engine.teamA, ...battle.engine.teamB]) assert.ok(unit.hasResonance, unit.name);
   const ruins = game.prepareBattle(newGame(), { kind: 'region', id: 'ruins', difficulty: 3 }, 7);
-  assert.ok(!ruins.engine.teamA[0].passives.some(p => p.id === 'resonance'));
+  assert.ok(!ruins.engine.teamA[0].hasResonance);
+});
+
+test('every hit that is not evaded stacks resonance, even one fully absorbed by a shield; misses and DOT do not', () => {
+  const { Skill, BattleEngine } = require('../src');
+  const { applyResonance } = require('./resonance');
+  const { hero } = game.buildHero(newGame());
+  const foe = buildMonster('conductor', 5);
+  applyResonance([hero, foe]);
+  const engine = new BattleEngine([hero], [foe], { rng: () => 0.5 });
+  const logger = quiet();
+  const hit = new Skill({ id: 't', name: '測試', actions: [{ type: 'DAMAGE', power: 1, ignoreEvasion: true }] });
+  foe.addBuff({ id: 'wall', name: '大盾', duration: 9, shield: 1e9 }, engine);
+  const hp = foe.stats.hp;
+  hit.execute(hero, [hero], [foe], logger, engine, { targets: [foe], ignoreSp: true });
+  assert.equal(foe.stats.hp, hp);                       // 血沒少
+  assert.equal(foe.resonance, 1);                       // 但有疊層
+  foe.takeDamage(100, logger, { source: 'DIRECT' });
+  foe.finishDamage(foe.takeDamage(1, logger, {}), logger, engine);
+  assert.equal(foe.resonance, 1);                       // 直接傷害不疊
+});
+
+test('summons get resonance too: the phantom axe phantom in the hall, but not in area 1', () => {
+  let state = withHall(newGame());
+  const added = save.addLegendary(state, 'phantomaxe', 15, () => 0.9999999);
+  state = save.setLinks(save.equip(added.save, added.id), added.id, [{ active: 'whirlwind', supports: [] }]);
+  const phantomOf = target => {
+    const battle = game.prepareBattle(state, target, 5);
+    battle.engine.start();
+    return [...battle.engine.teamA].find(e => e.gemPhantom);
+  };
+  assert.equal(phantomOf(hall(3)).hasResonance, true);
+  assert.ok(!phantomOf({ kind: 'region', id: 'ruins', difficulty: 3 }).hasResonance);
 });
 
 // ── 地區與怪 ──────────────────────────────────────────────
@@ -126,6 +160,104 @@ test('organ golem (elite, D7+) adds 1 resonance stack to everyone each round sta
   assert.deepEqual([hero.resonance, organ.resonance, other.resonance], [1, 1, 1]);
 });
 
+test('cannon: charging marks itself and the next usable slot fires the 250% shot (resolver), which costs no SP', () => {
+  const { monsterSkillResolver } = require('./monsters');
+  const c = buildMonster('cannon', 3);
+  const { hero } = game.buildHero(newGame());
+  const { BattleEngine } = require('../src');
+  const engine = new BattleEngine([hero], [c], { rng: () => 0.5 });
+  const shell = c.skills.find(s => s.id === 'cannon_boom_charge');
+  const sp = c.stats.sp;
+  const logger = quiet();
+  shell.execute(c, [c], [hero], logger, engine, {});
+  assert.equal(sp - c.stats.sp, 15);
+  assert.match(text(logger.logs), /卡農砲的砲管開始聚集音波……/);
+  assert.ok(c.buffs.some(b => b.id === c.monsterCharge.markerId));
+  const release = monsterSkillResolver({ caster: c, engine });
+  assert.equal(release, c.monsterCharge.release);
+  assert.equal(release.actions.find(a => a.type === 'DAMAGE').power, 2.5);
+  assert.ok(!c.buffs.some(b => b.id === c.monsterCharge.markerId));
+  assert.equal(monsterSkillResolver({ caster: c, engine }), undefined);   // 只換一次
+  assert.equal(monsterSkillResolver({ caster: hero, engine }), undefined); // 玩家不受影響
+  assert.ok(!c.skills.some(s => s.id === 'cannon_canon'));                 // 卡農從難度 7 起
+});
+
+test('canon: other allies (not the caster) repeat their last skill next slot; canon itself is never remembered', () => {
+  const { monsterSkillResolver } = require('./monsters');
+  const a = buildMonster('cannon', 7, { id: 'A', name: '卡農砲A' });
+  const b = buildMonster('cannon', 7, { id: 'B', name: '卡農砲B' });
+  const f = buildMonster('fairy', 7);
+  const { hero } = game.buildHero(newGame());
+  const { BattleEngine } = require('../src');
+  const engine = new BattleEngine([hero], [a, b, f], { rng: () => 0.5 });
+  const canonOf = m => m.skills.find(s => s.id === 'cannon_canon');
+  assert.equal(canonOf(a).canCast(a, engine), false);                    // 還沒有隊友出過招
+  f.skills[0].execute(f, [a, b, f], [hero], quiet(), engine, { targets: [hero] });
+  canonOf(b).execute(b, [a, b, f], [hero], quiet(), engine, {});           // B 放卡農：B 自己不記
+  assert.equal(b.lastSkill, undefined);
+  assert.ok(f.canonPending && a.canonPending && !b.canonPending);
+  assert.equal(monsterSkillResolver({ caster: f, engine }), f.skills[0]); // 妖精重複「和聲」
+  assert.equal(monsterSkillResolver({ caster: a, engine }), undefined);   // A 沒出過招：照常
+  canonOf(a).execute(a, [a, b, f], [hero], quiet(), engine, {});           // A 也放卡農：B 的上一招不是卡農，不會無限覆讀
+  assert.equal(monsterSkillResolver({ caster: b, engine }), undefined);
+  // 蓄力發射後被卡農重複＝直接再發射（使用者先選 B）
+  a.monsterCharge.release.execute(a, [a, b, f], [hero], quiet(), engine, { targets: [hero] });
+  canonOf(b).execute(b, [a, b, f], [hero], quiet(), engine, {});
+  assert.equal(monsterSkillResolver({ caster: a, engine }), a.monsterCharge.release);
+  // SP 不夠就照平常選
+  f.canonPending = true; f.stats.sp = 0;
+  assert.equal(monsterSkillResolver({ caster: f, engine }), undefined);
+});
+
+test('conductor: 強拍 (renamed), and from D10 獨奏 gives the highest-attack ally (not itself) an extra action that never picks 獨奏', () => {
+  assert.equal(MONSTERS.conductor.skills.find(s => s.id === 'baton').name, '強拍');
+  const c = buildMonster('conductor', 10);
+  const f = buildMonster('fairy', 10);
+  const k = buildMonster('cannon', 10);
+  const { hero } = game.buildHero(newGame());
+  const { BattleEngine } = require('../src');
+  const engine = new BattleEngine([hero], [c, f, k], { rng: () => 0.5 });
+  const inserted = [];
+  engine.insertAction = (entity, skill) => inserted.push([entity, skill]);
+  const solo = c.skills.find(s => s.id === 'conductor_solo');
+  const logger = quiet();
+  solo.execute(c, [c, f, k], [hero], logger, engine, {});
+  const top = [f, k].sort((x, y) => y.stats.atk - x.stats.atk)[0];
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0][0], top);
+  assert.ok(!inserted[0][1].id.endsWith('_solo'));
+  assert.match(text(logger.logs), new RegExp(`指揮家指向${top.name}，${top.name}開始了華麗的獨奏！`));
+  assert.ok(!buildMonster('conductor', 9).skills.some(s => s.id === 'conductor_solo'));
+  // 只有自己活著（沒有隊友）就不放
+  assert.equal(solo.canCast(c, new BattleEngine([hero], [c], {})), false);
+});
+
+test('無序音符 (rare): never attacks; noise lowers atk and speed, rest silences, detune drains 10 SP, dissonance adds 2 resonance', () => {
+  const def = MONSTERS.noise;
+  assert.deepEqual([def.name, def.rarity], ['無序音符', 'rare']);
+  const n = buildMonster('noise', 10);
+  assert.equal(n.normalAttack.actions.some(a => a.type === 'DAMAGE'), false);       // 普攻位置是噪音
+  assert.equal(n.normalAttack.actions.reduce((sum, a) => sum + (a.spCost ?? 0), 0), 0);
+  assert.ok(n.skills.every(s => !s.actions.some(a => a.type === 'DAMAGE')));
+  const { hero } = game.buildHero(newGame());
+  const { BattleEngine } = require('../src');
+  const { applyResonance } = require('./resonance');
+  applyResonance([hero]);
+  const engine = new BattleEngine([hero], [n], { rng: () => 0.5 });
+  const use = id => n.skills.find(s => s.id === `noise_${id}`).execute(n, [n], [hero], quiet(), engine, { targets: [hero] });
+  const { atk, spd } = hero.getEffectiveStats();
+  use('noise');
+  assert.equal(hero.getEffectiveStats().atk, atk * 0.8);
+  assert.equal(hero.getEffectiveStats().spd, spd * 0.8);
+  use('rest');
+  assert.ok(hero.buffs.some(b => b.silence));
+  const sp = hero.stats.sp;
+  use('detune');
+  assert.equal(sp - hero.stats.sp, 10);
+  use('dissonance');
+  assert.equal(hero.resonance, 2);
+});
+
 // ── 玩家閃避反擊、迴音刻印 ─────────────────────────────────
 
 test('player evade counter exists only with counter points; chance follows the shared curve', () => {
@@ -154,36 +286,108 @@ test('resound engraving: eva / counter points / crit, helmet and boots only, dro
 
 // ── 傳說 ──────────────────────────────────────────────────
 
-test('fircha: atk weapon with eva + counter points and counter power ×2, gives the hero a counter passive', () => {
+test('fircha: atk + def base, eva / counter points / counter damage, counters ignore defense', () => {
   const def = LEGENDARIES.fircha;
   assert.equal(def.name, '氣鳴楯【菲爾查哈】');
   assert.deepEqual([def.area, def.attackStat], [2, 'atk']);
-  assert.ok(def.mechanics.some(m => m.type === 'counterPower' && m.power === 2));
+  assert.deepEqual(def.base.map(l => l.stat), ['atk', 'def']);
+  assert.deepEqual(def.unique.map(l => l.stat), ['eva', 'evadeCounter', 'counterDmg']);
   let state = newGame();
   const added = save.addLegendary(state, 'fircha', 15, () => 0.9999999);
   state = save.equip(added.save, added.id);
-  assert.ok(game.heroStats(state).evadeCounter > 0);
-  const passive = game.buildHero(state).hero.passives.find(p => p.id === 'player_evade_counter');
-  assert.ok(passive);
+  const stats = game.heroStats(state);
+  assert.ok(stats.evadeCounter > 0 && stats.counterDmg > 0);
+  const { hero } = game.buildHero(state);
+  const passive = hero.passives.find(p => p.id === 'player_evade_counter');
   assert.equal(passive.trigger, 'AFTER_EVADE');
+  // 反擊 = 攻擊 × (1 + 反擊傷害)、無視防禦：對高防禦的目標也照打
+  const foe = buildMonster('organ', 15);
+  foe.stats.def = 5000;
+  const logger = quiet();
+  const { BattleEngine } = require('../src');
+  const engine = new BattleEngine([hero], [foe], { rng: () => 0 });
+  const hp = foe.stats.hp;
+  passive.action(hero, { caster: foe, skill: {}, action: {} }, logger, engine);
+  const dealt = hp - foe.stats.hp;
+  assert.match(text(logger.logs), /趁隙使用防禦性抓技反擊，這擊視防禦為無物，/);
+  assert.ok(dealt > hero.stats.atk * (1 + stats.counterDmg) * 0.8, `只打了 ${dealt}`);
 });
 
-test('cranelance: int weapon whose spell skills ramp each damage action by +15%', () => {
+test('cranelance: int + SP base, int % and speed; chord builds on hits, drains on hits taken, and boosts spell damage', () => {
   const def = LEGENDARIES.cranelance;
   assert.equal(def.name, '撥弦槍【鶴之聲援】');
   assert.deepEqual([def.area, def.attackStat], [2, 'int']);
+  assert.deepEqual(def.base.map(l => l.stat), ['int', 'sp']);
+  assert.deepEqual(def.unique.map(l => [l.stat, l.op]), [['int', 'inc'], ['spd', 'flat']]);
+  let state = newGame();
+  const added = save.addLegendary(state, 'cranelance', 15, () => 0.9999999);
+  state = save.setLinks(save.equip(added.save, added.id), added.id, [{ active: 'magicmissile', supports: [] }]);
+  const { hero } = game.buildHero(state);
+  const foe = buildMonster('organ', 15);
+  const engine = { teamA: [hero], teamB: [foe] };
+  const gain = hero.passives.find(p => p.id === 'gem_chord_gain');
+  const loss = hero.passives.find(p => p.id === 'gem_chord_loss');
+  assert.ok(gain.enabled(hero, { source: 'ATTACK' }));
+  assert.ok(!gain.enabled(hero, { source: 'DOT' }));                     // 持續傷害不算
+  for (let i = 0; i < 5; i++) gain.action(hero, { source: 'ATTACK' }, quiet(), engine);
+  assert.ok(loss.enabled(hero, { source: 'ATTACK' }));
+  assert.ok(!loss.enabled(hero, { source: 'DOT' }) && !loss.enabled(hero, { source: 'DIRECT' }));   // 只有被攻擊擊中才扣
+  loss.action(hero);
+  assert.equal(hero.gemChord, 19);
+  // 法術傷害加算：和弦 100 點（+100%）的魔法飛彈明顯比較痛（傷害有浮動，所以比大差距）
+  const cast = bonus => {
+    const target = buildMonster('organ', 15);
+    hero.gemChordBonus = bonus;
+    const before = target.stats.hp;
+    const { BattleEngine } = require('../src');
+    const eng = new BattleEngine([hero], [target], { rng: () => 0.5 });
+    hero.skills[0].execute(hero, [hero], [target], quiet(), eng, { targets: [target], ignoreSp: true });
+    return before - target.stats.hp;
+  };
+  const plain = cast(0), boosted = cast(1);
+  assert.ok(boosted > plain * 1.4, `${plain} → ${boosted}`);
+});
+
+test('chord at 100: line + buff text, heal 25%, cleanse, speed ×2 for 3 rounds, then back to 0', () => {
   let state = newGame();
   const added = save.addLegendary(state, 'cranelance', 15, () => 0.9999999);
   state = save.equip(added.save, added.id);
-  // 目前的法術都是一段；連結「迅擊」變兩段，第二段 ×1.15
-  const links = [{ active: 'magicmissile', supports: ['multistrike'] }];
-  state = save.setLinks(save.addGems(state, 'multistrike'), added.id, links);
-  const staff = newGame().equipment[1].id;
-  const plain = save.setLinks(save.addGems(save.equip(newGame(), staff), 'multistrike'), staff, links);
-  const powers = s => game.buildHero(s).hero.skills[0].actions.filter(a => a.type === 'DAMAGE').map(a => a.power);
-  const base = powers(plain), ramped = powers(state);
-  assert.ok(base.length > 1);
-  ramped.forEach((p, k) => assert.ok(Math.abs(p - base[k] * (1 + 0.15 * k)) < 1e-3, `第 ${k} 段`));
+  const { hero } = game.buildHero(state);
+  const engine = { teamA: [hero], teamB: [] };
+  const [gain, loss, round] = ['gem_chord_gain', 'gem_chord_loss', 'gem_chord_round'].map(id => hero.passives.find(p => p.id === id));
+  hero.stats.hp = Math.floor(hero.stats.maxHp / 2);
+  hero.addBuff({ id: 'slow', name: '緩速', type: 'STAT', duration: 9, effect: () => {}, polarity: 'negative', dispellable: true }, null);
+  const spd = hero.getEffectiveStats().spd;
+  const logger = quiet();
+  for (let i = 0; i < 25; i++) if (gain.enabled(hero, { source: 'ATTACK' })) gain.action(hero, { source: 'ATTACK' }, logger, engine);
+  assert.equal(hero.gemChord, 100);
+  assert.match(text(logger.logs), /我要奏響『勝利的旋律』來阻止你！」\n一陣激昂的樂聲迴盪在整個戰場，.*的腳步隨著樂聲加快了！\n「BreakNight」！/);
+  assert.equal(hero.stats.hp, Math.floor(hero.stats.maxHp / 2) + Math.floor(hero.stats.maxHp * 0.25));
+  assert.match(text(logger.logs), new RegExp(`「BreakNight」！\\n${hero.name} 回復了 ${Math.floor(hero.stats.maxHp * 0.25)} 點生命！`));
+  assert.ok(!hero.buffs.some(b => b.id === 'slow'));
+  assert.equal(hero.getEffectiveStats().spd, spd * 2);
+  assert.ok(!loss.enabled(hero, { source: 'ATTACK' }) && !gain.enabled(hero, { source: 'ATTACK' }));   // 集滿後不增不減
+  round.action(hero, {}, logger);                                               // 第 2 回合開始：還在
+  round.action(hero, {}, logger);                                               // 第 3 回合開始：還在
+  assert.equal(hero.getEffectiveStats().spd, spd * 2);
+  round.action(hero, {}, logger);                                               // 第 4 回合開始：結束
+  assert.equal(hero.getEffectiveStats().spd, spd);
+  assert.equal(hero.gemChord, 0);
+  assert.match(text(logger.logs), /歌曲結束了，戰場回復原先的平靜。$/);
+});
+
+test('v10: old fircha / cranelance are rerolled into the new lines at the same roll ratio', () => {
+  const { TIER_SCALE } = require('./affixTable');
+  const parsed = JSON.parse(save.exportSave(newGame()));
+  parsed.version = 9;
+  parsed.meta.nextId = 100;
+  parsed.equipment.push({ id: 'eq99', slot: 'weapon', origin: 'drop', legendaryId: 'fircha', tier: 3, attackStat: 'atk', castWeight: 90, links: [],
+    base: [{ stat: 'atk', op: 'flat', value: Math.round(372 * TIER_SCALE[3]) }], affixes: [{ stat: 'eva', op: 'flat', value: 1 }, { stat: 'evadeCounter', op: 'flat', value: 1 }] });
+  const item = save.importSave(JSON.stringify(parsed)).equipment.find(e => e.id === 'eq99');
+  assert.deepEqual(item.base.map(l => l.stat), ['atk', 'def']);
+  assert.deepEqual(item.affixes.map(l => l.stat), ['eva', 'evadeCounter', 'counterDmg']);
+  assert.equal(item.base[0].value, Math.round(LEGENDARIES.fircha.base[0].max * TIER_SCALE[3]));   // 原本滿骰 → 新的也滿骰
+  assert.equal(item.castWeight, 90);
 });
 
 test('area-2 legendaries never drop in area 1', () => {

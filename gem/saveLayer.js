@@ -45,7 +45,7 @@
 
 const { ACTIVE_GEMS, SUPPORT_GEMS, STARTING_ACTIVE_GEMS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBonuses } = require('./statLayer');
-const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, ENGRAVING_TYPES, canEngrave, sumEffectAffixes, rollCombine, rollEngraving, COMBINE_INPUTS } = require('./affixTable');
+const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, ENGRAVING_TYPES, canEngrave, sumEffectAffixes, rollCombine, rollEngraving, COMBINE_INPUTS, TIER_SCALE, ROLL_MIN } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
 const { QUALITIES, CRAFT_AFFIX_SLOTS, CRAFT_INPUTS, SALVAGE_RETURN, rollCraft, rerollCraftAffixes } = require('./craftTable');
 const { ACCESSORIES, STARTING_ACCESSORIES, accessoryAffixes } = require('./accessoryTable');
@@ -56,7 +56,7 @@ const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 9;
+const SAVE_VERSION = 10;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -440,7 +440,19 @@ const MIGRATIONS = {
     const progress = { ...save.progress, unlockedRegions: [...(save.progress?.unlockedRegions ?? [])] };
     if ((progress.defeatedBosses ?? []).includes('gatekeeper') && !progress.unlockedRegions.includes('hall')) progress.unlockedRegions.push('hall');
     return { ...save, version: 9, progress };
-  }
+  },
+  // v9 → v10：氣鳴楯【菲爾查哈】、撥弦槍【鶴之聲援】改版（2026-11-21 晚，行數變了）。舊的照原本的骰值比例重擲新的每一行，
+  // 比例從舊的第一行基底反推（菲爾查哈攻擊上限 372、鶴之聲援智力上限 319）。
+  9: save => ({
+    ...save, version: 10,
+    equipment: (save.equipment ?? []).map(item => {
+      const oldMax = { fircha: 372, cranelance: 319 }[item.legendaryId];
+      if (!oldMax || !TIER_SCALE[item.tier] || item.base?.length !== 1) return item;
+      const ratio = (item.base[0]?.value ?? 0) / (oldMax * TIER_SCALE[item.tier]);
+      const roll = Math.min(1, Math.max(0, (ratio - ROLL_MIN) / (1 - ROLL_MIN)));
+      return { ...item, ...rerollLegendaryValues(item, () => roll) };
+    })
+  })
 };
 
 /** 從背包與所有裝備連結裡刪掉指定的輔助寶石（遷移用；不改傳入的物件）。 */
@@ -1116,7 +1128,7 @@ function compileEquipped(save, options = {}) {
 
 /** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */
 function equippedMechanics(save) {
-  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom', 'counterPower', 'multiHitRamp'].includes(m.type));
+  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom', 'counterIgnoreDefense', 'chord'].includes(m.type));
 }
 
 /** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */

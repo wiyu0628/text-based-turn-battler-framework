@@ -7,12 +7,12 @@ const { rollDrops, RARE_BONUS, ELITE_BONUS } = require('./dropTable');
 
 // ── 資料 ──────────────────────────────────────────────────
 
-test('first-area regions have at least 5 monster kinds including exactly one rare and one elite; hall (area 2) is locked with 3 kinds so far', () => {
+test('first-area regions have at least 5 monster kinds including exactly one rare and one elite; hall (area 2) is locked with 5 kinds (one rare, one elite)', () => {
   assert.deepEqual(Object.keys(REGIONS), ['ruins', 'sewer', 'hall']);
   assert.deepEqual(REGIONS.ruins.count, [1, 3]);
   assert.deepEqual(REGIONS.sewer.count, [2, 5]);
   assert.deepEqual([REGIONS.hall.area, REGIONS.hall.locked, REGIONS.hall.resonance], [2, true, true]);
-  assert.deepEqual(REGIONS.hall.monsters.map(id => MONSTERS[id].name), ['和聲妖精', '指揮家', '管風琴魔像']);
+  assert.deepEqual(REGIONS.hall.monsters.map(id => MONSTERS[id].name), ['和聲妖精', '指揮家', '卡農砲', '無序音符', '管風琴魔像']);
   for (const region of [REGIONS.ruins, REGIONS.sewer]) {
     const defs = region.monsters.map(id => MONSTERS[id]);
     assert.ok(defs.length >= 5 && defs.every(Boolean), region.id);

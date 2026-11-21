@@ -106,35 +106,45 @@ const LEGENDARIES = {
   },
 
   // ── 第二區專屬（area 2，只在第二區掉落；2026-11-21 使用者設計，數值是我擬的初版）──────────
-  // 氣鳴楯【菲爾查哈】：強化玩家的閃避反擊。主屬性比照削弱後的水準（攻擊 372）。
+  // 氣鳴楯【菲爾查哈】（2026-11-21 晚使用者改版）：強化反擊。基底攻擊＋防禦；閃避、反擊點數、反擊傷害；反擊無視防禦。
   fircha: {
     id: 'fircha',
     name: '氣鳴楯【菲爾查哈】',
     slot: 'weapon',
     attackStat: 'atk',
     area: 2,
-    base: [{ stat: 'atk', op: 'flat', max: 372 }],
+    base: [{ stat: 'atk', op: 'flat', max: 300 }, { stat: 'def', op: 'flat', max: 100 }],
     unique: [
       { scope: 'wearer', stat: 'eva', op: 'flat', max: 80 },
-      { scope: 'wearer', stat: 'evadeCounter', op: 'flat', max: 80 }
+      { scope: 'wearer', stat: 'evadeCounter', op: 'flat', max: 80 },
+      { scope: 'wearer', stat: 'counterDmg', op: 'flat', max: 0.6 }
     ],
-    mechanics: [{ type: 'counterPower', power: 2 }]
+    mechanics: [{ type: 'counterIgnoreDefense' }]
   },
-  // 撥弦槍【鶴之聲援】：智力武器，法術的多段攻擊有額外效益（第 2 段起每段 +15%，逐段累加）。主屬性比照報喪法杖削弱後（319、40%）。
+  // 撥弦槍【鶴之聲援】（2026-11-21 晚使用者改版）：依攻擊次數增強。基底智力＋SP；智力%、速度；機制「妖精的和弦」（chord.js）。
   cranelance: {
     id: 'cranelance',
     name: '撥弦槍【鶴之聲援】',
     slot: 'weapon',
     attackStat: 'int',
     area: 2,
-    base: [{ stat: 'int', op: 'flat', max: 319 }],
-    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
-    mechanics: [{ type: 'multiHitRamp', ramp: 0.15 }]
+    base: [{ stat: 'int', op: 'flat', max: 280 }, { stat: 'sp', op: 'flat', max: 50 }],
+    unique: [
+      { scope: 'wearer', stat: 'int', op: 'inc', max: 0.3 },
+      { scope: 'wearer', stat: 'spd', op: 'flat', max: 30 }
+    ],
+    mechanics: [{ type: 'chord', gain: 4, loss: 1, max: 100, perPoint: 0.01, rounds: 3, heal: 0.25, spdInc: 1,
+      text: {
+        full: '{caster}：「我要奏響『勝利的旋律』來阻止你！」',
+        start: '一陣激昂的樂聲迴盪在整個戰場，{caster}的腳步隨著樂聲加快了！',
+        shout: '「BreakNight」！',
+        end: '歌曲結束了，戰場回復原先的平靜。'
+      } }]
   }
 };
 
 const LEGENDARY_WEIGHT = { low: 60, high: 120 };
-const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom', 'counterPower', 'multiHitRamp'];
+const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom', 'counterIgnoreDefense', 'chord'];
 
 function round(stat, op, value) {
   // 只有 flat 的整數屬性取整（同 affixTable 的修正：inc 百分比不能取整）
@@ -221,8 +231,9 @@ function describeMechanic(mechanic, supportName = id => id) {
     case 'spShield': return `施放技能時依消耗的 SP 獲得護盾，持續 ${mechanic.duration} 個行動槽`;
     case 'shieldBreakSp': return `護盾破裂時獲得 ${mechanic.sp} 點 SP`;
     case 'phantom': return '開戰時召喚幻影；裝備的主動寶石會讓幻影追擊';
-    case 'counterPower': return `閃避反擊的傷害 ×${mechanic.power}`;
-    case 'multiHitRamp': return `法術的多段攻擊：第 2 段起每段傷害 +${Math.round(mechanic.ramp * 100)}%（逐段累加）`;
+    case 'counterIgnoreDefense': return '閃避反擊的傷害無視防禦';
+    // 2026-11-21 使用者指定括弧內的文字
+    case 'chord': return '妖精的和弦能夠變為勝利的旋律（每次攻擊命中時增加和弦，被攻擊命中時會減少和弦，和弦滿了發動勝利的旋律）';
     default: return mechanic.type;
   }
 }

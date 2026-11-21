@@ -157,7 +157,7 @@ const MONSTERS = {
   // 和聲妖精：一次至少兩隻（group: 2）；「和聲」打中後其他和聲妖精各追擊一下；難度 7 起普攻也會引發追擊。
   fairy: {
     id: 'fairy', name: '和聲妖精', from: 1, cost: 0.2, group: 2,
-    stats: { hp: 0.25, atk: 0.3, def: 20, spd: 220 },
+    stats: { hp: 0.2, atk: 0.3, def: 20, spd: 220 },
     harmony: { power: 0.4, normalFrom: 7, text: '{caster}應和著旋律追擊，' },
     skills: [
       { kind: 'attack', id: 'harmony', name: '和聲', from: 1, spCost: 10, power: 0.8, target: 'single', chase: true }
@@ -169,7 +169,34 @@ const MONSTERS = {
     stats: { hp: 0.45, atk: 0.35, def: 60, spd: 180 },
     skills: [
       { kind: 'cleanse', id: 'order', name: '整頓', from: 1, spCost: 15, target: 'allyAll', text: '{caster}揮動指揮棒，樂團重新整齊了起來！' },
-      { kind: 'attack', id: 'baton', name: '指揮棒', from: 7, spCost: 10, power: 1.3, target: 'single' }
+      { kind: 'attack', id: 'baton', name: '強拍', from: 7, spCost: 10, power: 1.3, target: 'single' },
+      // 獨奏（使用者 2026-11-21）：攻擊力最高的隊友（不含自己）立刻多行動一次（額外的行動槽）
+      { kind: 'solo', id: 'solo', name: '獨奏', from: 10, spCost: 20, text: '{caster}指向{target}，{target}開始了華麗的獨奏！' }
+    ]
+  },
+  // 卡農砲（2026-11-21 使用者設計）：「轟鳴砲」先蓄力，下一個能行動的槽才發射強力單體攻擊；
+  // 難度 7 起多了「卡農」：其他隊友（不含自己）下一個能行動的槽重複上一次用的技能（卡農本身不會被記住）。
+  cannon: {
+    id: 'cannon', name: '卡農砲', from: 1, cost: 0.4,
+    stats: { hp: 0.5, atk: 0.5, def: 80, spd: 120 },
+    skills: [
+      { kind: 'attack', id: 'boom', name: '轟鳴砲', from: 1, spCost: 15, power: 2.5, target: 'single', charge: true,
+        chargeText: '{caster}的砲管開始聚集音波……', text: '{caster} 發射了轟鳴砲，' },
+      { kind: 'canon', id: 'canon', name: '卡農', from: 7, spCost: 15, text: '{caster}奏起了卡農，樂團的旋律開始重複！' }
+    ]
+  },
+  // 無序音符（稀有，2026-11-21 使用者：不會普攻、技能全是干擾型；噪音是使用者定的，其餘我擬）
+  // 普攻的位置換成不耗 SP 的噪音（noAttack），所以永遠不造成傷害。
+  noise: {
+    id: 'noise', name: '無序音符', from: 1, cost: 0.4, rarity: 'rare', skillCastRate: 0.6, noAttack: 'noise',
+    stats: { hp: 0.6, atk: 0, def: 60, spd: 230 },
+    skills: [
+      { kind: 'debuff', id: 'noise', name: '噪音', from: 1, spCost: 10, stats: { atk: 0.8, spd: 0.8 }, duration: 2,
+        text: '{caster}發出刺耳的噪音，', buffText: '{target} 的攻擊力和速度下降了！' },
+      { kind: 'silence', id: 'rest', name: '休止符', from: 4, spCost: 15, duration: 2,
+        text: '{caster}畫出一個巨大的休止符，', buffText: '{target} 無法使用技能！', blockedText: '{target} 被休止符壓住，無法使用 {skill}！' },
+      { kind: 'drain', id: 'detune', name: '走音', from: 7, spCost: 10, sp: 10, text: '{caster}的音調一歪，{target}失去了{value}點SP。' },
+      { kind: 'resonate', id: 'dissonance', name: '不協和音', from: 10, spCost: 15, stacks: 2, text: '{caster}奏出不協和音，{target}身上的共鳴更強烈了！' }
     ]
   },
   // 管風琴魔像（菁英）：場地特效——活著時每回合開始，全場（包括自己）各疊 1 層共鳴
@@ -189,7 +216,7 @@ const REGIONS = {
   ruins: { id: 'ruins', name: '廢都', area: 1, count: [1, 3], budget: 0.7, monsters: ['dog', 'circle', 'doll', 'goblin', 'golem'] },
   sewer: { id: 'sewer', name: '地下水道', area: 1, count: [2, 5], budget: 0.85, monsters: ['rat', 'tentacle', 'slime', 'mimic', 'scavenger'] },
   // 第二區（2026-11-21）：打倒廢都中央廳後開放；地區特色＝共鳴（resonance.js）。第 3 種一般怪與稀有怪使用者還沒想好。
-  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 5], budget: 0.7, resonance: true, monsters: ['fairy', 'conductor', 'organ'] }
+  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 4], budget: 0.7, resonance: true, monsters: ['fairy', 'conductor', 'cannon', 'noise', 'organ'] }
 };
 
 // ── 技能建構 ────────────────────────────────────────────────
@@ -245,6 +272,81 @@ function buildSkill(spec, def, stats, casterName) {
     return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: TARGET[spec.target], text, buffs: [{
       id: `monster_shield:${spec.id}`, name: spec.name, duration: spec.duration, stackPolicy: 'refresh',
       shield: Math.max(1, Math.round(spec.power != null ? (stats[stat] ?? 0) * spec.power : stats.maxHp * spec.ratio)), polarity: 'positive', dispellable: true }] }] });
+  }
+  // ── 干擾型（無序音符）──
+  if (spec.kind === 'debuff') {
+    const mults = spec.stats;
+    return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: 'ENEMY_SINGLE', text: { action: template(spec.text, casterName), buff: template(spec.buffText, casterName) },
+      buffs: [{ id: `monster_debuff:${def.id}_${spec.id}`, name: spec.name, type: 'STAT', duration: spec.duration, stackPolicy: 'refresh', polarity: 'negative', dispellable: true,
+        effect: st => { for (const [key, mult] of Object.entries(mults)) st[key] = (st[key] ?? 0) * mult; } }] }] });
+  }
+  if (spec.kind === 'silence') {
+    const blocked = spec.blockedText;
+    return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: 'ENEMY_SINGLE', text: { action: template(spec.text, casterName), buff: template(spec.buffText, casterName) },
+      buffs: [{ id: `monster_silence:${def.id}_${spec.id}`, name: spec.name, type: 'STAT', duration: spec.duration, stackPolicy: 'refresh', polarity: 'negative', dispellable: true,
+        effect: () => {}, silence: true, ...(blocked ? { message: ({ entity, skill }) => blocked.replaceAll('{target}', entity.name).replaceAll('{skill}', skill.name) } : {}) }] }] });
+  }
+  if (spec.kind === 'drain') {
+    const skill = buildSpDrainSkill({ sp: spec.sp, name: spec.name, text: spec.text }, def);
+    skill.id = base.id;
+    return skill;
+  }
+  if (spec.kind === 'resonate') {
+    // 不協和音：替一個敵人疊共鳴層數（沒有共鳴的地區只顯示文字，不疊）
+    const skill = new Skill({ ...base, actions: [{ type: 'TEXT', targetType: 'ENEMY_SINGLE', text: { action: template(spec.text, casterName) } }] });
+    const baseExecute = skill.execute;
+    skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+      const start = logger.logs?.length ?? 0;
+      const result = baseExecute.call(this, caster, allies, enemies, logger, context, options);
+      const targetId = (logger.logs ?? []).slice(start).find(l => l.targetId)?.targetId;
+      const target = enemies.find(e => e.id === targetId) ?? enemies.find(e => e.isAlive);
+      if (target?.hasResonance) require('./resonance').addResonance(target, spec.stacks, logger, context);
+      return result;
+    };
+    return skill;
+  }
+  if (spec.kind === 'solo') {
+    // 獨奏：攻擊力最高的隊友（不含自己）在這個行動槽之後多行動一次。那一動照平常選招（蓄力中就發射），但不會再選到獨奏
+    let chosen = null;
+    const skill = new Skill({ ...base, actions: [{ type: 'TEXT', text: { action: ctx => (spec.text ?? '').replaceAll('{caster}', ctx.caster?.name ?? casterName).replaceAll('{target}', chosen?.name ?? '') } }] });
+    const pickTarget = (entity, context) => {
+      const allies = entity.team === 'A' ? context.teamA : context.teamB;
+      return allies.filter(a => a !== entity && a.isAlive && a.canAct())
+        .sort((x, y) => ((y.getEffectiveStats?.() ?? y.stats).atk ?? 0) - ((x.getEffectiveStats?.() ?? x.stats).atk ?? 0))[0] ?? null;
+    };
+    const baseExecute = skill.execute;
+    skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+      chosen = context?.teamA ? pickTarget(caster, context) : null;
+      const result = baseExecute.call(this, caster, allies, enemies, logger, context, options);
+      if (chosen && context?.insertAction) context.insertAction(chosen, pickMonsterAction(chosen, context, { exclude: 'solo' }));
+      return result;
+    };
+    const baseCanCast = skill.canCast;
+    skill.canCast = function canCast(entity, context, opts) {
+      if (context?.teamA && !pickTarget(entity, context)) return false;
+      return baseCanCast.call(this, entity, context, opts);
+    };
+    return skill;
+  }
+  if (spec.kind === 'canon') {
+    // 卡農：其他活著的隊友各記一個「下一動重複上一招」（canonPending，不顯示）；選招時由 monsterSkillResolver 換上來
+    const skill = new Skill({ ...base, actions: [{ type: 'TEXT', text }] });
+    const baseExecute = skill.execute;
+    skill.execute = function execute(caster, allies, ...rest) {
+      const result = baseExecute.call(this, caster, allies, ...rest);
+      for (const ally of allies) if (ally !== caster && ally.isAlive) ally.canonPending = true;
+      return result;
+    };
+    const baseCanCast = skill.canCast;
+    skill.canCast = function canCast(entity, context, options) {
+      if (context?.teamA && context?.teamB) {
+        const allies = entity.team === 'A' ? context.teamA : context.teamB;
+        if (!allies.some(a => a !== entity && a.isAlive && a.lastSkill)) return false;   // 沒有隊友出過招就不放
+      }
+      return baseCanCast.call(this, entity, context, options);
+    };
+    skill.isCanon = true;
+    return skill;
   }
   if (spec.kind === 'cleanse') {
     // 清除隊友（含自己）身上可驅散的減益；框架沒有驅散動作，用 TEXT 動作開頭、自己移除
@@ -437,14 +539,14 @@ function buildEvadeCounterPassive(def, stats, entityName) {
 /**
  * 玩家的閃避反擊（2026-11-21）：stats.evadeCounter > 0 時掛上；反擊是普攻（stat）× power 一擊（氣鳴楯【菲爾查哈】把 power 提高）。
  */
-function buildPlayerEvadeCounterPassive({ stat = 'atk', power = 1, name = '玩家', text } = {}) {
-  return makeEvadeCounterPassive({ id: 'player_evade_counter', stat, crit: true, power, text, entityName: name, skillId: 'hero' });
+function buildPlayerEvadeCounterPassive({ stat = 'atk', power = 1, ignoreDefense = false, name = '玩家', text } = {}) {
+  return makeEvadeCounterPassive({ id: 'player_evade_counter', stat, crit: true, power, ignoreDefense, text, entityName: name, skillId: 'hero' });
 }
 
-function makeEvadeCounterPassive({ id, stat, crit, power = 1, text, entityName, special = null, specialCost = 0, skillId }) {
+function makeEvadeCounterPassive({ id, stat, crit, power = 1, ignoreDefense = false, text, entityName, special = null, specialCost = 0, skillId }) {
   const flags = crit ? {} : { uncritable: true };
   const basic = new Skill({ id: `${skillId}_evade_counter`, name: '反擊', ...flags,
-    actions: [{ type: 'DAMAGE', stat, power, ...flags, text: { action: template(text ?? '{caster} 趁隙反擊，', entityName) } }] });
+    actions: [{ type: 'DAMAGE', stat, power, ...flags, ...(ignoreDefense ? { ignoreDefense: true } : {}), text: { action: template(text ?? '{caster} 趁隙反擊，', entityName) } }] });
   return {
     id,
     trigger: 'AFTER_EVADE',
@@ -505,11 +607,24 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
     ...(def.normalAttackText !== undefined ? { text: { action: template(def.normalAttackText, entityName) } } : {}) }],
     ...(def.spell ? { uncritable: true, uncounterable: true } : {}) });
   // spCost 要放在第一個 action 上框架才會扣（Skill 只讀 action.spCost）。2026-11-20 修正：之前寫在技能層級，怪物放技能從來不扣 SP。
+  let charge = null;
   const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => {
+    if (spec.charge) {
+      // 蓄力（比照玩家寶石的蓄力）：這一動只扣 SP、掛「蓄力中」，下一個能行動的槽由 monsterSkillResolver 換成本體發射
+      const markerId = `monster_charged:${def.id}_${spec.id}`;
+      const release = remember(buildSkill(spec, def, stats, entityName));
+      charge = { markerId, release };
+      return remember(withSpCost(new Skill({ id: `${def.id}_${spec.id}_charge`, name: spec.name, actions: [{ type: 'BUFF', targetType: 'SELF',
+        text: { action: template(spec.chargeText ?? '{caster} 開始蓄力，', entityName), buff: '' },
+        buffs: [{ id: markerId, name: '蓄力中', type: 'STAT', polarity: 'neutral', duration: 1e6, stackPolicy: 'refresh', dispellable: false, effect: () => {} }] }] }), spec.spCost));
+    }
     const skill = withSpCost(buildSkill(spec, def, stats, entityName), spec.spCost);
-    return spec.chase && def.harmony ? withHarmonyChase(skill, def) : skill;
+    return skill.isCanon ? skill : remember(spec.chase && def.harmony ? withHarmonyChase(skill, def) : skill);
   });
-  const attack = def.harmony && difficulty >= (def.harmony.normalFrom ?? Infinity) ? withHarmonyChase(normalAttack, def) : normalAttack;
+  // noAttack（無序音符）：普攻的位置換成指定技能的不耗 SP 版本，永遠不普攻
+  const noAttackSpec = def.noAttack ? def.skills.find(spec => spec.id === def.noAttack) : null;
+  const plainAttack = noAttackSpec ? buildSkill(noAttackSpec, def, stats, entityName) : normalAttack;
+  const attack = remember(def.harmony && difficulty >= (def.harmony.normalFrom ?? Infinity) ? withHarmonyChase(plainAttack, def) : plainAttack);
   const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives, field: buildFieldPassive };
   const passives = (def.traits ?? []).filter(trait => difficulty >= (trait.from ?? 1)).flatMap(trait => {
     if (!TRAIT_BUILDERS[trait.kind]) throw new Error(`怪物「${def.id}」的特性種類不明：${trait.kind}`);
@@ -519,7 +634,53 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
   if (def.evadeCounter) passives.push(buildEvadeCounterPassive(def, stats, entityName));
   const entity = new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack: attack, normalAttackSpCost: 2, skills, passives, stats });
   entity.monsterId = def.id;
+  if (charge) entity.monsterCharge = charge;
   return entity;
+}
+
+// 記住上一次用的技能（卡農用）：卡農本身不包，所以不會被記住
+function remember(skill) {
+  const baseExecute = skill.execute;
+  skill.execute = function execute(caster, ...rest) {
+    if (!rest[3]?.counterSource) caster.lastSkill = skill;
+    return baseExecute.call(this, caster, ...rest);
+  };
+  return skill;
+}
+
+/**
+ * 怪物的選招替換（接在玩家 loadout 的 resolver 前面）：
+ *   1. 身上有「蓄力中」→ 移除標記，這一槽發射本體（同時用掉卡農的重複）。
+ *   2. 被卡農記了「重複上一招」→ 用上一次的技能（照扣 SP；不能用就照平常選）。蓄力發射後被重複＝直接再發射一次（使用者先選 B）。
+ * 回傳 undefined 代表這一槽照常。暈眩、動不了的槽不會選招，標記留到下一個能行動的槽。
+ */
+/** 替怪物選一招（獨奏的額外行動用）：蓄力中先發射；否則照技能施放率擲骰，從能用的技能裡隨機挑；都不行就普攻。 */
+function pickMonsterAction(entity, engine, { exclude } = {}) {
+  const charge = entity.monsterCharge;
+  if (charge && entity.buffs.some(b => b.id === charge.markerId)) {
+    entity.buffs = entity.buffs.filter(b => b.id !== charge.markerId);
+    return charge.release;
+  }
+  const rng = engine.rng ?? Math.random;
+  const usable = entity.skills.filter(skill => !skill.id.endsWith(`_${exclude}`) && skill.canCast(entity, engine));
+  if (usable.length && rng() < (entity.stats.skillCastRate ?? 0.35)) return usable[Math.floor(rng() * usable.length)];
+  return entity.normalAttack;
+}
+
+function monsterSkillResolver({ caster, engine }) {
+  if (!caster?.monsterId) return undefined;
+  const charge = caster.monsterCharge;
+  if (charge && caster.buffs.some(b => b.id === charge.markerId)) {
+    caster.buffs = caster.buffs.filter(b => b.id !== charge.markerId);
+    caster.canonPending = false;
+    return charge.release;
+  }
+  if (caster.canonPending) {
+    caster.canonPending = false;
+    const last = caster.lastSkill;
+    if (last && last.canCast(caster, engine)) return last;
+  }
+  return undefined;
 }
 
 /**
@@ -625,4 +786,5 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   return { monsters, summonFactory, info: { ids: picks.map(def => def.id), rare: hasRare, elite: hasElite, totalCost, scale } };
 }
 
-module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildPlayerEvadeCounterPassive, buildMonster, buildFromDef, availableMonsters, rollEncounter };
+module.exports = {
+  monsterSkillResolver, BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildPlayerEvadeCounterPassive, buildMonster, buildFromDef, availableMonsters, rollEncounter };

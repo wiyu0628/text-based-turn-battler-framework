@@ -3108,6 +3108,7 @@ const STAT_DEFS = {
   criDmg:        { name: '暴擊傷害',   display: 'percent', integer: false, min: 1, fallback: 1.5 },
   skillCastRate: { name: '技能施放率', display: 'percent', integer: false, min: 0, max: 1, fallback: 0.35 },
   // 閃避反擊的點數（2026-11-21，第二區專屬刻印與傳說）：閃避成功後依點數擲反擊，見 monsters.evadeCounterChance
+  counterDmg:    { name: '反擊傷害',   display: 'percent', integer: false, min: 0, fallback: 0 },
   evadeCounter:  { name: '反擊點數',   display: 'number',  integer: true,  min: 0, fallback: 0 }
 };
 const BONUS_OPS = new Set(['flat', 'inc', 'more']);
@@ -4611,6 +4612,7 @@ function buildPhantomPassive(spec, summonHp = 0) {
       phantom.summonerId = self.id;
       phantom.gemPhantom = true;
       (self.team === 'A' ? engine.teamA : engine.teamB).push(phantom);
+      engine.onGemSummon?.(phantom);   // 地區特色（例如共鳴）也套到幻影身上
       self.gemPhantom = phantom;
       logger.addLog({ type: 'SUMMON', actorId: self.id, targetId: phantom.id, message: fill(spec.summonText ?? '{caster} 召喚了幻影！') });
     }
@@ -4771,7 +4773,7 @@ const makeSkill = (config, conditions) => Object.keys(conditions).length ? new C
  * @throws {Error} 寶石資料本身有誤時（見 validateGemData）
  */
 function compileSkill(activeId, supportIds = [], {
-  activeGems = ACTIVE_GEMS, supportGems = SUPPORT_GEMS, groups = GROUPS, maxSupports = MAX_SUPPORTS, equipment = null
+  activeGems = ACTIVE_GEMS, supportGems = SUPPORT_GEMS, groups = GROUPS, maxSupports = MAX_SUPPORTS, equipment = null, mechanics = []
 } = {}) {
   if (!Number.isInteger(maxSupports) || maxSupports < 0) {
     throw new Error(`maxSupports 必須是不小於 0 的整數，收到 ${maxSupports}`);
@@ -4894,6 +4896,8 @@ function compileSkill(activeId, supportIds = [], {
   });
 
   // 結算：加算區先加總，乘算區各自相乘，兩區最後才相乘。這一步對所有 DAMAGE 段（含追加的）生效。
+  // 撥弦槍【鶴之聲援】的和弦：施放當下才知道加成，當成一種動態加算（只加在智力的傷害段，見 withDynamicDamage）
+  if (mechanics.some(m => m.type === 'chord')) draft.dynamics.push({ op: 'chordInc' });
   const incSum = draft.inc.reduce((sum, value) => sum + value, 0);
   const moreProduct = draft.more.reduce((product, value) => product * (1 + value), 1);
   const factor = (1 + incSum) * moreProduct;
@@ -5050,6 +5054,7 @@ function compileSkill(activeId, supportIds = [], {
  * 每次施放依施放者當下的狀態算出倍率，用一個暫時的變體（Object.create）帶著改好 power 的動作去打，不改技能本身。
  *   condInc      條件成立時把 value 加進這段的加算區：power × (底數 + value) ÷ 底數
  *   critAsDamage 乘上 1 + 爆擊率 × (爆擊傷害 − 1)（爆擊率夾在 0～1；讀含 Buff 的實際屬性）
+ *   chordInc     撥弦槍的和弦：施放者的 gemChordBonus（和弦值 × 1%）加進「智力」傷害段（法術）的加算區
  */
 function withDynamicDamage(skill, dynamics) {
   if (!dynamics.length) return skill;
@@ -5057,17 +5062,19 @@ function withDynamicDamage(skill, dynamics) {
   skill.execute = function execute(caster, ...rest) {
     const stats = caster.getEffectiveStats?.() ?? caster.stats;
     const hpRatio = caster.stats.maxHp > 0 ? caster.stats.hp / caster.stats.maxHp : 1;
-    let inc = 0, more = 1;
+    let inc = 0, more = 1, spellInc = 0;
     for (const effect of dynamics) {
       if (effect.op === 'condInc' && hpRatio < effect.when.hpBelow) inc += effect.value;
       if (effect.op === 'critAsDamage') more *= 1 + Math.min(1, Math.max(0, stats.cri || 0)) * Math.max(0, (stats.criDmg ?? 1.5) - 1);
+      if (effect.op === 'chordInc') spellInc += caster.gemChordBonus || 0;
     }
-    if (inc === 0 && more === 1) return base.call(this, caster, ...rest);
+    if (inc === 0 && more === 1 && spellInc === 0) return base.call(this, caster, ...rest);
     const variant = Object.create(this);
     variant.actions = this.actions.map(action => {
       if (action.type !== 'DAMAGE') return action;
       const incBase = action.gemIncBase ?? 1;
-      return { ...action, power: round4(action.power * (incBase + inc) / incBase * more) };
+      const add = inc + (action.stat === 'int' ? spellInc : 0);
+      return { ...action, power: round4(action.power * (incBase + add) / incBase * more) };
     });
     return base.call(variant, caster, ...rest);
   };
@@ -5305,12 +5312,6 @@ function buildWeightGuardPassive() {
  *   compiled  每組的完整編譯結果（含 spCost、damageFactor、links），給 UI 顯示用
  * @throws {GemLinkError} 任何一組連結不合法，或兩組編譯出同一個技能 id（同一顆主動寶石連結相同輔助寶石兩次）
  */
-function withMultiHitRamp(skill, ramp) {
-  let k = 0;
-  skill.actions = skill.actions.map(action => (action.type === 'DAMAGE' ? { ...action, power: round4((action.power ?? 1) * (1 + ramp * k++)) } : action));
-  return skill;
-}
-
 function compileLoadout(gems, options = {}) {
   const compiled = [];
   const seen = new Set();
@@ -5344,14 +5345,6 @@ function compileLoadout(gems, options = {}) {
   const breakSp = mechanics.filter(m => m.type === 'shieldBreakSp').reduce((sum, m) => sum + m.sp, 0);
   const phantom = mechanics.find(m => m.type === 'phantom');
   if (phantom) for (const result of chasers) for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withPhantomChase(skill, phantom);
-  // 撥弦槍【鶴之聲援】（2026-11-21）：法術技能的傷害段從第 2 段起，每段倍率 × (1 + ramp × 段序)
-  const ramp = mechanics.filter(m => m.type === 'multiHitRamp').reduce((sum, m) => sum + m.ramp, 0);
-  if (ramp > 0) {
-    for (const result of compiled) {
-      if (!(options.activeGems ?? ACTIVE_GEMS)[result.activeId]?.tags?.includes('spell')) continue;
-      for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withMultiHitRamp(skill, ramp);
-    }
-  }
   const hasCharge = compiled.some(result => result.charge);
   const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
   return {
@@ -6052,35 +6045,45 @@ const LEGENDARIES = {
   },
 
   // ── 第二區專屬（area 2，只在第二區掉落；2026-11-21 使用者設計，數值是我擬的初版）──────────
-  // 氣鳴楯【菲爾查哈】：強化玩家的閃避反擊。主屬性比照削弱後的水準（攻擊 372）。
+  // 氣鳴楯【菲爾查哈】（2026-11-21 晚使用者改版）：強化反擊。基底攻擊＋防禦；閃避、反擊點數、反擊傷害；反擊無視防禦。
   fircha: {
     id: 'fircha',
     name: '氣鳴楯【菲爾查哈】',
     slot: 'weapon',
     attackStat: 'atk',
     area: 2,
-    base: [{ stat: 'atk', op: 'flat', max: 372 }],
+    base: [{ stat: 'atk', op: 'flat', max: 300 }, { stat: 'def', op: 'flat', max: 100 }],
     unique: [
       { scope: 'wearer', stat: 'eva', op: 'flat', max: 80 },
-      { scope: 'wearer', stat: 'evadeCounter', op: 'flat', max: 80 }
+      { scope: 'wearer', stat: 'evadeCounter', op: 'flat', max: 80 },
+      { scope: 'wearer', stat: 'counterDmg', op: 'flat', max: 0.6 }
     ],
-    mechanics: [{ type: 'counterPower', power: 2 }]
+    mechanics: [{ type: 'counterIgnoreDefense' }]
   },
-  // 撥弦槍【鶴之聲援】：智力武器，法術的多段攻擊有額外效益（第 2 段起每段 +15%，逐段累加）。主屬性比照報喪法杖削弱後（319、40%）。
+  // 撥弦槍【鶴之聲援】（2026-11-21 晚使用者改版）：依攻擊次數增強。基底智力＋SP；智力%、速度；機制「妖精的和弦」（chord.js）。
   cranelance: {
     id: 'cranelance',
     name: '撥弦槍【鶴之聲援】',
     slot: 'weapon',
     attackStat: 'int',
     area: 2,
-    base: [{ stat: 'int', op: 'flat', max: 319 }],
-    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
-    mechanics: [{ type: 'multiHitRamp', ramp: 0.15 }]
+    base: [{ stat: 'int', op: 'flat', max: 280 }, { stat: 'sp', op: 'flat', max: 50 }],
+    unique: [
+      { scope: 'wearer', stat: 'int', op: 'inc', max: 0.3 },
+      { scope: 'wearer', stat: 'spd', op: 'flat', max: 30 }
+    ],
+    mechanics: [{ type: 'chord', gain: 4, loss: 1, max: 100, perPoint: 0.01, rounds: 3, heal: 0.25, spdInc: 1,
+      text: {
+        full: '{caster}：「我要奏響『勝利的旋律』來阻止你！」',
+        start: '一陣激昂的樂聲迴盪在整個戰場，{caster}的腳步隨著樂聲加快了！',
+        shout: '「BreakNight」！',
+        end: '歌曲結束了，戰場回復原先的平靜。'
+      } }]
   }
 };
 
 const LEGENDARY_WEIGHT = { low: 60, high: 120 };
-const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom', 'counterPower', 'multiHitRamp'];
+const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom', 'counterIgnoreDefense', 'chord'];
 
 function round(stat, op, value) {
   // 只有 flat 的整數屬性取整（同 affixTable 的修正：inc 百分比不能取整）
@@ -6167,8 +6170,9 @@ function describeMechanic(mechanic, supportName = id => id) {
     case 'spShield': return `施放技能時依消耗的 SP 獲得護盾，持續 ${mechanic.duration} 個行動槽`;
     case 'shieldBreakSp': return `護盾破裂時獲得 ${mechanic.sp} 點 SP`;
     case 'phantom': return '開戰時召喚幻影；裝備的主動寶石會讓幻影追擊';
-    case 'counterPower': return `閃避反擊的傷害 ×${mechanic.power}`;
-    case 'multiHitRamp': return `法術的多段攻擊：第 2 段起每段傷害 +${Math.round(mechanic.ramp * 100)}%（逐段累加）`;
+    case 'counterIgnoreDefense': return '閃避反擊的傷害無視防禦';
+    // 2026-11-21 使用者指定括弧內的文字
+    case 'chord': return '妖精的和弦能夠變為勝利的旋律（每次攻擊命中時增加和弦，被攻擊命中時會減少和弦，和弦滿了發動勝利的旋律）';
     default: return mechanic.type;
   }
 }
@@ -6344,9 +6348,10 @@ module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, DEF_PER_LEVEL, MIN_DIFFICULT
 /**
  * 共鳴（第二區「和聲音樂廳」的地區特色，2026-11-21 使用者設計；數值是我擬的初版）。純規則 + 被動，不依賴框架以外的東西。
  *
- *   在有共鳴的戰鬥裡（REGIONS[id].resonance），每一擊**造成傷害的攻擊**（追擊、反擊、多段的每一段都算；
- *   持續傷害與直接扣血不算）替被打的單位疊 1 層，玩家和怪物都會被疊。層數不會隨時間消退。
- *   疊到 stacks 層爆發：層數歸零，受到自己最大生命 × burstRatio 的傷害（直接扣血，不吃防禦與減傷）。
+ *   在有共鳴的戰鬥裡（REGIONS[id].resonance），每一擊**沒被閃避的攻擊**（追擊、反擊、多段的每一段都算；
+ *   打在護盾上、被防禦壓成 0 也算；持續傷害與直接扣血不算）替被打的單位疊 1 層，玩家和怪物都會被疊。層數不會隨時間消退。
+ *   疊到 stacks 層爆發：層數歸零，受到 自己最大生命 × burstRatio × 防禦減傷（300 ÷ (防禦 + 300)，同框架傷害公式）的傷害；
+ *   不擲浮動、不吃護盾以外的減傷。（2026-11-21 使用者：共鳴傷害受防禦影響；沒閃避就疊層、打在護盾上也算）
  *   怪物（B 隊）爆發時：身上有減傷（承傷倍率 < 1 的狀態）就解除減傷；沒有就給易傷（承傷 ×(1 + vulnerable)，vulnerableDuration 槽）。
  *   管風琴魔像的場地特效用 addResonance 每回合替全場疊層。
  *
@@ -6358,6 +6363,7 @@ const { Buff } = require('../src');
 const RESONANCE = { stacks: 5, burstRatio: 0.04, vulnerable: 0.2, vulnerableDuration: 2 };
 
 const BADGE_ID = 'resonance_badge';
+const DEF_CONST = 300;   // 框架 Formulas.calculateDamage 的防禦常數（防禦 300 = 減傷 50%）
 
 function showStacks(entity) {
   const stacks = entity.resonance ?? 0;
@@ -6375,7 +6381,8 @@ function addResonance(entity, n, logger, engine, config = RESONANCE) {
   if (entity.resonance < config.stacks) { showStacks(entity); return false; }
   entity.resonance = 0;
   showStacks(entity);
-  const amount = Math.max(1, Math.round((entity.stats.maxHp ?? entity.stats.hp) * config.burstRatio));
+  const def = Math.max(0, (entity.getEffectiveStats?.() ?? entity.stats).def ?? 0);
+  const amount = Math.max(1, Math.round((entity.stats.maxHp ?? entity.stats.hp) * config.burstRatio * DEF_CONST / (def + DEF_CONST)));
   logger.addLog({ type: 'TEXT', actorId: entity.id, message: `${entity.name}身上的共鳴爆發了！` });
   const hit = entity.takeDamage(amount, logger, { source: 'DIRECT', tags: ['resonance'] });
   logger.addLog({ type: 'DAMAGE', actorId: entity.id, targetId: entity.id, value: hit.actualDamage, message: `${entity.name} 受到了 ${hit.actualDamage} 點傷害！` });
@@ -6394,25 +6401,91 @@ function addResonance(entity, n, logger, engine, config = RESONANCE) {
   return true;
 }
 
-/** 戰鬥裡每個單位都掛這個被動：被攻擊打中（有造成傷害）就疊 1 層。 */
-function resonancePassive(config = RESONANCE) {
-  return {
-    id: 'resonance',
-    trigger: 'AFTER_DAMAGE_RECEIVED',
-    enabled: (self, hit) => hit?.source === 'ATTACK' && self.isAlive,   // 框架只在 actualDamage > 0 時跑這個觸發
-    action: (self, _hit, logger, engine) => { addResonance(self, 1, logger, engine, config); }
-  };
-}
-
-/** 替整場戰鬥的單位加上共鳴（召喚物出場時另外處理）。 */
+/**
+ * 替整場戰鬥的單位加上共鳴。
+ * 框架的 AFTER_DAMAGE_RECEIVED 只在扣到血時才響，打在護盾上的不會；所以改包每個單位的 finishDamage
+ * （框架對每一擊命中——包括被護盾吃光、被無敵擋下的——都會呼叫一次，落空則不會），攻擊來源的那一擊就疊 1 層。
+ */
 function applyResonance(entities, config = RESONANCE) {
   for (const entity of entities) {
-    if (entity.passives.some(p => p.id === 'resonance')) continue;
-    entity.passives.push(resonancePassive(config));
+    if (entity.hasResonance) continue;
+    entity.hasResonance = true;
+    const baseFinish = entity.finishDamage;
+    entity.finishDamage = function finishDamage(hit, logger, engine) {
+      const fresh = !this.settledDamage?.has(hit);
+      const result = baseFinish.call(this, hit, logger, engine);
+      if (fresh && hit?.source === 'ATTACK' && this.isAlive && !engine?.result) addResonance(this, 1, logger, engine, config);
+      return result;
+    };
   }
 }
 
-module.exports = { RESONANCE, addResonance, resonancePassive, applyResonance };
+module.exports = { RESONANCE, addResonance, applyResonance };
+
+},
+"gem/chord.js": function (module, exports, require) {
+/**
+ * 撥弦槍【鶴之聲援】的機制「妖精的和弦」（2026-11-21 使用者設計）。
+ *
+ *   和弦值 0～max（100）：自己的攻擊每一擊造成傷害 +gain（4；持續傷害不算），被攻擊擊中而受到傷害 −loss（1；
+ *   持續傷害、共鳴爆發這類直接扣血不算——2026-11-21 晚使用者改：只有被攻擊擊中才扣）。
+ *   每 1 點和弦值，法術傷害 +perPoint（1%），進加算區（gemCompiler 的 withDynamicDamage 讀 entity.gemChordBonus）。
+ *   集滿 max 時和弦值鎖住不再增減，獲得「勝利的旋律」：回復最大生命 heal（25%）、清除可驅散的減益、
+ *   速度 +spdInc（100%），持續 rounds（3；2026-11-21 使用者延長一回合）回合——取得的那個回合算第 1 回合，第 rounds 次回合開始時結束；
+ *   結束時和弦值歸零，重新累積。和弦值不寫進戰報。
+ */
+
+const VICTORY_ID = 'gem_victory_melody';
+
+function buildChordPassives(mechanic) {
+  const { gain, loss, max, perPoint, rounds, heal, spdInc } = mechanic;
+  const text = mechanic.text ?? {};
+  const fill = (template, self) => template.replaceAll('{caster}', self.name);
+  const set = (self, value) => {
+    self.gemChord = Math.max(0, Math.min(max, value));
+    self.gemChordBonus = self.gemChord * perPoint;
+  };
+  const begin = (self, logger, engine) => {
+    self.gemChordLeft = rounds;
+    for (const line of [text.full, text.start, text.shout]) if (line) logger?.addLog({ type: 'TEXT', actorId: self.id, message: fill(line, self) });
+    const healed = self.heal(Math.floor(self.stats.maxHp * heal), logger, { engine });
+    if (healed > 0) logger?.addLog({ type: 'HEAL', actorId: self.id, targetId: self.id, value: healed, message: `${self.name} 回復了 ${healed} 點生命！` });
+    self.removeBuffs('negative');
+    self.addBuff({ id: VICTORY_ID, name: '勝利的旋律', type: 'STAT', duration: Infinity, polarity: 'positive', dispellable: false,
+      stackPolicy: 'refresh', effect: stats => { stats.spd *= 1 + spdInc; } }, engine);
+  };
+  return [
+    {
+      id: 'gem_chord_gain',
+      trigger: 'AFTER_DAMAGE_DEALT',
+      enabled: (self, hit) => hit?.source === 'ATTACK' && !self.gemChordLeft,
+      action(self, hit, logger, engine) {
+        set(self, (self.gemChord ?? 0) + gain);
+        if (self.gemChord >= max) begin(self, logger, engine);
+      }
+    },
+    {
+      id: 'gem_chord_loss',
+      trigger: 'AFTER_DAMAGE_RECEIVED',
+      enabled: (self, hit) => hit?.source === 'ATTACK' && !self.gemChordLeft,
+      action(self) { set(self, (self.gemChord ?? 0) - loss); }
+    },
+    {
+      id: 'gem_chord_round',
+      trigger: 'ROUND_START',
+      enabled: self => self.gemChordLeft > 0,
+      action(self, round, logger) {
+        self.gemChordLeft -= 1;
+        if (self.gemChordLeft > 0) return;
+        self.buffs = self.buffs.filter(buff => buff.id !== VICTORY_ID);
+        set(self, 0);
+        if (text.end) logger?.addLog({ type: 'TEXT', actorId: self.id, message: fill(text.end, self) });
+      }
+    }
+  ];
+}
+
+module.exports = { buildChordPassives, VICTORY_ID };
 
 },
 "gem/monsters.js": function (module, exports, require) {
@@ -6575,7 +6648,7 @@ const MONSTERS = {
   // 和聲妖精：一次至少兩隻（group: 2）；「和聲」打中後其他和聲妖精各追擊一下；難度 7 起普攻也會引發追擊。
   fairy: {
     id: 'fairy', name: '和聲妖精', from: 1, cost: 0.2, group: 2,
-    stats: { hp: 0.25, atk: 0.3, def: 20, spd: 220 },
+    stats: { hp: 0.2, atk: 0.3, def: 20, spd: 220 },
     harmony: { power: 0.4, normalFrom: 7, text: '{caster}應和著旋律追擊，' },
     skills: [
       { kind: 'attack', id: 'harmony', name: '和聲', from: 1, spCost: 10, power: 0.8, target: 'single', chase: true }
@@ -6587,7 +6660,34 @@ const MONSTERS = {
     stats: { hp: 0.45, atk: 0.35, def: 60, spd: 180 },
     skills: [
       { kind: 'cleanse', id: 'order', name: '整頓', from: 1, spCost: 15, target: 'allyAll', text: '{caster}揮動指揮棒，樂團重新整齊了起來！' },
-      { kind: 'attack', id: 'baton', name: '指揮棒', from: 7, spCost: 10, power: 1.3, target: 'single' }
+      { kind: 'attack', id: 'baton', name: '強拍', from: 7, spCost: 10, power: 1.3, target: 'single' },
+      // 獨奏（使用者 2026-11-21）：攻擊力最高的隊友（不含自己）立刻多行動一次（額外的行動槽）
+      { kind: 'solo', id: 'solo', name: '獨奏', from: 10, spCost: 20, text: '{caster}指向{target}，{target}開始了華麗的獨奏！' }
+    ]
+  },
+  // 卡農砲（2026-11-21 使用者設計）：「轟鳴砲」先蓄力，下一個能行動的槽才發射強力單體攻擊；
+  // 難度 7 起多了「卡農」：其他隊友（不含自己）下一個能行動的槽重複上一次用的技能（卡農本身不會被記住）。
+  cannon: {
+    id: 'cannon', name: '卡農砲', from: 1, cost: 0.4,
+    stats: { hp: 0.5, atk: 0.5, def: 80, spd: 120 },
+    skills: [
+      { kind: 'attack', id: 'boom', name: '轟鳴砲', from: 1, spCost: 15, power: 2.5, target: 'single', charge: true,
+        chargeText: '{caster}的砲管開始聚集音波……', text: '{caster} 發射了轟鳴砲，' },
+      { kind: 'canon', id: 'canon', name: '卡農', from: 7, spCost: 15, text: '{caster}奏起了卡農，樂團的旋律開始重複！' }
+    ]
+  },
+  // 無序音符（稀有，2026-11-21 使用者：不會普攻、技能全是干擾型；噪音是使用者定的，其餘我擬）
+  // 普攻的位置換成不耗 SP 的噪音（noAttack），所以永遠不造成傷害。
+  noise: {
+    id: 'noise', name: '無序音符', from: 1, cost: 0.4, rarity: 'rare', skillCastRate: 0.6, noAttack: 'noise',
+    stats: { hp: 0.6, atk: 0, def: 60, spd: 230 },
+    skills: [
+      { kind: 'debuff', id: 'noise', name: '噪音', from: 1, spCost: 10, stats: { atk: 0.8, spd: 0.8 }, duration: 2,
+        text: '{caster}發出刺耳的噪音，', buffText: '{target} 的攻擊力和速度下降了！' },
+      { kind: 'silence', id: 'rest', name: '休止符', from: 4, spCost: 15, duration: 2,
+        text: '{caster}畫出一個巨大的休止符，', buffText: '{target} 無法使用技能！', blockedText: '{target} 被休止符壓住，無法使用 {skill}！' },
+      { kind: 'drain', id: 'detune', name: '走音', from: 7, spCost: 10, sp: 10, text: '{caster}的音調一歪，{target}失去了{value}點SP。' },
+      { kind: 'resonate', id: 'dissonance', name: '不協和音', from: 10, spCost: 15, stacks: 2, text: '{caster}奏出不協和音，{target}身上的共鳴更強烈了！' }
     ]
   },
   // 管風琴魔像（菁英）：場地特效——活著時每回合開始，全場（包括自己）各疊 1 層共鳴
@@ -6607,7 +6707,7 @@ const REGIONS = {
   ruins: { id: 'ruins', name: '廢都', area: 1, count: [1, 3], budget: 0.7, monsters: ['dog', 'circle', 'doll', 'goblin', 'golem'] },
   sewer: { id: 'sewer', name: '地下水道', area: 1, count: [2, 5], budget: 0.85, monsters: ['rat', 'tentacle', 'slime', 'mimic', 'scavenger'] },
   // 第二區（2026-11-21）：打倒廢都中央廳後開放；地區特色＝共鳴（resonance.js）。第 3 種一般怪與稀有怪使用者還沒想好。
-  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 5], budget: 0.7, resonance: true, monsters: ['fairy', 'conductor', 'organ'] }
+  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 4], budget: 0.7, resonance: true, monsters: ['fairy', 'conductor', 'cannon', 'noise', 'organ'] }
 };
 
 // ── 技能建構 ────────────────────────────────────────────────
@@ -6663,6 +6763,81 @@ function buildSkill(spec, def, stats, casterName) {
     return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: TARGET[spec.target], text, buffs: [{
       id: `monster_shield:${spec.id}`, name: spec.name, duration: spec.duration, stackPolicy: 'refresh',
       shield: Math.max(1, Math.round(spec.power != null ? (stats[stat] ?? 0) * spec.power : stats.maxHp * spec.ratio)), polarity: 'positive', dispellable: true }] }] });
+  }
+  // ── 干擾型（無序音符）──
+  if (spec.kind === 'debuff') {
+    const mults = spec.stats;
+    return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: 'ENEMY_SINGLE', text: { action: template(spec.text, casterName), buff: template(spec.buffText, casterName) },
+      buffs: [{ id: `monster_debuff:${def.id}_${spec.id}`, name: spec.name, type: 'STAT', duration: spec.duration, stackPolicy: 'refresh', polarity: 'negative', dispellable: true,
+        effect: st => { for (const [key, mult] of Object.entries(mults)) st[key] = (st[key] ?? 0) * mult; } }] }] });
+  }
+  if (spec.kind === 'silence') {
+    const blocked = spec.blockedText;
+    return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: 'ENEMY_SINGLE', text: { action: template(spec.text, casterName), buff: template(spec.buffText, casterName) },
+      buffs: [{ id: `monster_silence:${def.id}_${spec.id}`, name: spec.name, type: 'STAT', duration: spec.duration, stackPolicy: 'refresh', polarity: 'negative', dispellable: true,
+        effect: () => {}, silence: true, ...(blocked ? { message: ({ entity, skill }) => blocked.replaceAll('{target}', entity.name).replaceAll('{skill}', skill.name) } : {}) }] }] });
+  }
+  if (spec.kind === 'drain') {
+    const skill = buildSpDrainSkill({ sp: spec.sp, name: spec.name, text: spec.text }, def);
+    skill.id = base.id;
+    return skill;
+  }
+  if (spec.kind === 'resonate') {
+    // 不協和音：替一個敵人疊共鳴層數（沒有共鳴的地區只顯示文字，不疊）
+    const skill = new Skill({ ...base, actions: [{ type: 'TEXT', targetType: 'ENEMY_SINGLE', text: { action: template(spec.text, casterName) } }] });
+    const baseExecute = skill.execute;
+    skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+      const start = logger.logs?.length ?? 0;
+      const result = baseExecute.call(this, caster, allies, enemies, logger, context, options);
+      const targetId = (logger.logs ?? []).slice(start).find(l => l.targetId)?.targetId;
+      const target = enemies.find(e => e.id === targetId) ?? enemies.find(e => e.isAlive);
+      if (target?.hasResonance) require('./resonance').addResonance(target, spec.stacks, logger, context);
+      return result;
+    };
+    return skill;
+  }
+  if (spec.kind === 'solo') {
+    // 獨奏：攻擊力最高的隊友（不含自己）在這個行動槽之後多行動一次。那一動照平常選招（蓄力中就發射），但不會再選到獨奏
+    let chosen = null;
+    const skill = new Skill({ ...base, actions: [{ type: 'TEXT', text: { action: ctx => (spec.text ?? '').replaceAll('{caster}', ctx.caster?.name ?? casterName).replaceAll('{target}', chosen?.name ?? '') } }] });
+    const pickTarget = (entity, context) => {
+      const allies = entity.team === 'A' ? context.teamA : context.teamB;
+      return allies.filter(a => a !== entity && a.isAlive && a.canAct())
+        .sort((x, y) => ((y.getEffectiveStats?.() ?? y.stats).atk ?? 0) - ((x.getEffectiveStats?.() ?? x.stats).atk ?? 0))[0] ?? null;
+    };
+    const baseExecute = skill.execute;
+    skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+      chosen = context?.teamA ? pickTarget(caster, context) : null;
+      const result = baseExecute.call(this, caster, allies, enemies, logger, context, options);
+      if (chosen && context?.insertAction) context.insertAction(chosen, pickMonsterAction(chosen, context, { exclude: 'solo' }));
+      return result;
+    };
+    const baseCanCast = skill.canCast;
+    skill.canCast = function canCast(entity, context, opts) {
+      if (context?.teamA && !pickTarget(entity, context)) return false;
+      return baseCanCast.call(this, entity, context, opts);
+    };
+    return skill;
+  }
+  if (spec.kind === 'canon') {
+    // 卡農：其他活著的隊友各記一個「下一動重複上一招」（canonPending，不顯示）；選招時由 monsterSkillResolver 換上來
+    const skill = new Skill({ ...base, actions: [{ type: 'TEXT', text }] });
+    const baseExecute = skill.execute;
+    skill.execute = function execute(caster, allies, ...rest) {
+      const result = baseExecute.call(this, caster, allies, ...rest);
+      for (const ally of allies) if (ally !== caster && ally.isAlive) ally.canonPending = true;
+      return result;
+    };
+    const baseCanCast = skill.canCast;
+    skill.canCast = function canCast(entity, context, options) {
+      if (context?.teamA && context?.teamB) {
+        const allies = entity.team === 'A' ? context.teamA : context.teamB;
+        if (!allies.some(a => a !== entity && a.isAlive && a.lastSkill)) return false;   // 沒有隊友出過招就不放
+      }
+      return baseCanCast.call(this, entity, context, options);
+    };
+    skill.isCanon = true;
+    return skill;
   }
   if (spec.kind === 'cleanse') {
     // 清除隊友（含自己）身上可驅散的減益；框架沒有驅散動作，用 TEXT 動作開頭、自己移除
@@ -6855,14 +7030,14 @@ function buildEvadeCounterPassive(def, stats, entityName) {
 /**
  * 玩家的閃避反擊（2026-11-21）：stats.evadeCounter > 0 時掛上；反擊是普攻（stat）× power 一擊（氣鳴楯【菲爾查哈】把 power 提高）。
  */
-function buildPlayerEvadeCounterPassive({ stat = 'atk', power = 1, name = '玩家', text } = {}) {
-  return makeEvadeCounterPassive({ id: 'player_evade_counter', stat, crit: true, power, text, entityName: name, skillId: 'hero' });
+function buildPlayerEvadeCounterPassive({ stat = 'atk', power = 1, ignoreDefense = false, name = '玩家', text } = {}) {
+  return makeEvadeCounterPassive({ id: 'player_evade_counter', stat, crit: true, power, ignoreDefense, text, entityName: name, skillId: 'hero' });
 }
 
-function makeEvadeCounterPassive({ id, stat, crit, power = 1, text, entityName, special = null, specialCost = 0, skillId }) {
+function makeEvadeCounterPassive({ id, stat, crit, power = 1, ignoreDefense = false, text, entityName, special = null, specialCost = 0, skillId }) {
   const flags = crit ? {} : { uncritable: true };
   const basic = new Skill({ id: `${skillId}_evade_counter`, name: '反擊', ...flags,
-    actions: [{ type: 'DAMAGE', stat, power, ...flags, text: { action: template(text ?? '{caster} 趁隙反擊，', entityName) } }] });
+    actions: [{ type: 'DAMAGE', stat, power, ...flags, ...(ignoreDefense ? { ignoreDefense: true } : {}), text: { action: template(text ?? '{caster} 趁隙反擊，', entityName) } }] });
   return {
     id,
     trigger: 'AFTER_EVADE',
@@ -6923,11 +7098,24 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
     ...(def.normalAttackText !== undefined ? { text: { action: template(def.normalAttackText, entityName) } } : {}) }],
     ...(def.spell ? { uncritable: true, uncounterable: true } : {}) });
   // spCost 要放在第一個 action 上框架才會扣（Skill 只讀 action.spCost）。2026-11-20 修正：之前寫在技能層級，怪物放技能從來不扣 SP。
+  let charge = null;
   const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => {
+    if (spec.charge) {
+      // 蓄力（比照玩家寶石的蓄力）：這一動只扣 SP、掛「蓄力中」，下一個能行動的槽由 monsterSkillResolver 換成本體發射
+      const markerId = `monster_charged:${def.id}_${spec.id}`;
+      const release = remember(buildSkill(spec, def, stats, entityName));
+      charge = { markerId, release };
+      return remember(withSpCost(new Skill({ id: `${def.id}_${spec.id}_charge`, name: spec.name, actions: [{ type: 'BUFF', targetType: 'SELF',
+        text: { action: template(spec.chargeText ?? '{caster} 開始蓄力，', entityName), buff: '' },
+        buffs: [{ id: markerId, name: '蓄力中', type: 'STAT', polarity: 'neutral', duration: 1e6, stackPolicy: 'refresh', dispellable: false, effect: () => {} }] }] }), spec.spCost));
+    }
     const skill = withSpCost(buildSkill(spec, def, stats, entityName), spec.spCost);
-    return spec.chase && def.harmony ? withHarmonyChase(skill, def) : skill;
+    return skill.isCanon ? skill : remember(spec.chase && def.harmony ? withHarmonyChase(skill, def) : skill);
   });
-  const attack = def.harmony && difficulty >= (def.harmony.normalFrom ?? Infinity) ? withHarmonyChase(normalAttack, def) : normalAttack;
+  // noAttack（無序音符）：普攻的位置換成指定技能的不耗 SP 版本，永遠不普攻
+  const noAttackSpec = def.noAttack ? def.skills.find(spec => spec.id === def.noAttack) : null;
+  const plainAttack = noAttackSpec ? buildSkill(noAttackSpec, def, stats, entityName) : normalAttack;
+  const attack = remember(def.harmony && difficulty >= (def.harmony.normalFrom ?? Infinity) ? withHarmonyChase(plainAttack, def) : plainAttack);
   const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives, field: buildFieldPassive };
   const passives = (def.traits ?? []).filter(trait => difficulty >= (trait.from ?? 1)).flatMap(trait => {
     if (!TRAIT_BUILDERS[trait.kind]) throw new Error(`怪物「${def.id}」的特性種類不明：${trait.kind}`);
@@ -6937,7 +7125,53 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
   if (def.evadeCounter) passives.push(buildEvadeCounterPassive(def, stats, entityName));
   const entity = new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack: attack, normalAttackSpCost: 2, skills, passives, stats });
   entity.monsterId = def.id;
+  if (charge) entity.monsterCharge = charge;
   return entity;
+}
+
+// 記住上一次用的技能（卡農用）：卡農本身不包，所以不會被記住
+function remember(skill) {
+  const baseExecute = skill.execute;
+  skill.execute = function execute(caster, ...rest) {
+    if (!rest[3]?.counterSource) caster.lastSkill = skill;
+    return baseExecute.call(this, caster, ...rest);
+  };
+  return skill;
+}
+
+/**
+ * 怪物的選招替換（接在玩家 loadout 的 resolver 前面）：
+ *   1. 身上有「蓄力中」→ 移除標記，這一槽發射本體（同時用掉卡農的重複）。
+ *   2. 被卡農記了「重複上一招」→ 用上一次的技能（照扣 SP；不能用就照平常選）。蓄力發射後被重複＝直接再發射一次（使用者先選 B）。
+ * 回傳 undefined 代表這一槽照常。暈眩、動不了的槽不會選招，標記留到下一個能行動的槽。
+ */
+/** 替怪物選一招（獨奏的額外行動用）：蓄力中先發射；否則照技能施放率擲骰，從能用的技能裡隨機挑；都不行就普攻。 */
+function pickMonsterAction(entity, engine, { exclude } = {}) {
+  const charge = entity.monsterCharge;
+  if (charge && entity.buffs.some(b => b.id === charge.markerId)) {
+    entity.buffs = entity.buffs.filter(b => b.id !== charge.markerId);
+    return charge.release;
+  }
+  const rng = engine.rng ?? Math.random;
+  const usable = entity.skills.filter(skill => !skill.id.endsWith(`_${exclude}`) && skill.canCast(entity, engine));
+  if (usable.length && rng() < (entity.stats.skillCastRate ?? 0.35)) return usable[Math.floor(rng() * usable.length)];
+  return entity.normalAttack;
+}
+
+function monsterSkillResolver({ caster, engine }) {
+  if (!caster?.monsterId) return undefined;
+  const charge = caster.monsterCharge;
+  if (charge && caster.buffs.some(b => b.id === charge.markerId)) {
+    caster.buffs = caster.buffs.filter(b => b.id !== charge.markerId);
+    caster.canonPending = false;
+    return charge.release;
+  }
+  if (caster.canonPending) {
+    caster.canonPending = false;
+    const last = caster.lastSkill;
+    if (last && last.canCast(caster, engine)) return last;
+  }
+  return undefined;
 }
 
 /**
@@ -7043,7 +7277,8 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   return { monsters, summonFactory, info: { ids: picks.map(def => def.id), rare: hasRare, elite: hasElite, totalCost, scale } };
 }
 
-module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildPlayerEvadeCounterPassive, buildMonster, buildFromDef, availableMonsters, rollEncounter };
+module.exports = {
+  monsterSkillResolver, BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildPlayerEvadeCounterPassive, buildMonster, buildFromDef, availableMonsters, rollEncounter };
 
 },
 "gem/bosses.js": function (module, exports, require) {
@@ -7183,7 +7418,7 @@ module.exports = { BOSSES, findBoss, buildBossEncounter };
 
 const { ACTIVE_GEMS, SUPPORT_GEMS, STARTING_ACTIVE_GEMS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBonuses } = require('./statLayer');
-const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, ENGRAVING_TYPES, canEngrave, sumEffectAffixes, rollCombine, rollEngraving, COMBINE_INPUTS } = require('./affixTable');
+const { EFFECT_KINDS, ENGRAVINGS_PER_ITEM, LINES_PER_ENGRAVING, ENGRAVING_TYPES, canEngrave, sumEffectAffixes, rollCombine, rollEngraving, COMBINE_INPUTS, TIER_SCALE, ROLL_MIN } = require('./affixTable');
 const { compileLoadout } = require('./gemCompiler');
 const { QUALITIES, CRAFT_AFFIX_SLOTS, CRAFT_INPUTS, SALVAGE_RETURN, rollCraft, rerollCraftAffixes } = require('./craftTable');
 const { ACCESSORIES, STARTING_ACCESSORIES, accessoryAffixes } = require('./accessoryTable');
@@ -7194,7 +7429,7 @@ const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 9;
+const SAVE_VERSION = 10;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -7578,7 +7813,19 @@ const MIGRATIONS = {
     const progress = { ...save.progress, unlockedRegions: [...(save.progress?.unlockedRegions ?? [])] };
     if ((progress.defeatedBosses ?? []).includes('gatekeeper') && !progress.unlockedRegions.includes('hall')) progress.unlockedRegions.push('hall');
     return { ...save, version: 9, progress };
-  }
+  },
+  // v9 → v10：氣鳴楯【菲爾查哈】、撥弦槍【鶴之聲援】改版（2026-11-21 晚，行數變了）。舊的照原本的骰值比例重擲新的每一行，
+  // 比例從舊的第一行基底反推（菲爾查哈攻擊上限 372、鶴之聲援智力上限 319）。
+  9: save => ({
+    ...save, version: 10,
+    equipment: (save.equipment ?? []).map(item => {
+      const oldMax = { fircha: 372, cranelance: 319 }[item.legendaryId];
+      if (!oldMax || !TIER_SCALE[item.tier] || item.base?.length !== 1) return item;
+      const ratio = (item.base[0]?.value ?? 0) / (oldMax * TIER_SCALE[item.tier]);
+      const roll = Math.min(1, Math.max(0, (ratio - ROLL_MIN) / (1 - ROLL_MIN)));
+      return { ...item, ...rerollLegendaryValues(item, () => roll) };
+    })
+  })
 };
 
 /** 從背包與所有裝備連結裡刪掉指定的輔助寶石（遷移用；不改傳入的物件）。 */
@@ -8254,7 +8501,7 @@ function compileEquipped(save, options = {}) {
 
 /** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */
 function equippedMechanics(save) {
-  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom', 'counterPower', 'multiHitRamp'].includes(m.type));
+  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom', 'counterIgnoreDefense', 'chord'].includes(m.type));
 }
 
 /** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */
@@ -8375,8 +8622,9 @@ module.exports = {
 const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');
 const { applyStatBonuses } = require('./statLayer');
 const save = require('./saveLayer');
-const { rollEncounter, availableMonsters, REGIONS, buildPlayerEvadeCounterPassive } = require('./monsters');
+const { rollEncounter, availableMonsters, REGIONS, buildPlayerEvadeCounterPassive, monsterSkillResolver } = require('./monsters');
 const { applyResonance } = require('./resonance');
+const { buildChordPassives } = require('./chord');
 const { buildBossEncounter, findBoss } = require('./bosses');
 const { rollDrops } = require('./dropTable');
 
@@ -8416,11 +8664,16 @@ function buildHero(state) {
   const stat = loadout.normalAttackStat;
   const stats = heroStats(state);
   const passives = [...loadout.passives];
-  // 閃避反擊（第二區專屬刻印與傳說給反擊點數）：反擊 = 普攻屬性 × power；氣鳴楯【菲爾查哈】的 counterPower 提高倍率
+  const mechanics = save.equippedMechanics(state);
+  // 閃避反擊（第二區專屬刻印與傳說給反擊點數）：反擊 = 普攻屬性 × (1 + 反擊傷害)；氣鳴楯【菲爾查哈】讓反擊無視防禦
   if (stats.evadeCounter > 0) {
-    const power = save.equippedMechanics(state).filter(m => m.type === 'counterPower').reduce((p, m) => p * m.power, 1);
-    passives.push(buildPlayerEvadeCounterPassive({ stat, power, name: playerName(state) }));
+    const ignoreDefense = mechanics.some(m => m.type === 'counterIgnoreDefense');
+    // 菲爾查哈的反擊戰報（2026-11-21 使用者）
+    const text = ignoreDefense ? '{caster} 趁隙使用防禦性抓技反擊，這擊視防禦為無物，' : undefined;
+    passives.push(buildPlayerEvadeCounterPassive({ stat, power: 1 + (stats.counterDmg ?? 0), ignoreDefense, text, name: playerName(state) }));
   }
+  // 撥弦槍【鶴之聲援】的「妖精的和弦」（chord.js；法術傷害加成在 gemCompiler 的 withDynamicDamage）
+  for (const m of mechanics.filter(m => m.type === 'chord')) passives.push(...buildChordPassives(m));
   const hero = new Entity({
     id: 'hero', name: playerName(state), team: 'A', normalAttackSpCost: 2,
     normalAttack: new Skill({ id: 'hero_attack', name: '普攻', actions: [{ type: 'DAMAGE', stat }] }),
@@ -8477,12 +8730,18 @@ function prepareBattle(state, target, seed) {
     ({ monsters } = buildBossEncounter(target.id));
     info = { boss: true, elite: true };
   }
-  // 第二區的地區特色「共鳴」（resonance.js）：雙方每個單位都掛上共鳴被動
-  if (target.kind === 'region' && REGIONS[target.id].resonance) applyResonance([hero, ...monsters]);
+  // 第二區的地區特色「共鳴」（resonance.js）：雙方每個單位都掛上共鳴，戰鬥中召喚出來的也算
+  //（引擎召喚走 summonFactory；幻影戰斧的幻影是 gem 自己加進隊伍的，走 engine.onGemSummon）
+  const resonance = target.kind === 'region' && REGIONS[target.id].resonance;
+  if (resonance) applyResonance([hero, ...monsters]);
+  const factory = resonance && summonFactory ? (id, options) => { const e = summonFactory(id, options); if (e) applyResonance([e]); return e; } : summonFactory;
   const engine = new BattleEngine([hero], monsters, {
-    maxTurns: MAX_TURNS, rng: createSeededRandom(seed + 1), skillSelectionResolver: loadout.resolver,
-    hitFormula: 'contest', summonFactory
+    maxTurns: MAX_TURNS, rng: createSeededRandom(seed + 1),
+    // 怪物的蓄力與卡農（monsterSkillResolver）先問，玩家的蓄力等（loadout.resolver）再問
+    skillSelectionResolver: ctx => monsterSkillResolver(ctx) ?? loadout.resolver?.(ctx),
+    hitFormula: 'contest', summonFactory: factory
   });
+  if (resonance) engine.onGemSummon = entity => applyResonance([entity]);
   // 開場的敵人血量（介面只顯示血量，其他數值不顯示）
   const opening = monsters.map(hpOf);
   return { engine, hero, monsters, info, difficulty, name, opening };
@@ -8818,13 +9077,11 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
         h('strong', { text: d }),
         h('button', { text: '+', 'aria-label': '提高難度', disabled: d >= S.MAX_DIFFICULTY, onclick: () => apply(s => S.setDifficulty(s, d + 1)) })),
       h('div', { class: 'muted', style: 'margin-top:8px', text: `怪物強度 ${game.strengthLevel(d)}` }));
-    const regionCards = Object.values(M.REGIONS).map(region => {
-      const open = regions.includes(region.id);
-      return h('div', { class: 'region-card' },
+    // 還沒開放的地區整張卡不顯示（2026-11-21 使用者：和聲音樂廳打贏中央廳才出現）
+    const regionCards = Object.values(M.REGIONS).filter(region => regions.includes(region.id)).map(region =>
+      h('div', { class: 'region-card' },
         h('h3', { text: region.name }),
-        open ? null : h('p', { class: 'muted', text: '尚未開放（擊敗 Boss 後解鎖）' }),
-        battleButton(`出發（難度 ${d}）`, { kind: 'region', id: region.id, difficulty: d }, { disabled: !open }));
-    });
+        battleButton(`出發（難度 ${d}）`, { kind: 'region', id: region.id, difficulty: d })));
     const bosses = S.bossStatus(state);
     const bossPanel = h('div', { class: 'panel' }, h('h2', { text: '挑戰Boss' }), h('p', { class: 'muted', style: 'margin:-4px 0 8px', text: 'Boss難度固定，勝利可以開啟新地圖（尚未實裝）' }),
       h('div', { class: 'stack' }, bosses.map(b => h('div', { class: 'boss' },

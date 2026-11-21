@@ -492,13 +492,11 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
         h('strong', { text: d }),
         h('button', { text: '+', 'aria-label': '提高難度', disabled: d >= S.MAX_DIFFICULTY, onclick: () => apply(s => S.setDifficulty(s, d + 1)) })),
       h('div', { class: 'muted', style: 'margin-top:8px', text: `怪物強度 ${game.strengthLevel(d)}` }));
-    const regionCards = Object.values(M.REGIONS).map(region => {
-      const open = regions.includes(region.id);
-      return h('div', { class: 'region-card' },
+    // 還沒開放的地區整張卡不顯示（2026-11-21 使用者：和聲音樂廳打贏中央廳才出現）
+    const regionCards = Object.values(M.REGIONS).filter(region => regions.includes(region.id)).map(region =>
+      h('div', { class: 'region-card' },
         h('h3', { text: region.name }),
-        open ? null : h('p', { class: 'muted', text: '尚未開放（擊敗 Boss 後解鎖）' }),
-        battleButton(`出發（難度 ${d}）`, { kind: 'region', id: region.id, difficulty: d }, { disabled: !open }));
-    });
+        battleButton(`出發（難度 ${d}）`, { kind: 'region', id: region.id, difficulty: d })));
     const bosses = S.bossStatus(state);
     const bossPanel = h('div', { class: 'panel' }, h('h2', { text: '挑戰Boss' }), h('p', { class: 'muted', style: 'margin:-4px 0 8px', text: 'Boss難度固定，勝利可以開啟新地圖（尚未實裝）' }),
       h('div', { class: 'stack' }, bosses.map(b => h('div', { class: 'boss' },

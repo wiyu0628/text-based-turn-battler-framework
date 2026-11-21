@@ -39,7 +39,7 @@ add('角色', '角色基礎屬性與新手武器', '角色沒有等級，成長�
   [
     ...Object.entries(game.HERO_BASE).map(([k, v]) => [statName(k) === k ? k : statName(k), v, k === 'skillCastRate' ? '每個行動槽嘗試放技能的機率' : '']),
     ['戰鬥回合上限', game.MAX_TURNS, '超過算平手'],
-    ['閃避反擊', `反擊點數 > 0 才有`, `躲開攻擊後擲反擊：機率 = ${M.EVADE_COUNTER.ceiling} ÷ (1 + e^(−(自己點數 − 攻擊者點數) ÷ ${M.EVADE_COUNTER.scale}))（點數相同 ${pct(M.EVADE_COUNTER.ceiling / 2)}、上限 ${pct(M.EVADE_COUNTER.ceiling)}）；反擊 = 普攻屬性 × 100%（菲爾查哈 ×2），法術躲開不反擊`],
+    ['閃避反擊', `反擊點數 > 0 才有`, `躲開攻擊後擲反擊：機率 = ${M.EVADE_COUNTER.ceiling} ÷ (1 + e^(−(自己點數 − 攻擊者點數) ÷ ${M.EVADE_COUNTER.scale}))（點數相同 ${pct(M.EVADE_COUNTER.ceiling / 2)}、上限 ${pct(M.EVADE_COUNTER.ceiling)}）；反擊 = 普攻屬性 × (100% + 反擊傷害)，法術躲開不反擊；菲爾查哈讓反擊無視防禦`],
     ...game.STARTER_WEAPONS.map(w => [w.name, `普攻屬性：${w.attackStat === 'int' ? '智力' : '攻擊'}`, `沒有加成、施放權重 ${w.castWeight}、不能分解、可刻刻印`])
   ]);
 
@@ -57,7 +57,7 @@ add('難度', '難度縮放與掉落', `怪物 HP／攻擊／智力 × 倍率；
 add('地區', '地區', `每場隻數在範圍內；稀有怪 ${pct(M.RARE_CHANCE)}、沒出稀有時菁英 ${pct(M.ELITE_CHANCE)}（各最多一隻、不同時出現），其餘依預算補普通怪。`,
   ['地區 id', '名稱', '第幾區', '開放條件', '地區特色', '每場隻數', '強度預算', '怪物（依出現難度）'],
   Object.values(M.REGIONS).map(r => [r.id, r.name, r.area ?? 1, r.locked ? B.BOSSES.filter(b => b.rewards.unlockRegions?.includes(r.id)).map(b => `打倒${b.name}`).join('、') : '一開始',
-    r.resonance ? `共鳴：每次被攻擊打中（有傷害）疊 1 層，雙方都會；${RES.RESONANCE.stacks} 層爆發，受到自己最大 HP ${pct(RES.RESONANCE.burstRatio)} 的直接傷害並歸零；怪物爆發時有減傷就解除減傷，沒有就易傷（承受傷害 +${pct(RES.RESONANCE.vulnerable)}，${RES.RESONANCE.vulnerableDuration} 槽，可驅散）；層數不消退` : '',
+    r.resonance ? `共鳴：每次被攻擊打中（沒被閃避就算，打在護盾上也算）疊 1 層，雙方都會；${RES.RESONANCE.stacks} 層爆發並歸零，受到 自己最大 HP × ${pct(RES.RESONANCE.burstRatio)} × 防禦減傷（300 ÷ (防禦 + 300)）的傷害；怪物爆發時有減傷就解除減傷，沒有就易傷（承受傷害 +${pct(RES.RESONANCE.vulnerable)}，${RES.RESONANCE.vulnerableDuration} 槽，可驅散）；層數不消退` : '',
     `${r.count[0]}～${r.count[1]}`, r.budget,
     r.monsters.map(id => `${M.MONSTERS[id].name}（難度 ${M.MONSTERS[id].from}～${M.MONSTERS[id].maxPerEncounter ? `，每場最多 ${M.MONSTERS[id].maxPerEncounter} 隻` : ''}${M.MONSTERS[id].group ? `，一次至少 ${M.MONSTERS[id].group} 隻` : ''}）`).join('、')]));
 
@@ -68,7 +68,7 @@ const statsAt = (def, d) => M.buildFromDef(def, d, { id: 'x' }).stats;
 add('怪物', '怪物屬性', `倍率欄以基準怪（HP ${M.BASE_MONSTER.hp}、攻擊 ${M.BASE_MONSTER.atk}、智力 ${M.BASE_MONSTER.int}）為 1；防禦是難度 1 的值（每級 +${DIFF.DEF_PER_LEVEL}），速度／閃避是固定值。SP 隨難度：${M.MONSTER_SP.base} ＋ ${M.MONSTER_SP.perLevel} ×（難度 − 1）；怪物放技能會扣 SP。後面各難度欄是單隻、預算縮放前的實際值（遭遇戰會再依預算縮放 HP 與攻擊／智力）。`,
   ['地區', 'id', '名稱', '稀有度', '出現難度', '預算成本', '傷害類型', 'HP 倍率', '攻擊倍率', '智力倍率', '防禦', '速度', '閃避', 'SP', '施放率',
     ...SHOW_DIFFS.flatMap(d => [`難度${d} HP`, `難度${d} 攻擊/智力`])],
-  Object.values(M.MONSTERS).map(def => [regionOf(def.id), def.id, def.name, rarity(def), def.from, def.cost, def.spell ? '法術（智力）' : '物理（攻擊）',
+  Object.values(M.MONSTERS).map(def => [regionOf(def.id), def.id, def.name, rarity(def), def.from, def.cost, def.noAttack ? '不造成傷害（不普攻）' : def.spell ? '法術（智力）' : '物理（攻擊）',
     def.stats.hp, def.stats.atk ?? 0, def.stats.int ?? 0, def.stats.def ?? M.BASE_MONSTER.def, def.stats.spd ?? M.BASE_MONSTER.spd, def.stats.eva ?? 0,
     def.stats.sp ?? `${M.MONSTER_SP.base}＋${M.MONSTER_SP.perLevel}×(難度−1)`, def.skillCastRate ?? 0.35,
     ...SHOW_DIFFS.flatMap(d => { const s = statsAt(def, d); return [s.maxHp, def.spell ? s.int : s.atk]; })]));
@@ -83,17 +83,24 @@ function skillEffect(s) {
   if (s.kind === 'buff') return ['', `${statName(s.stat)} × ${s.mult}，${s.duration} 槽`];
   if (s.kind === 'shield') return ['', s.power != null ? `護盾 = 施放者攻擊/智力 × ${Math.round(s.power * 100)}%，${s.duration} 槽` : `護盾 = 施放者最大 HP × ${Math.round(s.ratio * 100)}%，${s.duration} 槽`];
   if (s.kind === 'heal') return [`${Math.round(s.power * 100)}%`, '治療（讀施放者的攻擊/智力）'];
+  if (s.kind === 'debuff') return ['', `${Object.entries(s.stats).map(([k, m]) => `${statName(k)} × ${m}`).join('、')}，${s.duration} 槽（可驅散）`];
+  if (s.kind === 'silence') return ['', `沉默 ${s.duration} 槽：不能用技能、只能普攻（可驅散）`];
+  if (s.kind === 'drain') return ['', `讓目標失去 ${s.sp} 點 SP`];
+  if (s.kind === 'resonate') return ['', `替目標疊 ${s.stacks} 層共鳴（沒有共鳴的地區無效）`];
+  if (s.kind === 'solo') return ['', '攻擊力最高的隊友（不含自己）在這個行動槽之後多行動一次（照平常選招，不會選到獨奏；蓄力中就發射）；沒有隊友時不施放'];
+  if (s.kind === 'canon') return ['', '其他隊友（不含自己）下一個能行動的槽重複上一次用的技能（照扣 SP，不能用就照常選招；卡農本身不會被記住）；沒有隊友出過招時不施放'];
   if (s.kind === 'cleanse') return ['', '清除我方全體可驅散的減益（共鳴層數清不掉）；沒有可清除的減益時不施放'];
   return ['', JSON.stringify(s)];
 }
-const KIND = { attack: '攻擊', buff: '增減益', shield: '護盾', heal: '治療', cleanse: '淨化' };
+const KIND = { attack: '攻擊', buff: '增減益', shield: '護盾', heal: '治療', cleanse: '淨化', canon: '卡農', debuff: '干擾', silence: '干擾', drain: '干擾', resonate: '干擾', solo: '輔助' };
 const bossDefs = B.BOSSES.flatMap(b => b.monsters.map(m => ({ ...m, boss: b })));
 add('怪物技能', '怪物技能', '「解鎖難度」起才會使用；倍率是攻擊或智力（法術怪）的百分比。',
   ['怪物', '技能 id', '技能', '種類', '解鎖難度', 'SP', '目標', '倍率', '效果'],
   [...Object.values(M.MONSTERS), ...bossDefs].flatMap(def => def.skills.map(s => {
     const [power, effect] = skillEffect(s);
+    const charged = s.charge ? '先蓄力（這一動只扣 SP），下一個能行動的槽才發射；被卡農重複時直接再發射' : '';
     const chase = s.chase && def.harmony ? `命中後其他${def.name}各追擊一次（攻擊 ${Math.round(def.harmony.power * 100)}%）；難度 ${def.harmony.normalFrom} 起普攻也會引發追擊` : '';
-    return [def.boss ? `Boss：${def.name}` : def.name, s.id, s.name, KIND[s.kind] ?? s.kind, s.from, s.spCost ?? 0, TARGET[s.target] ?? s.target, power, [effect, chase].filter(Boolean).join('；')];
+    return [def.boss ? `Boss：${def.name}` : def.name, s.id, s.name, KIND[s.kind] ?? s.kind, s.from, s.spCost ?? 0, TARGET[s.target] ?? ({ canon: '其他隊友', solo: '攻擊力最高的隊友', debuff: '敵方單體', silence: '敵方單體', drain: '敵方單體', resonate: '敵方單體' }[s.kind] ?? s.target), power, [charged, effect, chase].filter(Boolean).join('；')];
   })));
 function traitText(t) {
   if (t.kind === 'split') return `HP 第一次低於 ${pct(t.at)} 時分裂出 ${t.count} 隻「${t.name}」（HP ${pct(t.hpRatio)}、攻擊/智力 ${pct(t.statRatio)}）`;
@@ -181,13 +188,13 @@ add('異常', '異常狀態', '持續時間以中招者的行動槽計；重複�
 add('傳說裝備', '傳說裝備', '只能掉落，不能刻刻印、沒有製作詞綴。分解得 1 顆黑骰；黑骰可依掉落時的階級重置一件傳說裝備的數值（施放權重不變）。數值依掉落難度的最高刻印階縮放，再擲 0.7～1（標「固定區間」的不縮放）。施放權重 60～120。',
   ['id', '名稱', '掉落地區', '部位', '普攻屬性', '基底（上限）', '獨有詞綴（上限）', '機制'],
   Object.values(L.LEGENDARIES).map(l => [l.id, l.name, (l.area ?? 1) === 1 ? '所有地區' : `第 ${l.area} 區`, SLOT[l.slot], l.attackStat === 'int' ? '智力' : '攻擊',
-    l.base.map(b => `${statName(b.stat)} +${b.max}`).join('、'), l.unique.map(u => u.scope === 'effect' ? `${{ summonHp: '召喚物生命', physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷' }[u.kind] ?? u.kind} +${pct(u.max)}` : u.range ? `${statName(u.stat)} ${pct(u.range[0])}～${pct(u.range[1])}（固定區間）` : ['cri', 'criDmg'].includes(u.stat) ? `${statName(u.stat)} +${pct(u.max)}` : `${statName(u.stat)}${u.op === 'inc' ? '提高 ' + pct(u.max) : ' +' + u.max}`).join('、'),
+    l.base.map(b => `${statName(b.stat)} +${b.max}`).join('、'), l.unique.map(u => u.scope === 'effect' ? `${{ summonHp: '召喚物生命', physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷' }[u.kind] ?? u.kind} +${pct(u.max)}` : u.range ? `${statName(u.stat)} ${pct(u.range[0])}～${pct(u.range[1])}（固定區間）` : S.STAT_DEFS[u.stat]?.display === 'percent' ? `${statName(u.stat)} +${pct(u.max)}` : `${statName(u.stat)}${u.op === 'inc' ? '提高 ' + pct(u.max) : ' +' + u.max}`).join('、'),
     l.mechanics.map(m => describeMechanic(m, id => G.SUPPORT_GEMS[id]?.name ?? id).replace('獲得護盾', m.type === 'spShield' ? `獲得護盾（智力 × SP × ${m.ratio}）` : '獲得護盾') + (m.type === 'phantom' ? `（幻影屬性 × 玩家：${['hp', 'spd', 'atk', 'int', 'def'].map(k => `${statName(k)} ${m.ratios?.[k] ?? (k === 'spd' ? 1 : m.ratio)}`).join('、')}；生命再乘 1 + 召喚物生命）` : '')).join('；')]));   // 後台多寫護盾倍率；玩家說明不寫
 
 // ── 飾品 ──
 const accessoryLine = a => a.scope === 'effect'
   ? (a.kind === 'ailmentDuration' ? `異常持續時間 +${a.value} 槽` : `${a.kind} +${a.value}`)
-  : (['cri', 'criDmg', 'skillCastRate'].includes(a.stat) ? `${statName(a.stat)} +${pct(a.value)}` : `${statName(a.stat)} +${a.value}`);
+  : (S.STAT_DEFS[a.stat]?.display === 'percent' ? `${statName(a.stat)} +${pct(a.value)}` : `${statName(a.stat)} +${a.value}`);
 const accessorySource = id => (AC.STARTING_ACCESSORIES.includes(id) ? '開局' : B.BOSSES.filter(b => b.rewards.accessories?.includes(id)).map(b => `${b.name}首次擊敗`).join('、') || '暫不可取得');
 add('飾品', '飾品', `玩家看到的類別名是${AC.ACCESSORY_LABEL}。飾品欄只有 1 個；飾品沒有基礎數值、刻印與寶石，只有固定的特殊詞綴（擁有制，每種最多 1 個）。`,
   ['id', '名稱', '特殊詞綴', '取得'],

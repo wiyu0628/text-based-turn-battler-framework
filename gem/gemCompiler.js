@@ -749,6 +749,7 @@ function buildPhantomPassive(spec, summonHp = 0) {
       phantom.summonerId = self.id;
       phantom.gemPhantom = true;
       (self.team === 'A' ? engine.teamA : engine.teamB).push(phantom);
+      engine.onGemSummon?.(phantom);   // 地區特色（例如共鳴）也套到幻影身上
       self.gemPhantom = phantom;
       logger.addLog({ type: 'SUMMON', actorId: self.id, targetId: phantom.id, message: fill(spec.summonText ?? '{caster} 召喚了幻影！') });
     }
@@ -909,7 +910,7 @@ const makeSkill = (config, conditions) => Object.keys(conditions).length ? new C
  * @throws {Error} 寶石資料本身有誤時（見 validateGemData）
  */
 function compileSkill(activeId, supportIds = [], {
-  activeGems = ACTIVE_GEMS, supportGems = SUPPORT_GEMS, groups = GROUPS, maxSupports = MAX_SUPPORTS, equipment = null
+  activeGems = ACTIVE_GEMS, supportGems = SUPPORT_GEMS, groups = GROUPS, maxSupports = MAX_SUPPORTS, equipment = null, mechanics = []
 } = {}) {
   if (!Number.isInteger(maxSupports) || maxSupports < 0) {
     throw new Error(`maxSupports 必須是不小於 0 的整數，收到 ${maxSupports}`);
@@ -1032,6 +1033,8 @@ function compileSkill(activeId, supportIds = [], {
   });
 
   // 結算：加算區先加總，乘算區各自相乘，兩區最後才相乘。這一步對所有 DAMAGE 段（含追加的）生效。
+  // 撥弦槍【鶴之聲援】的和弦：施放當下才知道加成，當成一種動態加算（只加在智力的傷害段，見 withDynamicDamage）
+  if (mechanics.some(m => m.type === 'chord')) draft.dynamics.push({ op: 'chordInc' });
   const incSum = draft.inc.reduce((sum, value) => sum + value, 0);
   const moreProduct = draft.more.reduce((product, value) => product * (1 + value), 1);
   const factor = (1 + incSum) * moreProduct;
@@ -1188,6 +1191,7 @@ function compileSkill(activeId, supportIds = [], {
  * 每次施放依施放者當下的狀態算出倍率，用一個暫時的變體（Object.create）帶著改好 power 的動作去打，不改技能本身。
  *   condInc      條件成立時把 value 加進這段的加算區：power × (底數 + value) ÷ 底數
  *   critAsDamage 乘上 1 + 爆擊率 × (爆擊傷害 − 1)（爆擊率夾在 0～1；讀含 Buff 的實際屬性）
+ *   chordInc     撥弦槍的和弦：施放者的 gemChordBonus（和弦值 × 1%）加進「智力」傷害段（法術）的加算區
  */
 function withDynamicDamage(skill, dynamics) {
   if (!dynamics.length) return skill;
@@ -1195,17 +1199,19 @@ function withDynamicDamage(skill, dynamics) {
   skill.execute = function execute(caster, ...rest) {
     const stats = caster.getEffectiveStats?.() ?? caster.stats;
     const hpRatio = caster.stats.maxHp > 0 ? caster.stats.hp / caster.stats.maxHp : 1;
-    let inc = 0, more = 1;
+    let inc = 0, more = 1, spellInc = 0;
     for (const effect of dynamics) {
       if (effect.op === 'condInc' && hpRatio < effect.when.hpBelow) inc += effect.value;
       if (effect.op === 'critAsDamage') more *= 1 + Math.min(1, Math.max(0, stats.cri || 0)) * Math.max(0, (stats.criDmg ?? 1.5) - 1);
+      if (effect.op === 'chordInc') spellInc += caster.gemChordBonus || 0;
     }
-    if (inc === 0 && more === 1) return base.call(this, caster, ...rest);
+    if (inc === 0 && more === 1 && spellInc === 0) return base.call(this, caster, ...rest);
     const variant = Object.create(this);
     variant.actions = this.actions.map(action => {
       if (action.type !== 'DAMAGE') return action;
       const incBase = action.gemIncBase ?? 1;
-      return { ...action, power: round4(action.power * (incBase + inc) / incBase * more) };
+      const add = inc + (action.stat === 'int' ? spellInc : 0);
+      return { ...action, power: round4(action.power * (incBase + add) / incBase * more) };
     });
     return base.call(variant, caster, ...rest);
   };
@@ -1443,12 +1449,6 @@ function buildWeightGuardPassive() {
  *   compiled  每組的完整編譯結果（含 spCost、damageFactor、links），給 UI 顯示用
  * @throws {GemLinkError} 任何一組連結不合法，或兩組編譯出同一個技能 id（同一顆主動寶石連結相同輔助寶石兩次）
  */
-function withMultiHitRamp(skill, ramp) {
-  let k = 0;
-  skill.actions = skill.actions.map(action => (action.type === 'DAMAGE' ? { ...action, power: round4((action.power ?? 1) * (1 + ramp * k++)) } : action));
-  return skill;
-}
-
 function compileLoadout(gems, options = {}) {
   const compiled = [];
   const seen = new Set();
@@ -1482,14 +1482,6 @@ function compileLoadout(gems, options = {}) {
   const breakSp = mechanics.filter(m => m.type === 'shieldBreakSp').reduce((sum, m) => sum + m.sp, 0);
   const phantom = mechanics.find(m => m.type === 'phantom');
   if (phantom) for (const result of chasers) for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withPhantomChase(skill, phantom);
-  // 撥弦槍【鶴之聲援】（2026-11-21）：法術技能的傷害段從第 2 段起，每段倍率 × (1 + ramp × 段序)
-  const ramp = mechanics.filter(m => m.type === 'multiHitRamp').reduce((sum, m) => sum + m.ramp, 0);
-  if (ramp > 0) {
-    for (const result of compiled) {
-      if (!(options.activeGems ?? ACTIVE_GEMS)[result.activeId]?.tags?.includes('spell')) continue;
-      for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withMultiHitRamp(skill, ramp);
-    }
-  }
   const hasCharge = compiled.some(result => result.charge);
   const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
   return {
