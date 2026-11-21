@@ -1443,6 +1443,12 @@ function buildWeightGuardPassive() {
  *   compiled  每組的完整編譯結果（含 spCost、damageFactor、links），給 UI 顯示用
  * @throws {GemLinkError} 任何一組連結不合法，或兩組編譯出同一個技能 id（同一顆主動寶石連結相同輔助寶石兩次）
  */
+function withMultiHitRamp(skill, ramp) {
+  let k = 0;
+  skill.actions = skill.actions.map(action => (action.type === 'DAMAGE' ? { ...action, power: round4((action.power ?? 1) * (1 + ramp * k++)) } : action));
+  return skill;
+}
+
 function compileLoadout(gems, options = {}) {
   const compiled = [];
   const seen = new Set();
@@ -1459,6 +1465,7 @@ function compileLoadout(gems, options = {}) {
     }
     const result = grantedSupports.length ? compileWithGranted(active, supports, grantedSupports, options) : compileSkill(active, supports, options);
     result.weight = weight;
+    result.activeId = active;
     if (castOnEnemyDeath) deathCasts.push([result, castOnEnemyDeath.text]);
     if (castOnCrit) critCasts.push([result, castOnCrit]);
     if (phantomChase) chasers.push(result);
@@ -1475,6 +1482,14 @@ function compileLoadout(gems, options = {}) {
   const breakSp = mechanics.filter(m => m.type === 'shieldBreakSp').reduce((sum, m) => sum + m.sp, 0);
   const phantom = mechanics.find(m => m.type === 'phantom');
   if (phantom) for (const result of chasers) for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withPhantomChase(skill, phantom);
+  // 撥弦槍【鶴之聲援】（2026-11-21）：法術技能的傷害段從第 2 段起，每段倍率 × (1 + ramp × 段序)
+  const ramp = mechanics.filter(m => m.type === 'multiHitRamp').reduce((sum, m) => sum + m.ramp, 0);
+  if (ramp > 0) {
+    for (const result of compiled) {
+      if (!(options.activeGems ?? ACTIVE_GEMS)[result.activeId]?.tags?.includes('spell')) continue;
+      for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withMultiHitRamp(skill, ramp);
+    }
+  }
   const hasCharge = compiled.some(result => result.charge);
   const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
   return {

@@ -60,7 +60,9 @@ const ENGRAVING_TYPES = {
   gale:     { name: '疾風', lines: [stat('spd', 'inc', 0.21), stat('sp', 'flat', 50), stat('cri', 'flat', 0.04)] },
   endure:   { name: '持久', lines: [stat('sp', 'flat', 75), stat('hp', 'inc', 0.15), stat('atk', 'inc', 0.12)] },
   // 靈巧：命中與閃避（遊戲用 hitFormula: 'contest'，命中 = 200 + hit、閃避機率 = (100 + max(0, 差距)) / (200 + |差距|)）
-  deft:     { name: '靈巧', lines: [stat('hit', 'flat', 150), stat('eva', 'flat', 50), stat('spd', 'inc', 0.12)] }
+  deft:     { name: '靈巧', lines: [stat('hit', 'flat', 150), stat('eva', 'flat', 50), stat('spd', 'inc', 0.12)] },
+  // 迴音（2026-11-21，第二區專屬：area 2 只在第二區掉落，合成也不會隨機出現）：閃避、反擊點數、爆擊率（使用者指定三項；數值是我擬的）
+  resound:  { name: '迴音', area: 2, lines: [stat('eva', 'flat', 50), stat('evadeCounter', 'flat', 60), stat('cri', 'flat', 0.06)] }
 };
 // 各刻印能刻到哪些部位（使用者決定：部位專用是限制手段，避免全身都堆同一種效果，也讓各部位有差異）。
 // 只限制「刻到裝備上」（saveLayer.engraveEquipment）；製作裝備時投入的刻印、掉落與合成都不受限。
@@ -73,6 +75,7 @@ const ENGRAVING_SLOTS = {
   vital:   ['helmet', 'armor', 'boots'],
   bulwark: ['armor', 'boots'],
   gale:    ['weapon', 'boots'],
+  resound: ['helmet', 'boots'],
   endure:  ['helmet', 'armor', 'boots'],
   deft:    ['helmet', 'boots']
 };
@@ -159,10 +162,10 @@ function sumEffectAffixes(affixes) {
  * @param {string[]} types 剛好 COMBINE_INPUTS 個 ENGRAVING_TYPES 的鍵，可重複
  * @param {number} tier 投入刻印的階級（三顆同階），1～4
  * @param {() => number} [rng] 預設 Math.random；只有不同種合成會呼叫一次，r 對應 pool[floor(r × 長度)]（超過範圍夾到最後一個）
- * @param {string[]} [pool] 不同種合成的抽取池，預設 ENGRAVING_TYPES 的所有鍵（表裡的順序）
+ * @param {string[]} [pool] 不同種合成的抽取池，預設第一區的刻印種類（表裡的順序；地區專屬的不會合成出來）
  * @returns {{ type: string, tier: number, mode: 'same'|'mixed' }}
  */
-function rollCombine(types, tier, rng = Math.random, pool = Object.keys(ENGRAVING_TYPES)) {
+function rollCombine(types, tier, rng = Math.random, pool = Object.keys(ENGRAVING_TYPES).filter(id => (ENGRAVING_TYPES[id].area ?? 1) === 1)) {
   checkTier(tier);
   if (tier >= MAX_TIER) throw new Error(`第 ${MAX_TIER} 階已經是最高階，不能合成`);
   if (!Array.isArray(types) || types.length !== COMBINE_INPUTS) {

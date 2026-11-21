@@ -3106,7 +3106,9 @@ const STAT_DEFS = {
   eva:           { name: '閃避',       display: 'number',  integer: true,  min: 0, fallback: 0 },
   cri:           { name: '暴擊率',     display: 'percent', integer: false, min: 0, max: 1, fallback: 0 },
   criDmg:        { name: '暴擊傷害',   display: 'percent', integer: false, min: 1, fallback: 1.5 },
-  skillCastRate: { name: '技能施放率', display: 'percent', integer: false, min: 0, max: 1, fallback: 0.35 }
+  skillCastRate: { name: '技能施放率', display: 'percent', integer: false, min: 0, max: 1, fallback: 0.35 },
+  // 閃避反擊的點數（2026-11-21，第二區專屬刻印與傳說）：閃避成功後依點數擲反擊，見 monsters.evadeCounterChance
+  evadeCounter:  { name: '反擊點數',   display: 'number',  integer: true,  min: 0, fallback: 0 }
 };
 const BONUS_OPS = new Set(['flat', 'inc', 'more']);
 
@@ -5303,6 +5305,12 @@ function buildWeightGuardPassive() {
  *   compiled  每組的完整編譯結果（含 spCost、damageFactor、links），給 UI 顯示用
  * @throws {GemLinkError} 任何一組連結不合法，或兩組編譯出同一個技能 id（同一顆主動寶石連結相同輔助寶石兩次）
  */
+function withMultiHitRamp(skill, ramp) {
+  let k = 0;
+  skill.actions = skill.actions.map(action => (action.type === 'DAMAGE' ? { ...action, power: round4((action.power ?? 1) * (1 + ramp * k++)) } : action));
+  return skill;
+}
+
 function compileLoadout(gems, options = {}) {
   const compiled = [];
   const seen = new Set();
@@ -5319,6 +5327,7 @@ function compileLoadout(gems, options = {}) {
     }
     const result = grantedSupports.length ? compileWithGranted(active, supports, grantedSupports, options) : compileSkill(active, supports, options);
     result.weight = weight;
+    result.activeId = active;
     if (castOnEnemyDeath) deathCasts.push([result, castOnEnemyDeath.text]);
     if (castOnCrit) critCasts.push([result, castOnCrit]);
     if (phantomChase) chasers.push(result);
@@ -5335,6 +5344,14 @@ function compileLoadout(gems, options = {}) {
   const breakSp = mechanics.filter(m => m.type === 'shieldBreakSp').reduce((sum, m) => sum + m.sp, 0);
   const phantom = mechanics.find(m => m.type === 'phantom');
   if (phantom) for (const result of chasers) for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withPhantomChase(skill, phantom);
+  // 撥弦槍【鶴之聲援】（2026-11-21）：法術技能的傷害段從第 2 段起，每段倍率 × (1 + ramp × 段序)
+  const ramp = mechanics.filter(m => m.type === 'multiHitRamp').reduce((sum, m) => sum + m.ramp, 0);
+  if (ramp > 0) {
+    for (const result of compiled) {
+      if (!(options.activeGems ?? ACTIVE_GEMS)[result.activeId]?.tags?.includes('spell')) continue;
+      for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withMultiHitRamp(skill, ramp);
+    }
+  }
   const hasCharge = compiled.some(result => result.charge);
   const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
   return {
@@ -5424,7 +5441,9 @@ const ENGRAVING_TYPES = {
   gale:     { name: '疾風', lines: [stat('spd', 'inc', 0.21), stat('sp', 'flat', 50), stat('cri', 'flat', 0.04)] },
   endure:   { name: '持久', lines: [stat('sp', 'flat', 75), stat('hp', 'inc', 0.15), stat('atk', 'inc', 0.12)] },
   // 靈巧：命中與閃避（遊戲用 hitFormula: 'contest'，命中 = 200 + hit、閃避機率 = (100 + max(0, 差距)) / (200 + |差距|)）
-  deft:     { name: '靈巧', lines: [stat('hit', 'flat', 150), stat('eva', 'flat', 50), stat('spd', 'inc', 0.12)] }
+  deft:     { name: '靈巧', lines: [stat('hit', 'flat', 150), stat('eva', 'flat', 50), stat('spd', 'inc', 0.12)] },
+  // 迴音（2026-11-21，第二區專屬：area 2 只在第二區掉落，合成也不會隨機出現）：閃避、反擊點數、爆擊率（使用者指定三項；數值是我擬的）
+  resound:  { name: '迴音', area: 2, lines: [stat('eva', 'flat', 50), stat('evadeCounter', 'flat', 60), stat('cri', 'flat', 0.06)] }
 };
 // 各刻印能刻到哪些部位（使用者決定：部位專用是限制手段，避免全身都堆同一種效果，也讓各部位有差異）。
 // 只限制「刻到裝備上」（saveLayer.engraveEquipment）；製作裝備時投入的刻印、掉落與合成都不受限。
@@ -5437,6 +5456,7 @@ const ENGRAVING_SLOTS = {
   vital:   ['helmet', 'armor', 'boots'],
   bulwark: ['armor', 'boots'],
   gale:    ['weapon', 'boots'],
+  resound: ['helmet', 'boots'],
   endure:  ['helmet', 'armor', 'boots'],
   deft:    ['helmet', 'boots']
 };
@@ -5523,10 +5543,10 @@ function sumEffectAffixes(affixes) {
  * @param {string[]} types 剛好 COMBINE_INPUTS 個 ENGRAVING_TYPES 的鍵，可重複
  * @param {number} tier 投入刻印的階級（三顆同階），1～4
  * @param {() => number} [rng] 預設 Math.random；只有不同種合成會呼叫一次，r 對應 pool[floor(r × 長度)]（超過範圍夾到最後一個）
- * @param {string[]} [pool] 不同種合成的抽取池，預設 ENGRAVING_TYPES 的所有鍵（表裡的順序）
+ * @param {string[]} [pool] 不同種合成的抽取池，預設第一區的刻印種類（表裡的順序；地區專屬的不會合成出來）
  * @returns {{ type: string, tier: number, mode: 'same'|'mixed' }}
  */
-function rollCombine(types, tier, rng = Math.random, pool = Object.keys(ENGRAVING_TYPES)) {
+function rollCombine(types, tier, rng = Math.random, pool = Object.keys(ENGRAVING_TYPES).filter(id => (ENGRAVING_TYPES[id].area ?? 1) === 1)) {
   checkTier(tier);
   if (tier >= MAX_TIER) throw new Error(`第 ${MAX_TIER} 階已經是最高階，不能合成`);
   if (!Array.isArray(types) || types.length !== COMBINE_INPUTS) {
@@ -5605,7 +5625,8 @@ const KIND_SHARES = {
   bulwark: { def: 0.6, hp: 0.4 },
   gale:    { spd: 0.6, hp: 0.2, sp: 0.2 },
   endure:  { hp: 0.4, sp: 0.4, def: 0.2 },
-  deft:    { spd: 0.5, hp: 0.3, atk: 0.1, int: 0.1 }
+  deft:    { spd: 0.5, hp: 0.3, atk: 0.1, int: 0.1 },
+  resound: { spd: 0.4, hp: 0.3, def: 0.3 }   // 迴音（第二區專屬）
 };
 
 const SLOT_MULT = {
@@ -5728,8 +5749,14 @@ module.exports = { rerollCraftAffixes, CRAFT_INPUTS, CRAFT_AFFIX_SLOTS, SALVAGE_
  *     難度 6、9、12（下一階開放的前一級）有 3% 機率先掉下一階（預覽）。
  *   種類：所有刻印種類平均抽（affixTable.ENGRAVING_TYPES，目前 8 種）。
  *
+ * ── 區域專屬（2026-11-20 使用者）──────────────────────────────
+ *   刻印種類、輔助寶石、傳說裝備都可以寫 area（沒寫＝1，第一區）。第一區是基準：
+ *   在第 N 區打贏，掉落池＝第一區的東西＋第 N 區專屬的東西（不含其他區專屬的）。見 inArea。
+ *   專屬詞綴走「新的刻印種類」（使用者選 C）：刻印詞綴跟著只在該區掉落的刻印來。
+ *
  * ── 輔助寶石 ──────────────────────────────────────────────────
- *   GEM_CHANCE（30%）掉 1 顆，從所有輔助寶石平均抽；只掉輔助寶石（主動寶石不掉）。沒有難度門檻。
+ *   GEM_CHANCE 掉 1 顆，從所有輔助寶石平均抽；只掉輔助寶石（主動寶石不掉）。沒有難度門檻。
+ *   2026-11-21 使用者：一般 13%；那場有稀有怪 100%、有菁英怪（王戰比照菁英）75%。
  *
  * ── 傳說裝備 ──────────────────────────────────────────────────
  *   不能用刻印製作的獨有裝備。機率 0.5% 起、每升一級 +0.25%，難度 15 是 4%。沒有難度門檻。
@@ -5789,7 +5816,9 @@ const ENGRAVING_COUNT = {
   twoBase: 0.30, twoPerLevel: 0.015,
   threeFrom: 13, threePerLevel: 0.08
 };
-const GEM_CHANCE = 0.30;   // 第二版：15% → 30%（使用者：輔助寶石的機率可以調高）
+const GEM_CHANCE = 0.13;   // 15% → 30% → 13%（2026-11-21 使用者：改成看稀有／菁英）
+const GEM_CHANCE_RARE = 1;      // 有稀有怪的那場必掉
+const GEM_CHANCE_ELITE = 0.75;  // 有菁英怪（或王戰）的那場
 const LEGENDARY = { base: 0.005, perLevel: 0.0025 };
 const RARE_BONUS = { engravings: 2, rollsForTier: 2 };
 const ELITE_BONUS = { engravings: 1, rollsForTier: 1 };
@@ -5841,16 +5870,23 @@ function energyForWin(difficulty) {
  * @param {{ rare?: boolean, elite?: boolean }} [encounter] 這場有沒有稀有怪、菁英怪（rollEncounter 的 info）
  * @returns {{ engravings: { type: string, tier: number }[], supportGems: string[], legendary: number, energy: number }}
  */
-function rollDrops(difficulty, rng = Math.random, { rare = false, elite = false } = {}) {
+/** 這個東西（有 area 欄位的資料）會不會在第 area 區掉落：第一區的東西每一區都掉，其他區的只在自己區掉。 */
+function inArea(def, area = 1) {
+  const own = def?.area ?? 1;
+  return own === 1 || own === area;
+}
+
+function rollDrops(difficulty, rng = Math.random, { rare = false, elite = false, area = 1 } = {}) {
   const rates = dropRates(difficulty);
   const count = 1 + pickWeighted([rates.count[1], rates.count[2], rates.count[3]], rng());
-  const types = Object.keys(ENGRAVING_TYPES);
+  const types = Object.keys(ENGRAVING_TYPES).filter(id => inArea(ENGRAVING_TYPES[id], area));
   const engravings = [];
   for (let i = 0; i < count; i++) {
     const tier = pickWeighted(rates.tiers, rng()) + 1;
     engravings.push({ type: pickUniform(types, rng()), tier });
   }
-  const supportGems = rng() < rates.gem ? [pickUniform(Object.keys(SUPPORT_GEMS), rng())] : [];
+  const gemChance = rare ? GEM_CHANCE_RARE : elite ? GEM_CHANCE_ELITE : rates.gem;
+  const supportGems = rng() < gemChance ? [pickUniform(Object.keys(SUPPORT_GEMS).filter(id => inArea(SUPPORT_GEMS[id], area)), rng())] : [];
   const legendary = rng() < rates.legendary ? 1 : 0;
   const bonus = rare ? RARE_BONUS : elite ? ELITE_BONUS : null;
   for (let i = 0; bonus && i < bonus.engravings; i++) {
@@ -5858,10 +5894,17 @@ function rollDrops(difficulty, rng = Math.random, { rare = false, elite = false 
     for (let k = 0; k < bonus.rollsForTier; k++) tier = Math.max(tier, pickWeighted(rates.tiers, rng()) + 1);
     engravings.push({ type: pickUniform(types, rng()), tier });
   }
-  return { engravings, supportGems, legendary, energy: energyForWin(difficulty) };
+  return { engravings, supportGems, legendary, area, energy: energyForWin(difficulty) };
 }
 
-module.exports = { MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, openTier, energyForWin, ENGRAVING_COUNT, GEM_CHANCE, LEGENDARY, RARE_BONUS, ELITE_BONUS, dropRates, rollDrops };
+// 資料檢查：area 必須是正整數
+for (const [name, table] of [['刻印', ENGRAVING_TYPES], ['輔助寶石', SUPPORT_GEMS]]) {
+  for (const [id, def] of Object.entries(table)) {
+    if (def.area !== undefined && !(Number.isInteger(def.area) && def.area >= 1)) throw new Error(`${name}「${id}」的 area 必須是正整數`);
+  }
+}
+
+module.exports = { inArea, MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, openTier, energyForWin, ENGRAVING_COUNT, GEM_CHANCE, GEM_CHANCE_RARE, GEM_CHANCE_ELITE, LEGENDARY, RARE_BONUS, ELITE_BONUS, dropRates, rollDrops };
 
 },
 "gem/energyTable.js": function (module, exports, require) {
@@ -5947,8 +5990,9 @@ const LEGENDARIES = {
     slot: 'weapon',
     attackStat: 'int',
     // 平衡第一輪：240 → 280、30% → 35%（原本比製作的第 5 階武器還弱；調整後單體 +2～3%、多隻怪 +5～10%）
-    base: [{ stat: 'int', op: 'flat', max: 532 }],   // 預算 ×10 後 × 1.9（原本 280、35%）
-    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.665 }],
+    // 2026-11-21 削弱（使用者：前期刻印少時傳說太強，會一路跳級）：主屬性 ×0.6（532 → 319、66.5% → 40%），目標介於隨機製作與配方製作武器之間
+    base: [{ stat: 'int', op: 'flat', max: 319 }],
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
     mechanics: [
       { type: 'castOnEnemyDeath', text: '{caster} 手中的報喪法杖為 {target} 敲響喪鐘！' },
       { type: 'grantSupport', gem: 'amp' }
@@ -5962,12 +6006,13 @@ const LEGENDARIES = {
     name: '連攜匕首',
     slot: 'weapon',
     attackStat: 'atk',
-    base: [{ stat: 'atk', op: 'flat', max: 532 }],
-    // 攻擊力提高 50%：2026-11-19 補強（少了刻印的攻擊力%，比同階製作武器弱）。試過速度提高 20～40%，難度 15 仍不到製作武器，改用攻擊力%（使用者）。
+    // 2026-11-21 削弱：主屬性 ×0.7（532 → 372、攻擊 inc 50% → 35%）；爆擊兩行不動
+    base: [{ stat: 'atk', op: 'flat', max: 372 }],
+    // 攻擊力提高 50%（2026-11-21 → 35%）：2026-11-19 補強（少了刻印的攻擊力%，比同階製作武器弱）。試過速度提高 20～40%，難度 15 仍不到製作武器，改用攻擊力%（使用者）。
     unique: [
       { scope: 'wearer', stat: 'cri', op: 'flat', max: 0.2 },
       { scope: 'wearer', stat: 'criDmg', op: 'flat', range: [-0.3, -0.2] },
-      { scope: 'wearer', stat: 'atk', op: 'inc', max: 0.5 }
+      { scope: 'wearer', stat: 'atk', op: 'inc', max: 0.35 }
     ],
     mechanics: [{ type: 'castOnCrit', chance: 0.4, text: '{caster}連攜追擊，' }]
   },
@@ -5979,8 +6024,9 @@ const LEGENDARIES = {
     name: '魔力循環法球',
     slot: 'weapon',
     attackStat: 'int',
-    base: [{ stat: 'int', op: 'flat', max: 532 }],
-    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
+    // 2026-11-21 削弱：主屬性 ×0.45（532 → 239、40% → 18%）；護盾機制不動
+    base: [{ stat: 'int', op: 'flat', max: 239 }],
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.18 }],
     mechanics: [
       { type: 'spShield', ratio: 0.04, duration: 3 },
       { type: 'shieldBreakSp', sp: 2 }
@@ -5994,7 +6040,8 @@ const LEGENDARIES = {
     name: '幻影戰斧',
     slot: 'weapon',
     attackStat: 'atk',
-    base: [{ stat: 'atk', op: 'flat', max: 532 }],
+    // 2026-11-21 削弱：主屬性 ×0.45（532 → 239）；速度、召喚物生命、幻影不動
+    base: [{ stat: 'atk', op: 'flat', max: 239 }],
     unique: [
       { scope: 'wearer', stat: 'spd', op: 'flat', max: 40 },
       { scope: 'effect', kind: 'summonHp', max: 0.4 }
@@ -6002,11 +6049,38 @@ const LEGENDARIES = {
     // 幻影倍率（使用者 2026-11-19 定案）：生命、速度 ×0.5，攻擊、智力、防禦 ×0.3（原設計全部 ×0.8 太強）。
     mechanics: [{ type: 'phantom', ratio: 0.3, ratios: { hp: 0.5, spd: 0.5 }, name: '{caster}的幻影',
       summonText: '{caster}揮動斧頭，一道幻影浮現在{caster}的身後。', chaseText: '{caster} 隨之追擊，' }]
+  },
+
+  // ── 第二區專屬（area 2，只在第二區掉落；2026-11-21 使用者設計，數值是我擬的初版）──────────
+  // 氣鳴楯【菲爾查哈】：強化玩家的閃避反擊。主屬性比照削弱後的水準（攻擊 372）。
+  fircha: {
+    id: 'fircha',
+    name: '氣鳴楯【菲爾查哈】',
+    slot: 'weapon',
+    attackStat: 'atk',
+    area: 2,
+    base: [{ stat: 'atk', op: 'flat', max: 372 }],
+    unique: [
+      { scope: 'wearer', stat: 'eva', op: 'flat', max: 80 },
+      { scope: 'wearer', stat: 'evadeCounter', op: 'flat', max: 80 }
+    ],
+    mechanics: [{ type: 'counterPower', power: 2 }]
+  },
+  // 撥弦槍【鶴之聲援】：智力武器，法術的多段攻擊有額外效益（第 2 段起每段 +15%，逐段累加）。主屬性比照報喪法杖削弱後（319、40%）。
+  cranelance: {
+    id: 'cranelance',
+    name: '撥弦槍【鶴之聲援】',
+    slot: 'weapon',
+    attackStat: 'int',
+    area: 2,
+    base: [{ stat: 'int', op: 'flat', max: 319 }],
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
+    mechanics: [{ type: 'multiHitRamp', ramp: 0.15 }]
   }
 };
 
 const LEGENDARY_WEIGHT = { low: 60, high: 120 };
-const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom'];
+const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom', 'counterPower', 'multiHitRamp'];
 
 function round(stat, op, value) {
   // 只有 flat 的整數屬性取整（同 affixTable 的修正：inc 百分比不能取整）
@@ -6078,8 +6152,9 @@ function rollValues(def, tier, rng) {
 }
 
 /** 從所有傳說裝備平均抽一件的 id（之後有部位或難度限制時再加條件）。呼叫 rng 1 次。 */
-function pickLegendary(rng = Math.random) {
-  const ids = Object.keys(LEGENDARIES);
+// area：第幾區掉的（第一區的傳說每一區都掉，其他區的只在自己區掉；LEGENDARIES 每件可寫 area，沒寫＝1）
+function pickLegendary(rng = Math.random, area = 1) {
+  const ids = Object.keys(LEGENDARIES).filter(id => (LEGENDARIES[id].area ?? 1) === 1 || LEGENDARIES[id].area === area);
   return ids[Math.min(ids.length - 1, Math.floor(rng() * ids.length))];
 }
 
@@ -6092,6 +6167,8 @@ function describeMechanic(mechanic, supportName = id => id) {
     case 'spShield': return `施放技能時依消耗的 SP 獲得護盾，持續 ${mechanic.duration} 個行動槽`;
     case 'shieldBreakSp': return `護盾破裂時獲得 ${mechanic.sp} 點 SP`;
     case 'phantom': return '開戰時召喚幻影；裝備的主動寶石會讓幻影追擊';
+    case 'counterPower': return `閃避反擊的傷害 ×${mechanic.power}`;
+    case 'multiHitRamp': return `法術的多段攻擊：第 2 段起每段傷害 +${Math.round(mechanic.ramp * 100)}%（逐段累加）`;
     default: return mechanic.type;
   }
 }
@@ -6261,6 +6338,83 @@ function scaleMonster(stats, difficulty) {
 module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, DEF_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICULTY, strength, scaleMonster };
 
 },
+"gem/resonance.js": function (module, exports, require) {
+'use strict';
+
+/**
+ * 共鳴（第二區「和聲音樂廳」的地區特色，2026-11-21 使用者設計；數值是我擬的初版）。純規則 + 被動，不依賴框架以外的東西。
+ *
+ *   在有共鳴的戰鬥裡（REGIONS[id].resonance），每一擊**造成傷害的攻擊**（追擊、反擊、多段的每一段都算；
+ *   持續傷害與直接扣血不算）替被打的單位疊 1 層，玩家和怪物都會被疊。層數不會隨時間消退。
+ *   疊到 stacks 層爆發：層數歸零，受到自己最大生命 × burstRatio 的傷害（直接扣血，不吃防禦與減傷）。
+ *   怪物（B 隊）爆發時：身上有減傷（承傷倍率 < 1 的狀態）就解除減傷；沒有就給易傷（承傷 ×(1 + vulnerable)，vulnerableDuration 槽）。
+ *   管風琴魔像的場地特效用 addResonance 每回合替全場疊層。
+ *
+ *   層數記在 entity.resonance；另外掛一個顯示用的狀態「共鳴 ×N」（不能被驅散，指揮家的「整頓」清不掉）。
+ */
+
+const { Buff } = require('../src');
+
+const RESONANCE = { stacks: 5, burstRatio: 0.04, vulnerable: 0.2, vulnerableDuration: 2 };
+
+const BADGE_ID = 'resonance_badge';
+
+function showStacks(entity) {
+  const stacks = entity.resonance ?? 0;
+  const badge = entity.buffs.find(b => b.id === BADGE_ID);
+  if (!stacks) { if (badge) entity.buffs.splice(entity.buffs.indexOf(badge), 1); return; }
+  if (badge) { badge.name = `共鳴 ×${stacks}`; badge.value = stacks; return; }
+  entity.buffs.push(new Buff({ id: BADGE_ID, name: `共鳴 ×${stacks}`, type: 'STAT', duration: Infinity, value: stacks,
+    effect: () => {}, polarity: 'negative', dispellable: false }));
+}
+
+/** 替 entity 疊 n 層；到上限就爆發。回傳這次有沒有爆發。 */
+function addResonance(entity, n, logger, engine, config = RESONANCE) {
+  if (!entity?.isAlive || !(n > 0)) return false;
+  entity.resonance = (entity.resonance ?? 0) + n;
+  if (entity.resonance < config.stacks) { showStacks(entity); return false; }
+  entity.resonance = 0;
+  showStacks(entity);
+  const amount = Math.max(1, Math.round((entity.stats.maxHp ?? entity.stats.hp) * config.burstRatio));
+  logger.addLog({ type: 'TEXT', actorId: entity.id, message: `${entity.name}身上的共鳴爆發了！` });
+  const hit = entity.takeDamage(amount, logger, { source: 'DIRECT', tags: ['resonance'] });
+  logger.addLog({ type: 'DAMAGE', actorId: entity.id, targetId: entity.id, value: hit.actualDamage, message: `${entity.name} 受到了 ${hit.actualDamage} 點傷害！` });
+  if (entity.team === 'B' && entity.isAlive) {
+    const guards = entity.buffs.filter(b => b.damageTaken && b.damageTaken.multiplier < 1);
+    if (guards.length) {
+      for (const guard of guards) entity.buffs.splice(entity.buffs.indexOf(guard), 1);
+      logger.addLog({ type: 'TEXT', actorId: entity.id, message: `${entity.name}的減傷被震散了！` });
+    } else {
+      entity.addBuff({ id: 'resonance_vulnerable', name: '易傷', type: 'STAT', duration: config.vulnerableDuration, effect: () => {}, stackPolicy: 'refresh',
+        polarity: 'negative', dispellable: true, damageTaken: { multiplier: 1 + config.vulnerable } }, engine);
+      logger.addLog({ type: 'TEXT', actorId: entity.id, message: `${entity.name}陷入了易傷狀態！` });
+    }
+  }
+  entity.finishDamage?.(hit, logger, engine);
+  return true;
+}
+
+/** 戰鬥裡每個單位都掛這個被動：被攻擊打中（有造成傷害）就疊 1 層。 */
+function resonancePassive(config = RESONANCE) {
+  return {
+    id: 'resonance',
+    trigger: 'AFTER_DAMAGE_RECEIVED',
+    enabled: (self, hit) => hit?.source === 'ATTACK' && self.isAlive,   // 框架只在 actualDamage > 0 時跑這個觸發
+    action: (self, _hit, logger, engine) => { addResonance(self, 1, logger, engine, config); }
+  };
+}
+
+/** 替整場戰鬥的單位加上共鳴（召喚物出場時另外處理）。 */
+function applyResonance(entities, config = RESONANCE) {
+  for (const entity of entities) {
+    if (entity.passives.some(p => p.id === 'resonance')) continue;
+    entity.passives.push(resonancePassive(config));
+  }
+}
+
+module.exports = { RESONANCE, addResonance, resonancePassive, applyResonance };
+
+},
 "gem/monsters.js": function (module, exports, require) {
 'use strict';
 
@@ -6415,13 +6569,45 @@ const MONSTERS = {
       { kind: 'heal', id: 'feed', name: '吞食', from: 10, spCost: 15, target: 'self', power: 4 },
       { kind: 'buff', id: 'frenzy', name: '狂暴', from: 13, spCost: 15, target: 'self', stat: 'atk', mult: 1.4, duration: 3 }
     ]
+  },
+
+  // ── 第二區「和聲音樂廳」（使用者設計，2026-11-21；數值是我擬的初版，之後用模擬調）──────────
+  // 和聲妖精：一次至少兩隻（group: 2）；「和聲」打中後其他和聲妖精各追擊一下；難度 7 起普攻也會引發追擊。
+  fairy: {
+    id: 'fairy', name: '和聲妖精', from: 1, cost: 0.2, group: 2,
+    stats: { hp: 0.25, atk: 0.3, def: 20, spd: 220 },
+    harmony: { power: 0.4, normalFrom: 7, text: '{caster}應和著旋律追擊，' },
+    skills: [
+      { kind: 'attack', id: 'harmony', name: '和聲', from: 1, spCost: 10, power: 0.8, target: 'single', chase: true }
+    ]
+  },
+  // 指揮家：清除隊友身上的減益（玩家的裂傷、殘刃、緩速、易傷……）
+  conductor: {
+    id: 'conductor', name: '指揮家', from: 1, cost: 0.4,
+    stats: { hp: 0.45, atk: 0.35, def: 60, spd: 180 },
+    skills: [
+      { kind: 'cleanse', id: 'order', name: '整頓', from: 1, spCost: 15, target: 'allyAll', text: '{caster}揮動指揮棒，樂團重新整齊了起來！' },
+      { kind: 'attack', id: 'baton', name: '指揮棒', from: 7, spCost: 10, power: 1.3, target: 'single' }
+    ]
+  },
+  // 管風琴魔像（菁英）：場地特效——活著時每回合開始，全場（包括自己）各疊 1 層共鳴
+  organ: {
+    id: 'organ', name: '管風琴魔像', rarity: 'elite', from: 7, cost: 0.9,
+    stats: { hp: 1.0, atk: 0.9, def: 150, spd: 100 },
+    traits: [{ kind: 'field', resonance: 1, text: '管風琴的低鳴在大廳裡迴盪……' }],
+    skills: [
+      { kind: 'attack', id: 'chord', name: '重和弦', from: 7, spCost: 15, power: 1.0, target: 'all' }
+    ]
   }
 };
 
 // locked: true 的地區一開始不開放，要由王的獎勵（rewards.unlockRegions）開啟；目前兩區都一開始就開放。
 const REGIONS = {
-  ruins: { id: 'ruins', name: '廢都', count: [1, 3], budget: 0.7, monsters: ['dog', 'circle', 'doll', 'goblin', 'golem'] },
-  sewer: { id: 'sewer', name: '地下水道', count: [2, 5], budget: 0.85, monsters: ['rat', 'tentacle', 'slime', 'mimic', 'scavenger'] }
+  // area：第幾區（掉落池＝第一區＋本區專屬，見 dropTable.inArea）
+  ruins: { id: 'ruins', name: '廢都', area: 1, count: [1, 3], budget: 0.7, monsters: ['dog', 'circle', 'doll', 'goblin', 'golem'] },
+  sewer: { id: 'sewer', name: '地下水道', area: 1, count: [2, 5], budget: 0.85, monsters: ['rat', 'tentacle', 'slime', 'mimic', 'scavenger'] },
+  // 第二區（2026-11-21）：打倒廢都中央廳後開放；地區特色＝共鳴（resonance.js）。第 3 種一般怪與稀有怪使用者還沒想好。
+  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 5], budget: 0.7, resonance: true, monsters: ['fairy', 'conductor', 'organ'] }
 };
 
 // ── 技能建構 ────────────────────────────────────────────────
@@ -6477,6 +6663,27 @@ function buildSkill(spec, def, stats, casterName) {
     return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: TARGET[spec.target], text, buffs: [{
       id: `monster_shield:${spec.id}`, name: spec.name, duration: spec.duration, stackPolicy: 'refresh',
       shield: Math.max(1, Math.round(spec.power != null ? (stats[stat] ?? 0) * spec.power : stats.maxHp * spec.ratio)), polarity: 'positive', dispellable: true }] }] });
+  }
+  if (spec.kind === 'cleanse') {
+    // 清除隊友（含自己）身上可驅散的減益；框架沒有驅散動作，用 TEXT 動作開頭、自己移除
+    const skill = new Skill({ ...base, actions: [{ type: 'TEXT', targetType: 'SELF', text: { action: template(spec.text ?? '{caster} 清除了隊友的減益！', casterName) } }] });
+    const baseExecute = skill.execute;
+    skill.execute = function execute(caster, allies, enemies, logger, context, options) {
+      const result = baseExecute.call(this, caster, allies, enemies, logger, context, options);
+      const removed = allies.filter(a => a.isAlive).flatMap(a => a.removeBuffs('negative').map(b => `${a.name}的${b.name}`));
+      logger.addLog({ type: 'TEXT', actorId: caster.id, message: removed.length ? `清除了 ${removed.join('、')}。` : '但隊友身上沒有可以清除的減益。' });
+      return result;
+    };
+    // 隊友身上沒有可清除的減益時不施放（2026-11-21：不然指揮家會一直空放「整頓」）
+    const baseCanCast = skill.canCast;
+    skill.canCast = function canCast(entity, context, options) {
+      if (context?.teamA && context?.teamB) {
+        const allies = entity.team === 'A' ? context.teamA : context.teamB;
+        if (!allies.some(a => a.isAlive && a.buffs.some(b => b.polarity === 'negative' && b.dispellable))) return false;
+      }
+      return baseCanCast.call(this, entity, context, options);
+    };
+    return skill;
   }
   if (spec.kind === 'heal') {
     return new Skill({ ...base, actions: [{ type: 'HEAL', targetType: TARGET[spec.target], power: spec.power, stat, text }] });
@@ -6637,25 +6844,36 @@ function withSpCost(skill, cost) {
   return skill;
 }
 
-// 閃避反擊（見檔頭 evadeCounter）
+// 閃避反擊（見檔頭 evadeCounter）。點數讀 stats.evadeCounter（怪物由 evadeCounter.points 寫進去，玩家由裝備屬性來）。
 function buildEvadeCounterPassive(def, stats, entityName) {
   const spec = def.evadeCounter;
-  const stat = def.spell ? 'int' : 'atk';
-  const flags = def.spell ? { uncritable: true } : {};
-  const basic = new Skill({ id: `${def.id}_evade_counter`, name: '反擊', ...flags,
-    actions: [{ type: 'DAMAGE', stat, power: 1, ...flags, text: { action: template(spec.text ?? '{caster} 趁隙反擊，', entityName) } }] });
-  const special = spec.skill ? buildSkill(spec.skill, def, stats, entityName) : null;
+  stats.evadeCounter = spec.points;
+  return makeEvadeCounterPassive({ id: `monster_evade_counter:${def.id}`, stat: def.spell ? 'int' : 'atk', crit: !def.spell, text: spec.text, entityName,
+    special: spec.skill ? buildSkill(spec.skill, def, stats, entityName) : null, specialCost: spec.skill?.spCost ?? 0, skillId: def.id });
+}
+
+/**
+ * 玩家的閃避反擊（2026-11-21）：stats.evadeCounter > 0 時掛上；反擊是普攻（stat）× power 一擊（氣鳴楯【菲爾查哈】把 power 提高）。
+ */
+function buildPlayerEvadeCounterPassive({ stat = 'atk', power = 1, name = '玩家', text } = {}) {
+  return makeEvadeCounterPassive({ id: 'player_evade_counter', stat, crit: true, power, text, entityName: name, skillId: 'hero' });
+}
+
+function makeEvadeCounterPassive({ id, stat, crit, power = 1, text, entityName, special = null, specialCost = 0, skillId }) {
+  const flags = crit ? {} : { uncritable: true };
+  const basic = new Skill({ id: `${skillId}_evade_counter`, name: '反擊', ...flags,
+    actions: [{ type: 'DAMAGE', stat, power, ...flags, text: { action: template(text ?? '{caster} 趁隙反擊，', entityName) } }] });
   return {
-    id: `monster_evade_counter:${def.id}`,
+    id,
     trigger: 'AFTER_EVADE',
     enabled: (self, evasion) => Boolean(evasion.caster?.isAlive) && !(evasion.skill?.uncounterable || evasion.action?.uncounterable),
     action(self, evasion, logger, engine) {
       if (!engine || engine.result || engine.counterSource || !self.canAct()) return;
       const attacker = evasion.caster;
-      const chance = evadeCounterChance(spec.points, attacker.evadeCounterPoints ?? 0);
+      const chance = evadeCounterChance(self.stats.evadeCounter ?? 0, attacker.stats?.evadeCounter ?? 0);
       if (!((engine.rng ?? Math.random)() < chance)) return;
       // 怪物技能的 spCost 寫在技能規格上（框架的 Skill 只看 action.spCost），這裡自己扣
-      const cost = spec.skill?.spCost ?? 0;
+      const cost = specialCost;
       const useSpecial = special && self.stats.sp >= cost;
       const reply = useSpecial ? special : basic;
       if (useSpecial) self.stats.sp -= cost;
@@ -6705,15 +6923,60 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
     ...(def.normalAttackText !== undefined ? { text: { action: template(def.normalAttackText, entityName) } } : {}) }],
     ...(def.spell ? { uncritable: true, uncounterable: true } : {}) });
   // spCost 要放在第一個 action 上框架才會扣（Skill 只讀 action.spCost）。2026-11-20 修正：之前寫在技能層級，怪物放技能從來不扣 SP。
-  const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => withSpCost(buildSkill(spec, def, stats, entityName), spec.spCost));
-  const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives };
+  const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => {
+    const skill = withSpCost(buildSkill(spec, def, stats, entityName), spec.spCost);
+    return spec.chase && def.harmony ? withHarmonyChase(skill, def) : skill;
+  });
+  const attack = def.harmony && difficulty >= (def.harmony.normalFrom ?? Infinity) ? withHarmonyChase(normalAttack, def) : normalAttack;
+  const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives, field: buildFieldPassive };
   const passives = (def.traits ?? []).filter(trait => difficulty >= (trait.from ?? 1)).flatMap(trait => {
     if (!TRAIT_BUILDERS[trait.kind]) throw new Error(`怪物「${def.id}」的特性種類不明：${trait.kind}`);
     return TRAIT_BUILDERS[trait.kind](trait, def, { difficulty, stats, entityName });
   });
   passives.push(...buildNarrationPassives(def.texts));
   if (def.evadeCounter) passives.push(buildEvadeCounterPassive(def, stats, entityName));
-  return new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack, normalAttackSpCost: 2, skills, passives, stats });
+  const entity = new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack: attack, normalAttackSpCost: 2, skills, passives, stats });
+  entity.monsterId = def.id;
+  return entity;
+}
+
+/**
+ * 和聲追擊（和聲妖精）：這一招打完後，場上其他同種的怪（活著、能行動）各對同一個目標追擊一下（攻擊 × harmony.power）。
+ * 追擊是普通的攻擊：可以被閃避、被反擊，也會疊共鳴；追擊本身不再引發追擊。反擊途中不追擊。
+ */
+function withHarmonyChase(skill, def) {
+  const spec = def.harmony;
+  const stat = def.spell ? 'int' : 'atk';
+  const baseExecute = skill.execute;
+  skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    const start = logger.logs?.length ?? 0;
+    const result = baseExecute.call(this, caster, allies, enemies, logger, context, options);
+    if (!context || context.result || context.counterSource) return result;
+    const targetId = (logger.logs ?? []).slice(start).find(l => l.actorId === caster.id && (l.type === 'DAMAGE' || l.type === 'MISS') && l.targetId)?.targetId;
+    const target = enemies.find(e => e.id === targetId);
+    if (!target) return result;
+    for (const mate of allies) {
+      if (mate === caster || mate.monsterId !== def.id || !mate.isAlive || !mate.canAct() || !target.isAlive || context.result) continue;
+      const chase = new Skill({ id: `${def.id}_harmony_chase`, name: '和聲追擊', actions: [{ type: 'DAMAGE', stat, power: spec.power, text: { action: template(spec.text, mate.name) } }] });
+      chase.execute(mate, allies, enemies, logger, context, { targets: [target], ignoreSp: true });
+    }
+    return result;
+  };
+  return skill;
+}
+
+// 場地特效（管風琴魔像）：活著時每回合開始，全場（雙方、包括自己）各疊 trait.resonance 層共鳴（resonance.js）
+function buildFieldPassive(trait) {
+  const { addResonance } = require('./resonance');
+  return [{
+    id: 'monster_field_resonance',
+    trigger: 'ROUND_START',
+    action(self, _payload, logger, engine) {
+      if (!self.isAlive || !engine || engine.result) return;
+      if (trait.text) logger.addLog({ type: 'TEXT', actorId: self.id, message: trait.text });
+      for (const unit of [...engine.teamA, ...engine.teamB]) if (unit.isAlive) addResonance(unit, trait.resonance, logger, engine);
+    }
+  }];
 }
 
 /** 某難度某地區出現得了的怪（依 from）。 */
@@ -6743,12 +7006,14 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   const cheapest = normals.reduce((a, b) => (a.cost <= b.cost ? a : b));
   while (picks.length < max) {
     // maxPerEncounter（選填）：同一場最多幾隻；沒寫就不限，亂數序列與之前相同
-    const affordable = normals.filter(def => def.cost <= region.budget - spent() + 1e-9
+    // group（選填）：抽到時一次出這麼多隻（例如和聲妖精 2 隻），要付得起、也要放得下
+    const affordable = normals.filter(def => (def.group ?? 1) * def.cost <= region.budget - spent() + 1e-9 && picks.length + (def.group ?? 1) <= max
       && (def.maxPerEncounter == null || picks.filter(p => p === def).length < def.maxPerEncounter));
     if (!affordable.length) break;
-    picks.push(affordable[Math.min(affordable.length - 1, Math.floor(rng() * affordable.length))]);
+    const pick = affordable[Math.min(affordable.length - 1, Math.floor(rng() * affordable.length))];
+    for (let g = 0; g < (pick.group ?? 1); g++) picks.push(pick);
   }
-  while (picks.length < min) picks.push(cheapest);
+  while (picks.length < min) for (let g = 0; g < (cheapest.group ?? 1); g++) picks.push(cheapest);
   const totalCost = spent();
   const scale = region.budget / totalCost;
   // 同名的加 A、B、C
@@ -6778,7 +7043,7 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   return { monsters, summonFactory, info: { ids: picks.map(def => def.id), rare: hasRare, elite: hasElite, totalCost, scale } };
 }
 
-module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildMonster, buildFromDef, availableMonsters, rollEncounter };
+module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildPlayerEvadeCounterPassive, buildMonster, buildFromDef, availableMonsters, rollEncounter };
 
 },
 "gem/bosses.js": function (module, exports, require) {
@@ -6794,7 +7059,7 @@ module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS
  *   額外獎勵還沒想好，目前考慮**開啟新地區**：首次擊敗的 rewards 支援 unlockRegions 與 gems。
  *
  * ── 資料格式 ──────────────────────────────────────────────────
- *   { id, name, difficulty, placeholder?, monsters: [怪物定義…], rewards: { gems?: [主動寶石 id], unlockRegions?: [地區 id], accessories?: [飾品 id] } }
+ *   { id, name, difficulty, placeholder?, monsters: [怪物定義…], rewards: { gems?: [主動寶石 id], unlockRegions?: [地區 id], accessories?: [飾品 id] }, area?: 第幾區（掉落池用，沒寫＝1） }
  *   monsters 的每一隻用 monsters.js 的同一套格式（stats 是基準怪倍率、skills、traits），用 buildFromDef 建；
  *   難度縮放（difficulty.scaleMonster）照樣套用，所以王的倍率是「在它的難度下」相對基準怪的強度。
  *   王戰不套強度預算（王是單獨設計的關卡）。
@@ -6850,7 +7115,7 @@ const BOSSES = [
           drain: { sp: 6, name: '魔力汲取', text: '{caster}吸收了{target}的{value}點SP。' } }
       }]
     }],
-    rewards: { gems: ['pursuit', 'firestorm'], unlockRegions: [], accessories: ['hourglass'] }   // 「烈風爪痕」的碎片 2026-11-20（使用者：首次打王固定掉飾品）
+    rewards: { gems: ['pursuit', 'firestorm'], unlockRegions: ['hall'], accessories: ['hourglass'] }   // 「烈風爪痕」的碎片 2026-11-20（使用者：首次打王固定掉飾品）
   }
 ];
 
@@ -6929,7 +7194,7 @@ const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 8;
+const SAVE_VERSION = 9;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -7307,7 +7572,13 @@ const MIGRATIONS = {
     ...save, version: 8, blackDice: 0,
     equipment: (save.equipment ?? []).map(item => (item.legendaryId !== undefined && LEGENDARIES[item.legendaryId] && item.tier === undefined
       ? { ...item, tier: inferLegendaryTier(item) } : item))
-  })
+  }),
+  // v8 → v9：第二區「和聲音樂廳」（2026-11-21）由中央廳首次擊敗開放；已經打贏過的存檔補開。
+  8: save => {
+    const progress = { ...save.progress, unlockedRegions: [...(save.progress?.unlockedRegions ?? [])] };
+    if ((progress.defeatedBosses ?? []).includes('gatekeeper') && !progress.unlockedRegions.includes('hall')) progress.unlockedRegions.push('hall');
+    return { ...save, version: 9, progress };
+  }
 };
 
 /** 從背包與所有裝備連結裡刪掉指定的輔助寶石（遷移用；不改傳入的物件）。 */
@@ -7427,7 +7698,10 @@ function convertGems(save, gemIds, rng = Math.random) {
   for (const id of gemIds) need[id] = (need[id] ?? 0) + 1;
   const socketed = {};
   for (const item of save.equipment ?? []) for (const link of item.links ?? []) for (const id of link.supports ?? []) socketed[id] = (socketed[id] ?? 0) + 1;
-  const all = Object.keys(SUPPORT_GEMS);
+  // 區域（2026-11-20 使用者）：第一區的寶石都會出；其他區的寶石要玩家已經有那一區的寶石（背包或鑲著）才會出
+  const ownedAreas = new Set([1]);
+  for (const id of Object.keys(SUPPORT_GEMS)) if (save.gems?.[id] > 0 || socketed[id] > 0) ownedAreas.add(SUPPORT_GEMS[id].area ?? 1);
+  const all = Object.keys(SUPPORT_GEMS).filter(id => ownedAreas.has(SUPPORT_GEMS[id].area ?? 1));
   const missing = all.filter(id => !(save.gems?.[id] > 0) && !(socketed[id] > 0));
   const notInput = all.filter(id => !need[id]);
   const pool = missing.length ? missing : notInput.length ? notInput : all;
@@ -7501,7 +7775,7 @@ function combineAllEngravings(save, type, tier) {
  * 沒傳會丟錯（不會默默丟掉玩家的掉落）。內容不合法丟 SaveError，原存檔不變。
  * @param {{ difficulty?: number, rng?: () => number }} [options] rng 只用在傳說裝備（每件：抽種類 1 次，再照 rollLegendary 的順序）
  */
-function grantDrops(save, drops, { difficulty, rng = Math.random } = {}) {
+function grantDrops(save, drops, { difficulty, rng = Math.random, area = drops?.area ?? 1 } = {}) {
   if (!isObject(drops)) throw new SaveError('掉落必須是物件');
   const { engravings = [], supportGems = [] } = drops;
   if (!Array.isArray(engravings) || !Array.isArray(supportGems)) throw new SaveError('掉落的 engravings 與 supportGems 必須是陣列');
@@ -7514,7 +7788,7 @@ function grantDrops(save, drops, { difficulty, rng = Math.random } = {}) {
   const legendaries = [];
   for (let i = 0; i < legendaryCount; i++) {
     if (difficulty === undefined) throw new SaveError('掉落裡有傳說裝備，grantDrops 必須傳 { difficulty } 才能決定數值');
-    try { legendaries.push(rollLegendary(pickLegendary(rng), difficulty, rng)); } catch (error) { throw new SaveError(error.message); }
+    try { legendaries.push(rollLegendary(pickLegendary(rng, area), difficulty, rng)); } catch (error) { throw new SaveError(error.message); }
   }
   return mutate(save, draft => {
     for (const key of keys) addToStack(draft.engravings, key, 1);
@@ -7980,7 +8254,7 @@ function compileEquipped(save, options = {}) {
 
 /** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */
 function equippedMechanics(save) {
-  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom'].includes(m.type));
+  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom', 'counterPower', 'multiHitRamp'].includes(m.type));
 }
 
 /** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */
@@ -8101,7 +8375,8 @@ module.exports = {
 const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');
 const { applyStatBonuses } = require('./statLayer');
 const save = require('./saveLayer');
-const { rollEncounter, availableMonsters, REGIONS } = require('./monsters');
+const { rollEncounter, availableMonsters, REGIONS, buildPlayerEvadeCounterPassive } = require('./monsters');
+const { applyResonance } = require('./resonance');
 const { buildBossEncounter, findBoss } = require('./bosses');
 const { rollDrops } = require('./dropTable');
 
@@ -8139,10 +8414,17 @@ function heroStats(state) {
 function buildHero(state) {
   const loadout = save.compileEquipped(state);
   const stat = loadout.normalAttackStat;
+  const stats = heroStats(state);
+  const passives = [...loadout.passives];
+  // 閃避反擊（第二區專屬刻印與傳說給反擊點數）：反擊 = 普攻屬性 × power；氣鳴楯【菲爾查哈】的 counterPower 提高倍率
+  if (stats.evadeCounter > 0) {
+    const power = save.equippedMechanics(state).filter(m => m.type === 'counterPower').reduce((p, m) => p * m.power, 1);
+    passives.push(buildPlayerEvadeCounterPassive({ stat, power, name: playerName(state) }));
+  }
   const hero = new Entity({
     id: 'hero', name: playerName(state), team: 'A', normalAttackSpCost: 2,
     normalAttack: new Skill({ id: 'hero_attack', name: '普攻', actions: [{ type: 'DAMAGE', stat }] }),
-    skills: loadout.skills, passives: loadout.passives, stats: heroStats(state)
+    skills: loadout.skills, passives, stats
   });
   return { hero, loadout };
 }
@@ -8195,6 +8477,8 @@ function prepareBattle(state, target, seed) {
     ({ monsters } = buildBossEncounter(target.id));
     info = { boss: true, elite: true };
   }
+  // 第二區的地區特色「共鳴」（resonance.js）：雙方每個單位都掛上共鳴被動
+  if (target.kind === 'region' && REGIONS[target.id].resonance) applyResonance([hero, ...monsters]);
   const engine = new BattleEngine([hero], monsters, {
     maxTurns: MAX_TURNS, rng: createSeededRandom(seed + 1), skillSelectionResolver: loadout.resolver,
     hitFormula: 'contest', summonFactory
@@ -8217,7 +8501,9 @@ function runBattle(state, target, seed, { now = () => new Date().toISOString() }
   let next = state, drops = null, firstClear = false, rewards = null;
   if (victory) {
     const dropRng = createSeededRandom(seed + 2);
-    drops = rollDrops(battle.difficulty, dropRng, { rare: battle.info.rare, elite: battle.info.elite });
+    // 第幾區（掉落池＝第一區＋本區專屬）：地區看 REGIONS[id].area、王看 boss.area，沒寫＝1
+    const area = target.kind === 'region' ? (REGIONS[target.id]?.area ?? 1) : (findBoss(target.id)?.area ?? 1);
+    drops = rollDrops(battle.difficulty, dropRng, { rare: battle.info.rare, elite: battle.info.elite, area });
     next = save.grantDrops(next, drops, { difficulty: battle.difficulty, rng: dropRng });
     if (target.kind === 'boss') {
       const recorded = save.recordBossVictory(next, target.id);
@@ -9050,6 +9336,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
     for (const a of dmg) parts.push(`${a.targetType === 'ENEMY_ALL' ? '全體' : '單體'} ${Math.round((a.power ?? 1) * 100)}%`);
     for (const a of dmg) for (const ail of a.ailments || []) parts.push(`附加${G.AILMENTS[ail.kind]?.name ?? ail.kind}（${ail.basis === 'hit' ? '命中傷害' : '攻擊力'}的 ${Math.round(ail.power * 100)}%，${ail.duration} 槽）`);
     if (gem.actions.some(a => a.type === 'HEAL')) parts.push('治療');
+    if (gem.critEcho) parts.push(`根據爆擊率額外釋放一次（${Math.round(gem.critEcho.power * 100)}%）`);   // 2026-11-21 使用者：火焰風暴補上這句
     return parts.join('｜');
   }
   function renderGems() {

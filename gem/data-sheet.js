@@ -11,6 +11,7 @@ const G = require('./gems');
 const A = require('./affixTable');
 const C = require('./craftTable');
 const D = require('./dropTable');
+const RES = require('./resonance');
 const E = require('./energyTable');
 const L = require('./legendaryTable');
 const AC = require('./accessoryTable');
@@ -38,11 +39,12 @@ add('角色', '角色基礎屬性與新手武器', '角色沒有等級，成長�
   [
     ...Object.entries(game.HERO_BASE).map(([k, v]) => [statName(k) === k ? k : statName(k), v, k === 'skillCastRate' ? '每個行動槽嘗試放技能的機率' : '']),
     ['戰鬥回合上限', game.MAX_TURNS, '超過算平手'],
+    ['閃避反擊', `反擊點數 > 0 才有`, `躲開攻擊後擲反擊：機率 = ${M.EVADE_COUNTER.ceiling} ÷ (1 + e^(−(自己點數 − 攻擊者點數) ÷ ${M.EVADE_COUNTER.scale}))（點數相同 ${pct(M.EVADE_COUNTER.ceiling / 2)}、上限 ${pct(M.EVADE_COUNTER.ceiling)}）；反擊 = 普攻屬性 × 100%（菲爾查哈 ×2），法術躲開不反擊`],
     ...game.STARTER_WEAPONS.map(w => [w.name, `普攻屬性：${w.attackStat === 'int' ? '智力' : '攻擊'}`, `沒有加成、施放權重 ${w.castWeight}、不能分解、可刻刻印`])
   ]);
 
 // ── 難度 ──
-add('難度', '難度縮放與掉落', `怪物 HP／攻擊／智力 × 倍率；命中 +${DIFF.HIT_PER_LEVEL} × (難度 − 1)、防禦 +${DIFF.DEF_PER_LEVEL} × (難度 − 1)。刻印數量與階級只在勝利時擲；稀有怪 +2 個（兩次擲階取高）、菁英怪與 Boss +1 個。`,
+add('難度', '難度縮放與掉落', `怪物 HP／攻擊／智力 × 倍率；命中 +${DIFF.HIT_PER_LEVEL} × (難度 − 1)、防禦 +${DIFF.DEF_PER_LEVEL} × (難度 − 1)。刻印數量與階級只在勝利時擲；稀有怪 +2 個（兩次擲階取高）、菁英怪與 Boss +1 個。輔助寶石機率：一般 ${pct(D.GEM_CHANCE)}，那場有稀有怪 ${pct(D.GEM_CHANCE_RARE)}、有菁英怪或王戰 ${pct(D.GEM_CHANCE_ELITE)}。`,
   ['難度', '怪物強度等級', '屬性倍率', '怪物命中加成', '怪物防禦加成', '最高刻印階', '1 階', '2 階', '3 階', '4 階', '5 階', '1 個刻印', '2 個刻印', '3 個刻印', '期望刻印數', '輔助寶石機率', '傳說裝備機率', '勝利能量'],
   Array.from({ length: D.MAX_DIFFICULTY }, (_, i) => i + 1).map(d => {
     const rates = D.dropRates(d);
@@ -53,9 +55,11 @@ add('難度', '難度縮放與掉落', `怪物 HP／攻擊／智力 × 倍率；
 
 // ── 地區 ──
 add('地區', '地區', `每場隻數在範圍內；稀有怪 ${pct(M.RARE_CHANCE)}、沒出稀有時菁英 ${pct(M.ELITE_CHANCE)}（各最多一隻、不同時出現），其餘依預算補普通怪。`,
-  ['地區 id', '名稱', '每場隻數', '強度預算', '怪物（依出現難度）'],
-  Object.values(M.REGIONS).map(r => [r.id, r.name, `${r.count[0]}～${r.count[1]}`, r.budget,
-    r.monsters.map(id => `${M.MONSTERS[id].name}（難度 ${M.MONSTERS[id].from}～${M.MONSTERS[id].maxPerEncounter ? `，每場最多 ${M.MONSTERS[id].maxPerEncounter} 隻` : ''}）`).join('、')]));
+  ['地區 id', '名稱', '第幾區', '開放條件', '地區特色', '每場隻數', '強度預算', '怪物（依出現難度）'],
+  Object.values(M.REGIONS).map(r => [r.id, r.name, r.area ?? 1, r.locked ? B.BOSSES.filter(b => b.rewards.unlockRegions?.includes(r.id)).map(b => `打倒${b.name}`).join('、') : '一開始',
+    r.resonance ? `共鳴：每次被攻擊打中（有傷害）疊 1 層，雙方都會；${RES.RESONANCE.stacks} 層爆發，受到自己最大 HP ${pct(RES.RESONANCE.burstRatio)} 的直接傷害並歸零；怪物爆發時有減傷就解除減傷，沒有就易傷（承受傷害 +${pct(RES.RESONANCE.vulnerable)}，${RES.RESONANCE.vulnerableDuration} 槽，可驅散）；層數不消退` : '',
+    `${r.count[0]}～${r.count[1]}`, r.budget,
+    r.monsters.map(id => `${M.MONSTERS[id].name}（難度 ${M.MONSTERS[id].from}～${M.MONSTERS[id].maxPerEncounter ? `，每場最多 ${M.MONSTERS[id].maxPerEncounter} 隻` : ''}${M.MONSTERS[id].group ? `，一次至少 ${M.MONSTERS[id].group} 隻` : ''}）`).join('、')]));
 
 // ── 怪物 ──
 const rarity = def => def.rarity === 'rare' ? '稀有' : def.rarity === 'elite' ? '菁英' : '普通';
@@ -79,15 +83,17 @@ function skillEffect(s) {
   if (s.kind === 'buff') return ['', `${statName(s.stat)} × ${s.mult}，${s.duration} 槽`];
   if (s.kind === 'shield') return ['', s.power != null ? `護盾 = 施放者攻擊/智力 × ${Math.round(s.power * 100)}%，${s.duration} 槽` : `護盾 = 施放者最大 HP × ${Math.round(s.ratio * 100)}%，${s.duration} 槽`];
   if (s.kind === 'heal') return [`${Math.round(s.power * 100)}%`, '治療（讀施放者的攻擊/智力）'];
+  if (s.kind === 'cleanse') return ['', '清除我方全體可驅散的減益（共鳴層數清不掉）；沒有可清除的減益時不施放'];
   return ['', JSON.stringify(s)];
 }
-const KIND = { attack: '攻擊', buff: '增減益', shield: '護盾', heal: '治療' };
+const KIND = { attack: '攻擊', buff: '增減益', shield: '護盾', heal: '治療', cleanse: '淨化' };
 const bossDefs = B.BOSSES.flatMap(b => b.monsters.map(m => ({ ...m, boss: b })));
 add('怪物技能', '怪物技能', '「解鎖難度」起才會使用；倍率是攻擊或智力（法術怪）的百分比。',
   ['怪物', '技能 id', '技能', '種類', '解鎖難度', 'SP', '目標', '倍率', '效果'],
   [...Object.values(M.MONSTERS), ...bossDefs].flatMap(def => def.skills.map(s => {
     const [power, effect] = skillEffect(s);
-    return [def.boss ? `Boss：${def.name}` : def.name, s.id, s.name, KIND[s.kind] ?? s.kind, s.from, s.spCost ?? 0, TARGET[s.target] ?? s.target, power, effect];
+    const chase = s.chase && def.harmony ? `命中後其他${def.name}各追擊一次（攻擊 ${Math.round(def.harmony.power * 100)}%）；難度 ${def.harmony.normalFrom} 起普攻也會引發追擊` : '';
+    return [def.boss ? `Boss：${def.name}` : def.name, s.id, s.name, KIND[s.kind] ?? s.kind, s.from, s.spCost ?? 0, TARGET[s.target] ?? s.target, power, [effect, chase].filter(Boolean).join('；')];
   })));
 function traitText(t) {
   if (t.kind === 'split') return `HP 第一次低於 ${pct(t.at)} 時分裂出 ${t.count} 隻「${t.name}」（HP ${pct(t.hpRatio)}、攻擊/智力 ${pct(t.statRatio)}）`;
@@ -95,6 +101,7 @@ function traitText(t) {
   if (t.kind === 'enrage') return `HP 低於 ${pct(t.at)} 時 ${statName(t.stat)} × ${t.mult}`;
   if (t.kind === 'phase') return `HP 第一次低於 ${pct(t.at)} 時轉階段：${Object.entries(t.mults ?? {}).map(([k, m]) => `${statName(k)} × ${m}`).join('、')}` +
     (t.summon ? `；召喚「${t.summon.name}」（本體最大 HP ${pct(t.summon.hpRatio)}、同防禦、攻擊傷害減 ${pct(t.summon.reduction)}、${t.summon.drain ? `只會用「${t.summon.drain.name}」讓玩家失去 ${t.summon.drain.sp} 點 SP` : '不行動'}；打倒後本體受到本體最大 HP ${pct(t.summon.breakRatio)} 的傷害）` : '');
+  if (t.kind === 'field') return `場地特效：活著時每回合開始，全場（雙方、包括自己）各疊 ${t.resonance} 層共鳴`;
   return JSON.stringify(t);
 }
 add('怪物特性', '怪物特性', '', ['怪物', '特性', '解鎖難度', '內容'],
@@ -116,11 +123,11 @@ const fmt = (l, v) => {
   return ['hp', 'sp', 'atk', 'int', 'def', 'spd', 'hit', 'eva'].includes(l.stat) ? String(Math.round(v)) : String(r2(v));
 };
 add('刻印詞綴', '刻印：刻到裝備時的詞綴', `每個刻印 3 行，刻到裝備時隨機取 2 行；每行數值 = 上限 × 階級縮放 × ${A.ROLL_MIN}～1。階級縮放：${Object.entries(A.TIER_SCALE).map(([t, s]) => `${t} 階 ${s}`).join('、')}。每件裝備最多 ${A.ENGRAVINGS_PER_ITEM} 個刻印；減傷合計上限 ${pct(A.REDUCTION_CAP)}、異常持續合計上限 +${A.AILMENT_DURATION_CAP} 槽。`,
-  ['種類 id', '刻印', '詞綴', '運算', '上限（5 階滿骰）', '1 階', '2 階', '3 階', '4 階', '5 階', '可刻部位'],
+  ['種類 id', '刻印', '詞綴', '運算', '上限（5 階滿骰）', '1 階', '2 階', '3 階', '4 階', '5 階', '可刻部位', '取得'],
   Object.entries(A.ENGRAVING_TYPES).flatMap(([id, def]) => def.lines.map((l, i) => [i === 0 ? id : '', i === 0 ? def.name : '', lineName(l),
     l.kind === 'stat' ? (l.op === 'inc' ? '百分比（加算）' : '固定值') : '裝備效果', fmt(l, l.max),
     ...[1, 2, 3, 4, 5].map(t => `${fmt(l, l.max * A.TIER_SCALE[t] * A.ROLL_MIN)}～${fmt(l, l.max * A.TIER_SCALE[t])}`),
-    i === 0 ? A.ENGRAVING_SLOTS[id].map(s => SLOT[s]).join('、') : ''])));
+    i === 0 ? A.ENGRAVING_SLOTS[id].map(s => SLOT[s]).join('、') : '', i === 0 ? ((def.area ?? 1) === 1 ? '所有地區掉落、不同種合成' : `只在第 ${def.area} 區掉落（不同種合成不會出現）`) : ''])));
 
 add('刻印製作', '刻印：製作裝備時每個刻印貢獻的基底', `一件裝備投入 ${C.CRAFT_INPUTS} 個刻印；基底 = Σ（屬性單位 × 種類比重 × 階級縮放）× 品質倍率 × 部位倍率，四捨五入。屬性單位：${C.CRAFT_STATS.map(s => `${statName(s)} ${C.STAT_UNIT[s]}`).join('、')}。下表是「1 個刻印、品質 ×1、部位倍率 1」的貢獻。`,
   ['刻印', '階級', ...C.CRAFT_STATS.map(statName), '施放權重加成'],
@@ -172,8 +179,8 @@ add('異常', '異常狀態', '持續時間以中招者的行動槽計；重複�
 
 // ── 傳說裝備 ──
 add('傳說裝備', '傳說裝備', '只能掉落，不能刻刻印、沒有製作詞綴。分解得 1 顆黑骰；黑骰可依掉落時的階級重置一件傳說裝備的數值（施放權重不變）。數值依掉落難度的最高刻印階縮放，再擲 0.7～1（標「固定區間」的不縮放）。施放權重 60～120。',
-  ['id', '名稱', '部位', '普攻屬性', '基底（上限）', '獨有詞綴（上限）', '機制'],
-  Object.values(L.LEGENDARIES).map(l => [l.id, l.name, SLOT[l.slot], l.attackStat === 'int' ? '智力' : '攻擊',
+  ['id', '名稱', '掉落地區', '部位', '普攻屬性', '基底（上限）', '獨有詞綴（上限）', '機制'],
+  Object.values(L.LEGENDARIES).map(l => [l.id, l.name, (l.area ?? 1) === 1 ? '所有地區' : `第 ${l.area} 區`, SLOT[l.slot], l.attackStat === 'int' ? '智力' : '攻擊',
     l.base.map(b => `${statName(b.stat)} +${b.max}`).join('、'), l.unique.map(u => u.scope === 'effect' ? `${{ summonHp: '召喚物生命', physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷' }[u.kind] ?? u.kind} +${pct(u.max)}` : u.range ? `${statName(u.stat)} ${pct(u.range[0])}～${pct(u.range[1])}（固定區間）` : ['cri', 'criDmg'].includes(u.stat) ? `${statName(u.stat)} +${pct(u.max)}` : `${statName(u.stat)}${u.op === 'inc' ? '提高 ' + pct(u.max) : ' +' + u.max}`).join('、'),
     l.mechanics.map(m => describeMechanic(m, id => G.SUPPORT_GEMS[id]?.name ?? id).replace('獲得護盾', m.type === 'spShield' ? `獲得護盾（智力 × SP × ${m.ratio}）` : '獲得護盾') + (m.type === 'phantom' ? `（幻影屬性 × 玩家：${['hp', 'spd', 'atk', 'int', 'def'].map(k => `${statName(k)} ${m.ratios?.[k] ?? (k === 'spd' ? 1 : m.ratio)}`).join('、')}；生命再乘 1 + 召喚物生命）` : '')).join('；')]));   // 後台多寫護盾倍率；玩家說明不寫
 

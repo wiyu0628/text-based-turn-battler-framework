@@ -59,7 +59,8 @@ const KIND_SHARES = {
   bulwark: { def: 0.6, hp: 0.4 },
   gale:    { spd: 0.6, hp: 0.2, sp: 0.2 },
   endure:  { hp: 0.4, sp: 0.4, def: 0.2 },
-  deft:    { spd: 0.5, hp: 0.3, atk: 0.1, int: 0.1 }
+  deft:    { spd: 0.5, hp: 0.3, atk: 0.1, int: 0.1 },
+  resound: { spd: 0.4, hp: 0.3, def: 0.3 }   // 迴音（第二區專屬）
 };
 
 const SLOT_MULT = {

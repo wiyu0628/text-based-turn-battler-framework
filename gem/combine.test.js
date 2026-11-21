@@ -4,7 +4,7 @@ const { rollCombine, ENGRAVING_TYPES, COMBINE_INPUTS, MAX_TIER } = require('./af
 const save = require('./saveLayer');
 const { createSeededRandom } = require('../src');
 
-const TYPES = Object.keys(ENGRAVING_TYPES);
+const TYPES = Object.keys(ENGRAVING_TYPES).filter(id => (ENGRAVING_TYPES[id].area ?? 1) === 1);   // 地區專屬的不會合成出來
 const fresh = () => save.createEmptySave({ now: '2026-01-01T00:00:00Z' });
 const noRng = () => { throw new Error('同種合成不該擲骰'); };
 
@@ -34,6 +34,12 @@ test('mixed combine rolls exactly once and is roughly uniform', () => {
   const n = 70000;
   for (let i = 0; i < n; i++) counts[rollCombine(['fury', 'fury', 'arcane'], 1, rng).type]++;
   for (const type of TYPES) assert.ok(Math.abs(counts[type] / n - 1 / TYPES.length) < 0.01, `${type} ${counts[type]}`);
+});
+
+test('area-exclusive kinds never come out of a mixed combine, but three of them still combine up', () => {
+  assert.ok(!TYPES.includes('resound'));
+  for (let i = 0; i < 50; i++) assert.notEqual(rollCombine(['resound', 'fury', 'gale'], 1, () => i / 50).type, 'resound');
+  assert.deepEqual(rollCombine(['resound', 'resound', 'resound'], 2, noRng), { type: 'resound', tier: 3, mode: 'same' });
 });
 
 test('a custom pool limits the mixed draw (for future slot-only engravings)', () => {

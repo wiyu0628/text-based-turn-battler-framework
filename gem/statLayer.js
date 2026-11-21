@@ -47,7 +47,9 @@ const STAT_DEFS = {
   eva:           { name: '閃避',       display: 'number',  integer: true,  min: 0, fallback: 0 },
   cri:           { name: '暴擊率',     display: 'percent', integer: false, min: 0, max: 1, fallback: 0 },
   criDmg:        { name: '暴擊傷害',   display: 'percent', integer: false, min: 1, fallback: 1.5 },
-  skillCastRate: { name: '技能施放率', display: 'percent', integer: false, min: 0, max: 1, fallback: 0.35 }
+  skillCastRate: { name: '技能施放率', display: 'percent', integer: false, min: 0, max: 1, fallback: 0.35 },
+  // 閃避反擊的點數（2026-11-21，第二區專屬刻印與傳說）：閃避成功後依點數擲反擊，見 monsters.evadeCounterChance
+  evadeCounter:  { name: '反擊點數',   display: 'number',  integer: true,  min: 0, fallback: 0 }
 };
 const BONUS_OPS = new Set(['flat', 'inc', 'more']);
 

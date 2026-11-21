@@ -17,7 +17,7 @@ node gem/gems-ui-build.js
 node gem/game-build.js                                  # 正式遊戲介面
 ```
 
-**預期**：`npm test` 704 項全過；`gem/` 內各測試檔：accessory 7、affixTable 12、ailment 15、bosses 8、castWeight 22、combine 9、craft 17、deft 3、difficulty 2、dropTable 9、energy 8、engrave 12、equipment 12、game 13、gems 107、legendary 12、monsters 15、saveLayer 52、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 500 KB、26 個模組）。
+**預期**：`npm test` 724 項全過；`gem/` 內各測試檔：accessory 7、area 4、affixTable 12、ailment 15、bosses 8、castWeight 22、combine 10、craft 17、deft 3、difficulty 2、dropTable 10、energy 8、engrave 12、equipment 12、game 13、gems 107、hall 13、legendary 19、monsters 15、saveLayer 52、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 500 KB、27 個模組）。
 
 **如果結果不同，先判斷是哪一種情況：**
 

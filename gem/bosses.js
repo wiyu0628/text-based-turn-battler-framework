@@ -10,7 +10,7 @@
  *   額外獎勵還沒想好，目前考慮**開啟新地區**：首次擊敗的 rewards 支援 unlockRegions 與 gems。
  *
  * ── 資料格式 ──────────────────────────────────────────────────
- *   { id, name, difficulty, placeholder?, monsters: [怪物定義…], rewards: { gems?: [主動寶石 id], unlockRegions?: [地區 id], accessories?: [飾品 id] } }
+ *   { id, name, difficulty, placeholder?, monsters: [怪物定義…], rewards: { gems?: [主動寶石 id], unlockRegions?: [地區 id], accessories?: [飾品 id] }, area?: 第幾區（掉落池用，沒寫＝1） }
  *   monsters 的每一隻用 monsters.js 的同一套格式（stats 是基準怪倍率、skills、traits），用 buildFromDef 建；
  *   難度縮放（difficulty.scaleMonster）照樣套用，所以王的倍率是「在它的難度下」相對基準怪的強度。
  *   王戰不套強度預算（王是單獨設計的關卡）。
@@ -66,7 +66,7 @@ const BOSSES = [
           drain: { sp: 6, name: '魔力汲取', text: '{caster}吸收了{target}的{value}點SP。' } }
       }]
     }],
-    rewards: { gems: ['pursuit', 'firestorm'], unlockRegions: [], accessories: ['hourglass'] }   // 「烈風爪痕」的碎片 2026-11-20（使用者：首次打王固定掉飾品）
+    rewards: { gems: ['pursuit', 'firestorm'], unlockRegions: ['hall'], accessories: ['hourglass'] }   // 「烈風爪痕」的碎片 2026-11-20（使用者：首次打王固定掉飾品）
   }
 ];
 

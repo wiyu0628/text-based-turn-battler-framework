@@ -56,7 +56,7 @@ const { BOSSES } = require('./bosses');
 const { REGIONS } = require('./monsters');
 const ATTACK_STATS = ['atk', 'int'];
 
-const SAVE_VERSION = 8;
+const SAVE_VERSION = 9;
 const SLOTS = ['weapon', 'helmet', 'armor', 'boots'];
 const ORIGINS = ['drop', 'craft'];
 // 可以刻刻印的裝備來源。掉落裝備目前只有傳說裝備（獨有效果、沒有隨機詞綴），所以不能刻。
@@ -434,7 +434,13 @@ const MIGRATIONS = {
     ...save, version: 8, blackDice: 0,
     equipment: (save.equipment ?? []).map(item => (item.legendaryId !== undefined && LEGENDARIES[item.legendaryId] && item.tier === undefined
       ? { ...item, tier: inferLegendaryTier(item) } : item))
-  })
+  }),
+  // v8 → v9：第二區「和聲音樂廳」（2026-11-21）由中央廳首次擊敗開放；已經打贏過的存檔補開。
+  8: save => {
+    const progress = { ...save.progress, unlockedRegions: [...(save.progress?.unlockedRegions ?? [])] };
+    if ((progress.defeatedBosses ?? []).includes('gatekeeper') && !progress.unlockedRegions.includes('hall')) progress.unlockedRegions.push('hall');
+    return { ...save, version: 9, progress };
+  }
 };
 
 /** 從背包與所有裝備連結裡刪掉指定的輔助寶石（遷移用；不改傳入的物件）。 */
@@ -554,7 +560,10 @@ function convertGems(save, gemIds, rng = Math.random) {
   for (const id of gemIds) need[id] = (need[id] ?? 0) + 1;
   const socketed = {};
   for (const item of save.equipment ?? []) for (const link of item.links ?? []) for (const id of link.supports ?? []) socketed[id] = (socketed[id] ?? 0) + 1;
-  const all = Object.keys(SUPPORT_GEMS);
+  // 區域（2026-11-20 使用者）：第一區的寶石都會出；其他區的寶石要玩家已經有那一區的寶石（背包或鑲著）才會出
+  const ownedAreas = new Set([1]);
+  for (const id of Object.keys(SUPPORT_GEMS)) if (save.gems?.[id] > 0 || socketed[id] > 0) ownedAreas.add(SUPPORT_GEMS[id].area ?? 1);
+  const all = Object.keys(SUPPORT_GEMS).filter(id => ownedAreas.has(SUPPORT_GEMS[id].area ?? 1));
   const missing = all.filter(id => !(save.gems?.[id] > 0) && !(socketed[id] > 0));
   const notInput = all.filter(id => !need[id]);
   const pool = missing.length ? missing : notInput.length ? notInput : all;
@@ -628,7 +637,7 @@ function combineAllEngravings(save, type, tier) {
  * 沒傳會丟錯（不會默默丟掉玩家的掉落）。內容不合法丟 SaveError，原存檔不變。
  * @param {{ difficulty?: number, rng?: () => number }} [options] rng 只用在傳說裝備（每件：抽種類 1 次，再照 rollLegendary 的順序）
  */
-function grantDrops(save, drops, { difficulty, rng = Math.random } = {}) {
+function grantDrops(save, drops, { difficulty, rng = Math.random, area = drops?.area ?? 1 } = {}) {
   if (!isObject(drops)) throw new SaveError('掉落必須是物件');
   const { engravings = [], supportGems = [] } = drops;
   if (!Array.isArray(engravings) || !Array.isArray(supportGems)) throw new SaveError('掉落的 engravings 與 supportGems 必須是陣列');
@@ -641,7 +650,7 @@ function grantDrops(save, drops, { difficulty, rng = Math.random } = {}) {
   const legendaries = [];
   for (let i = 0; i < legendaryCount; i++) {
     if (difficulty === undefined) throw new SaveError('掉落裡有傳說裝備，grantDrops 必須傳 { difficulty } 才能決定數值');
-    try { legendaries.push(rollLegendary(pickLegendary(rng), difficulty, rng)); } catch (error) { throw new SaveError(error.message); }
+    try { legendaries.push(rollLegendary(pickLegendary(rng, area), difficulty, rng)); } catch (error) { throw new SaveError(error.message); }
   }
   return mutate(save, draft => {
     for (const key of keys) addToStack(draft.engravings, key, 1);
@@ -1107,7 +1116,7 @@ function compileEquipped(save, options = {}) {
 
 /** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */
 function equippedMechanics(save) {
-  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom'].includes(m.type));
+  return equippedItems(save).flatMap(item => mechanicsOf(item)).filter(m => ['spShield', 'shieldBreakSp', 'phantom', 'counterPower', 'multiHitRamp'].includes(m.type));
 }
 
 /** 普攻吃的屬性：穿著的武器的 attackStat；沒穿武器或武器沒寫時是 atk。普攻本身由遊戲建立（傷害段寫 stat）。 */

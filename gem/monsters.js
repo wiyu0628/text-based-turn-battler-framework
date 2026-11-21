@@ -151,13 +151,45 @@ const MONSTERS = {
       { kind: 'heal', id: 'feed', name: '吞食', from: 10, spCost: 15, target: 'self', power: 4 },
       { kind: 'buff', id: 'frenzy', name: '狂暴', from: 13, spCost: 15, target: 'self', stat: 'atk', mult: 1.4, duration: 3 }
     ]
+  },
+
+  // ── 第二區「和聲音樂廳」（使用者設計，2026-11-21；數值是我擬的初版，之後用模擬調）──────────
+  // 和聲妖精：一次至少兩隻（group: 2）；「和聲」打中後其他和聲妖精各追擊一下；難度 7 起普攻也會引發追擊。
+  fairy: {
+    id: 'fairy', name: '和聲妖精', from: 1, cost: 0.2, group: 2,
+    stats: { hp: 0.25, atk: 0.3, def: 20, spd: 220 },
+    harmony: { power: 0.4, normalFrom: 7, text: '{caster}應和著旋律追擊，' },
+    skills: [
+      { kind: 'attack', id: 'harmony', name: '和聲', from: 1, spCost: 10, power: 0.8, target: 'single', chase: true }
+    ]
+  },
+  // 指揮家：清除隊友身上的減益（玩家的裂傷、殘刃、緩速、易傷……）
+  conductor: {
+    id: 'conductor', name: '指揮家', from: 1, cost: 0.4,
+    stats: { hp: 0.45, atk: 0.35, def: 60, spd: 180 },
+    skills: [
+      { kind: 'cleanse', id: 'order', name: '整頓', from: 1, spCost: 15, target: 'allyAll', text: '{caster}揮動指揮棒，樂團重新整齊了起來！' },
+      { kind: 'attack', id: 'baton', name: '指揮棒', from: 7, spCost: 10, power: 1.3, target: 'single' }
+    ]
+  },
+  // 管風琴魔像（菁英）：場地特效——活著時每回合開始，全場（包括自己）各疊 1 層共鳴
+  organ: {
+    id: 'organ', name: '管風琴魔像', rarity: 'elite', from: 7, cost: 0.9,
+    stats: { hp: 1.0, atk: 0.9, def: 150, spd: 100 },
+    traits: [{ kind: 'field', resonance: 1, text: '管風琴的低鳴在大廳裡迴盪……' }],
+    skills: [
+      { kind: 'attack', id: 'chord', name: '重和弦', from: 7, spCost: 15, power: 1.0, target: 'all' }
+    ]
   }
 };
 
 // locked: true 的地區一開始不開放，要由王的獎勵（rewards.unlockRegions）開啟；目前兩區都一開始就開放。
 const REGIONS = {
-  ruins: { id: 'ruins', name: '廢都', count: [1, 3], budget: 0.7, monsters: ['dog', 'circle', 'doll', 'goblin', 'golem'] },
-  sewer: { id: 'sewer', name: '地下水道', count: [2, 5], budget: 0.85, monsters: ['rat', 'tentacle', 'slime', 'mimic', 'scavenger'] }
+  // area：第幾區（掉落池＝第一區＋本區專屬，見 dropTable.inArea）
+  ruins: { id: 'ruins', name: '廢都', area: 1, count: [1, 3], budget: 0.7, monsters: ['dog', 'circle', 'doll', 'goblin', 'golem'] },
+  sewer: { id: 'sewer', name: '地下水道', area: 1, count: [2, 5], budget: 0.85, monsters: ['rat', 'tentacle', 'slime', 'mimic', 'scavenger'] },
+  // 第二區（2026-11-21）：打倒廢都中央廳後開放；地區特色＝共鳴（resonance.js）。第 3 種一般怪與稀有怪使用者還沒想好。
+  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 5], budget: 0.7, resonance: true, monsters: ['fairy', 'conductor', 'organ'] }
 };
 
 // ── 技能建構 ────────────────────────────────────────────────
@@ -213,6 +245,27 @@ function buildSkill(spec, def, stats, casterName) {
     return new Skill({ ...base, actions: [{ type: 'BUFF', targetType: TARGET[spec.target], text, buffs: [{
       id: `monster_shield:${spec.id}`, name: spec.name, duration: spec.duration, stackPolicy: 'refresh',
       shield: Math.max(1, Math.round(spec.power != null ? (stats[stat] ?? 0) * spec.power : stats.maxHp * spec.ratio)), polarity: 'positive', dispellable: true }] }] });
+  }
+  if (spec.kind === 'cleanse') {
+    // 清除隊友（含自己）身上可驅散的減益；框架沒有驅散動作，用 TEXT 動作開頭、自己移除
+    const skill = new Skill({ ...base, actions: [{ type: 'TEXT', targetType: 'SELF', text: { action: template(spec.text ?? '{caster} 清除了隊友的減益！', casterName) } }] });
+    const baseExecute = skill.execute;
+    skill.execute = function execute(caster, allies, enemies, logger, context, options) {
+      const result = baseExecute.call(this, caster, allies, enemies, logger, context, options);
+      const removed = allies.filter(a => a.isAlive).flatMap(a => a.removeBuffs('negative').map(b => `${a.name}的${b.name}`));
+      logger.addLog({ type: 'TEXT', actorId: caster.id, message: removed.length ? `清除了 ${removed.join('、')}。` : '但隊友身上沒有可以清除的減益。' });
+      return result;
+    };
+    // 隊友身上沒有可清除的減益時不施放（2026-11-21：不然指揮家會一直空放「整頓」）
+    const baseCanCast = skill.canCast;
+    skill.canCast = function canCast(entity, context, options) {
+      if (context?.teamA && context?.teamB) {
+        const allies = entity.team === 'A' ? context.teamA : context.teamB;
+        if (!allies.some(a => a.isAlive && a.buffs.some(b => b.polarity === 'negative' && b.dispellable))) return false;
+      }
+      return baseCanCast.call(this, entity, context, options);
+    };
+    return skill;
   }
   if (spec.kind === 'heal') {
     return new Skill({ ...base, actions: [{ type: 'HEAL', targetType: TARGET[spec.target], power: spec.power, stat, text }] });
@@ -373,25 +426,36 @@ function withSpCost(skill, cost) {
   return skill;
 }
 
-// 閃避反擊（見檔頭 evadeCounter）
+// 閃避反擊（見檔頭 evadeCounter）。點數讀 stats.evadeCounter（怪物由 evadeCounter.points 寫進去，玩家由裝備屬性來）。
 function buildEvadeCounterPassive(def, stats, entityName) {
   const spec = def.evadeCounter;
-  const stat = def.spell ? 'int' : 'atk';
-  const flags = def.spell ? { uncritable: true } : {};
-  const basic = new Skill({ id: `${def.id}_evade_counter`, name: '反擊', ...flags,
-    actions: [{ type: 'DAMAGE', stat, power: 1, ...flags, text: { action: template(spec.text ?? '{caster} 趁隙反擊，', entityName) } }] });
-  const special = spec.skill ? buildSkill(spec.skill, def, stats, entityName) : null;
+  stats.evadeCounter = spec.points;
+  return makeEvadeCounterPassive({ id: `monster_evade_counter:${def.id}`, stat: def.spell ? 'int' : 'atk', crit: !def.spell, text: spec.text, entityName,
+    special: spec.skill ? buildSkill(spec.skill, def, stats, entityName) : null, specialCost: spec.skill?.spCost ?? 0, skillId: def.id });
+}
+
+/**
+ * 玩家的閃避反擊（2026-11-21）：stats.evadeCounter > 0 時掛上；反擊是普攻（stat）× power 一擊（氣鳴楯【菲爾查哈】把 power 提高）。
+ */
+function buildPlayerEvadeCounterPassive({ stat = 'atk', power = 1, name = '玩家', text } = {}) {
+  return makeEvadeCounterPassive({ id: 'player_evade_counter', stat, crit: true, power, text, entityName: name, skillId: 'hero' });
+}
+
+function makeEvadeCounterPassive({ id, stat, crit, power = 1, text, entityName, special = null, specialCost = 0, skillId }) {
+  const flags = crit ? {} : { uncritable: true };
+  const basic = new Skill({ id: `${skillId}_evade_counter`, name: '反擊', ...flags,
+    actions: [{ type: 'DAMAGE', stat, power, ...flags, text: { action: template(text ?? '{caster} 趁隙反擊，', entityName) } }] });
   return {
-    id: `monster_evade_counter:${def.id}`,
+    id,
     trigger: 'AFTER_EVADE',
     enabled: (self, evasion) => Boolean(evasion.caster?.isAlive) && !(evasion.skill?.uncounterable || evasion.action?.uncounterable),
     action(self, evasion, logger, engine) {
       if (!engine || engine.result || engine.counterSource || !self.canAct()) return;
       const attacker = evasion.caster;
-      const chance = evadeCounterChance(spec.points, attacker.evadeCounterPoints ?? 0);
+      const chance = evadeCounterChance(self.stats.evadeCounter ?? 0, attacker.stats?.evadeCounter ?? 0);
       if (!((engine.rng ?? Math.random)() < chance)) return;
       // 怪物技能的 spCost 寫在技能規格上（框架的 Skill 只看 action.spCost），這裡自己扣
-      const cost = spec.skill?.spCost ?? 0;
+      const cost = specialCost;
       const useSpecial = special && self.stats.sp >= cost;
       const reply = useSpecial ? special : basic;
       if (useSpecial) self.stats.sp -= cost;
@@ -441,15 +505,60 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
     ...(def.normalAttackText !== undefined ? { text: { action: template(def.normalAttackText, entityName) } } : {}) }],
     ...(def.spell ? { uncritable: true, uncounterable: true } : {}) });
   // spCost 要放在第一個 action 上框架才會扣（Skill 只讀 action.spCost）。2026-11-20 修正：之前寫在技能層級，怪物放技能從來不扣 SP。
-  const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => withSpCost(buildSkill(spec, def, stats, entityName), spec.spCost));
-  const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives };
+  const skills = def.skills.filter(spec => difficulty >= spec.from).map(spec => {
+    const skill = withSpCost(buildSkill(spec, def, stats, entityName), spec.spCost);
+    return spec.chase && def.harmony ? withHarmonyChase(skill, def) : skill;
+  });
+  const attack = def.harmony && difficulty >= (def.harmony.normalFrom ?? Infinity) ? withHarmonyChase(normalAttack, def) : normalAttack;
+  const TRAIT_BUILDERS = { split: buildSplitPassive, ambush: buildAmbushPassive, enrage: buildEnragePassive, phase: buildPhasePassives, field: buildFieldPassive };
   const passives = (def.traits ?? []).filter(trait => difficulty >= (trait.from ?? 1)).flatMap(trait => {
     if (!TRAIT_BUILDERS[trait.kind]) throw new Error(`怪物「${def.id}」的特性種類不明：${trait.kind}`);
     return TRAIT_BUILDERS[trait.kind](trait, def, { difficulty, stats, entityName });
   });
   passives.push(...buildNarrationPassives(def.texts));
   if (def.evadeCounter) passives.push(buildEvadeCounterPassive(def, stats, entityName));
-  return new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack, normalAttackSpCost: 2, skills, passives, stats });
+  const entity = new Entity({ id: id ?? def.id, name: entityName, team: 'B', normalAttack: attack, normalAttackSpCost: 2, skills, passives, stats });
+  entity.monsterId = def.id;
+  return entity;
+}
+
+/**
+ * 和聲追擊（和聲妖精）：這一招打完後，場上其他同種的怪（活著、能行動）各對同一個目標追擊一下（攻擊 × harmony.power）。
+ * 追擊是普通的攻擊：可以被閃避、被反擊，也會疊共鳴；追擊本身不再引發追擊。反擊途中不追擊。
+ */
+function withHarmonyChase(skill, def) {
+  const spec = def.harmony;
+  const stat = def.spell ? 'int' : 'atk';
+  const baseExecute = skill.execute;
+  skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    const start = logger.logs?.length ?? 0;
+    const result = baseExecute.call(this, caster, allies, enemies, logger, context, options);
+    if (!context || context.result || context.counterSource) return result;
+    const targetId = (logger.logs ?? []).slice(start).find(l => l.actorId === caster.id && (l.type === 'DAMAGE' || l.type === 'MISS') && l.targetId)?.targetId;
+    const target = enemies.find(e => e.id === targetId);
+    if (!target) return result;
+    for (const mate of allies) {
+      if (mate === caster || mate.monsterId !== def.id || !mate.isAlive || !mate.canAct() || !target.isAlive || context.result) continue;
+      const chase = new Skill({ id: `${def.id}_harmony_chase`, name: '和聲追擊', actions: [{ type: 'DAMAGE', stat, power: spec.power, text: { action: template(spec.text, mate.name) } }] });
+      chase.execute(mate, allies, enemies, logger, context, { targets: [target], ignoreSp: true });
+    }
+    return result;
+  };
+  return skill;
+}
+
+// 場地特效（管風琴魔像）：活著時每回合開始，全場（雙方、包括自己）各疊 trait.resonance 層共鳴（resonance.js）
+function buildFieldPassive(trait) {
+  const { addResonance } = require('./resonance');
+  return [{
+    id: 'monster_field_resonance',
+    trigger: 'ROUND_START',
+    action(self, _payload, logger, engine) {
+      if (!self.isAlive || !engine || engine.result) return;
+      if (trait.text) logger.addLog({ type: 'TEXT', actorId: self.id, message: trait.text });
+      for (const unit of [...engine.teamA, ...engine.teamB]) if (unit.isAlive) addResonance(unit, trait.resonance, logger, engine);
+    }
+  }];
 }
 
 /** 某難度某地區出現得了的怪（依 from）。 */
@@ -479,12 +588,14 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   const cheapest = normals.reduce((a, b) => (a.cost <= b.cost ? a : b));
   while (picks.length < max) {
     // maxPerEncounter（選填）：同一場最多幾隻；沒寫就不限，亂數序列與之前相同
-    const affordable = normals.filter(def => def.cost <= region.budget - spent() + 1e-9
+    // group（選填）：抽到時一次出這麼多隻（例如和聲妖精 2 隻），要付得起、也要放得下
+    const affordable = normals.filter(def => (def.group ?? 1) * def.cost <= region.budget - spent() + 1e-9 && picks.length + (def.group ?? 1) <= max
       && (def.maxPerEncounter == null || picks.filter(p => p === def).length < def.maxPerEncounter));
     if (!affordable.length) break;
-    picks.push(affordable[Math.min(affordable.length - 1, Math.floor(rng() * affordable.length))]);
+    const pick = affordable[Math.min(affordable.length - 1, Math.floor(rng() * affordable.length))];
+    for (let g = 0; g < (pick.group ?? 1); g++) picks.push(pick);
   }
-  while (picks.length < min) picks.push(cheapest);
+  while (picks.length < min) for (let g = 0; g < (cheapest.group ?? 1); g++) picks.push(cheapest);
   const totalCost = spent();
   const scale = region.budget / totalCost;
   // 同名的加 A、B、C
@@ -514,4 +625,4 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
   return { monsters, summonFactory, info: { ids: picks.map(def => def.id), rare: hasRare, elite: hasElite, totalCost, scale } };
 }
 
-module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildMonster, buildFromDef, availableMonsters, rollEncounter };
+module.exports = { BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildPlayerEvadeCounterPassive, buildMonster, buildFromDef, availableMonsters, rollEncounter };

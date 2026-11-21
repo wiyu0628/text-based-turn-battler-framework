@@ -156,6 +156,7 @@ test('bosses unlock in order, old ones stay available; first clear gives rewards
     assert.deepEqual(save.availableRegions(state), ['ruins', 'sewer']);
     const first = save.recordBossVictory(state, 'gatekeeper');
     assert.equal(first.firstClear, true);
+    assert.deepEqual(first.rewards.unlockRegions, ['hall']);                 // 中央廳開放第二區（2026-11-21）
     assert.equal(first.save.gems.pursuit, 1);
     assert.equal(first.save.gems.firestorm, 1);
     assert.equal(state.gems.pursuit, undefined);                              // 原存檔不變
@@ -166,7 +167,7 @@ test('bosses unlock in order, old ones stay available; first clear gives rewards
     assert.equal(again.save.gems.pursuit, 1);                                 // 不重複發
     const second = save.recordBossVictory(state, 'test_second');
     assert.deepEqual(second.rewards.unlockRegions, ['test_region']);
-    assert.deepEqual(save.availableRegions(second.save), ['ruins', 'sewer', 'test_region']);
+    assert.deepEqual(save.availableRegions(second.save), ['ruins', 'sewer', 'hall', 'test_region']);
     assert.throws(() => save.recordBossVictory(state, 'nope'), /找不到王/);
   } finally {
     BOSSES.pop();

@@ -22,7 +22,8 @@
 const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');
 const { applyStatBonuses } = require('./statLayer');
 const save = require('./saveLayer');
-const { rollEncounter, availableMonsters, REGIONS } = require('./monsters');
+const { rollEncounter, availableMonsters, REGIONS, buildPlayerEvadeCounterPassive } = require('./monsters');
+const { applyResonance } = require('./resonance');
 const { buildBossEncounter, findBoss } = require('./bosses');
 const { rollDrops } = require('./dropTable');
 
@@ -60,10 +61,17 @@ function heroStats(state) {
 function buildHero(state) {
   const loadout = save.compileEquipped(state);
   const stat = loadout.normalAttackStat;
+  const stats = heroStats(state);
+  const passives = [...loadout.passives];
+  // 閃避反擊（第二區專屬刻印與傳說給反擊點數）：反擊 = 普攻屬性 × power；氣鳴楯【菲爾查哈】的 counterPower 提高倍率
+  if (stats.evadeCounter > 0) {
+    const power = save.equippedMechanics(state).filter(m => m.type === 'counterPower').reduce((p, m) => p * m.power, 1);
+    passives.push(buildPlayerEvadeCounterPassive({ stat, power, name: playerName(state) }));
+  }
   const hero = new Entity({
     id: 'hero', name: playerName(state), team: 'A', normalAttackSpCost: 2,
     normalAttack: new Skill({ id: 'hero_attack', name: '普攻', actions: [{ type: 'DAMAGE', stat }] }),
-    skills: loadout.skills, passives: loadout.passives, stats: heroStats(state)
+    skills: loadout.skills, passives, stats
   });
   return { hero, loadout };
 }
@@ -116,6 +124,8 @@ function prepareBattle(state, target, seed) {
     ({ monsters } = buildBossEncounter(target.id));
     info = { boss: true, elite: true };
   }
+  // 第二區的地區特色「共鳴」（resonance.js）：雙方每個單位都掛上共鳴被動
+  if (target.kind === 'region' && REGIONS[target.id].resonance) applyResonance([hero, ...monsters]);
   const engine = new BattleEngine([hero], monsters, {
     maxTurns: MAX_TURNS, rng: createSeededRandom(seed + 1), skillSelectionResolver: loadout.resolver,
     hitFormula: 'contest', summonFactory
@@ -138,7 +148,9 @@ function runBattle(state, target, seed, { now = () => new Date().toISOString() }
   let next = state, drops = null, firstClear = false, rewards = null;
   if (victory) {
     const dropRng = createSeededRandom(seed + 2);
-    drops = rollDrops(battle.difficulty, dropRng, { rare: battle.info.rare, elite: battle.info.elite });
+    // 第幾區（掉落池＝第一區＋本區專屬）：地區看 REGIONS[id].area、王看 boss.area，沒寫＝1
+    const area = target.kind === 'region' ? (REGIONS[target.id]?.area ?? 1) : (findBoss(target.id)?.area ?? 1);
+    drops = rollDrops(battle.difficulty, dropRng, { rare: battle.info.rare, elite: battle.info.elite, area });
     next = save.grantDrops(next, drops, { difficulty: battle.difficulty, rng: dropRng });
     if (target.kind === 'boss') {
       const recorded = save.recordBossVictory(next, target.id);

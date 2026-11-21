@@ -23,7 +23,7 @@ test('omen staff: int weapon with INT flat base, INT % unique, death cast and am
   assert.deepEqual(omen.mechanics.map(m => m.type).sort(), ['castOnEnemyDeath', 'grantSupport']);
   assert.deepEqual(mechanicsOf({ legendaryId: 'omen' }).find(m => m.type === 'grantSupport'), { type: 'grantSupport', gem: 'amp' });
   assert.deepEqual(mechanicsOf({}), []);
-  const ids = Object.keys(LEGENDARIES);
+  const ids = Object.keys(LEGENDARIES).filter(id => (LEGENDARIES[id].area ?? 1) === 1);
   assert.equal(pickLegendary(() => 0), ids[0]);
   assert.equal(pickLegendary(() => 0.9999999), ids.at(-1));   // 平均抽
 });
@@ -39,8 +39,8 @@ test('values scale with the opened tier of the drop difficulty and roll 0.7~1, l
   assert.equal(low.base[0].value, Math.round(OMEN_INT * TIER_SCALE[1] * 0.7));
   assert.equal(low.affixes[0].value, Math.round(OMEN_INC * TIER_SCALE[1] * 0.7 * 10000) / 10000);
   assert.equal(low.castWeight, 60);
-  assert.equal(rollLegendary('omen', 6, () => 0.9999999).base[0].value, Math.round(OMEN_INT * TIER_SCALE[2]));   // 難度 6 開放到第 2 階（3% 預覽不算）
-  assert.equal(rollLegendary('omen', 7, () => 0.9999999).base[0].value, Math.round(OMEN_INT * TIER_SCALE[3]));
+  assert.equal(rollLegendary('omen', 6, () => 0.9999999).base[0].value, Math.round(OMEN_INT * TIER_SCALE[2] * (0.7 + 0.3 * 0.9999999)));   // 難度 6 開放到第 2 階（3% 預覽不算）
+  assert.equal(rollLegendary('omen', 7, () => 0.9999999).base[0].value, Math.round(OMEN_INT * TIER_SCALE[3] * (0.7 + 0.3 * 0.9999999)));
   assert.throws(() => rollLegendary('nope', 5), /nope/);
   assert.throws(() => rollLegendary('omen', 16), /難度/);
 });
@@ -361,4 +361,12 @@ test('存檔 v8 遷移：加 blackDice: 0，舊傳說裝備從數值反推掉落
   assert.equal(upgraded.blackDice, 0);
   assert.equal(upgraded.equipment[0].tier, 3);
   assert.deepEqual(save.validateSave(upgraded), []);
+});
+
+test('傳說削弱（2026-11-21）不改舊存檔：已有的傳說武器數值照舊（使用者決定），遷移不動數值', () => {
+  const r = save.addLegendary(save.createEmptySave({ now: '2026-11-21T00:00:00Z' }), 'linkdagger', 15, () => 0.9999999);
+  const old = structuredClone(r.save);
+  old.equipment[0].base[0].value = 532;                                     // 削弱前的上限
+  assert.deepEqual(save.validateSave(old), []);
+  assert.equal(save.migrateSave(old).equipment[0].base[0].value, 532);
 });

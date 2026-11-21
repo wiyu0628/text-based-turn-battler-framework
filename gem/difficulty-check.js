@@ -1,13 +1,14 @@
 'use strict';
 // 驗證難度縮放：每個難度，拿「上一階整套」與「這一階整套」（講究配方、第 5 階刻印換成對應階）打基準怪的勝率。
-// 用法：node gem/difficulty-check.js [phys|spell] [場數=200] [地區]（repo 根目錄；不寫地區＝基準怪；ruins／sewer 用 monsters.js 組的真實戰鬥）
+// 用法：node gem/difficulty-check.js [phys|spell] [場數=200] [地區]（repo 根目錄；不寫地區＝基準怪；ruins／sewer／hall 用 monsters.js 組的真實戰鬥，hall 會掛共鳴）
 // 每階抽 6 組裝備（隨機取行、擲值、品質），每組打 N 場，回報平均勝率。命中公式用 contest。
 const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');
 const { compileLoadout } = require('./gemCompiler');
 const { gear, BASE, FOE } = require('./affix-budget');
 const { scaleMonster } = require('./difficulty');
 const { openTier } = require('./dropTable');
-const { rollEncounter } = require('./monsters');
+const { rollEncounter, REGIONS } = require('./monsters');
+const { applyResonance } = require('./resonance');
 
 const MIX = main => ({ weapon: [[main, 10]], helmet: [['vital', 5], ['bulwark', 5]], armor: [[main, 4], ['vital', 3], ['bulwark', 3]], boots: [['gale', 4], ['vital', 3], ['bulwark', 3]] });
 const ENGR = {
@@ -28,6 +29,7 @@ function fight(build, stats, fx, difficulty, seed, region) {
     foes = [new Entity({ id: 'f', name: 'f', team: 'B', normalAttack: new Skill({ id: 'c', name: 'c', actions: [{ type: 'DAMAGE' }] }), normalAttackSpCost: 2,
       stats: scaleMonster(FOE, difficulty) })];
   }
+  if (region && REGIONS[region].resonance) applyResonance([hero, ...foes]);   // 第二區：共鳴
   return new BattleEngine([hero], foes, { rng: createSeededRandom(seed), maxTurns: 60, skillSelectionResolver: loadout.resolver, hitFormula: 'contest', summonFactory })
     .start().winner === 'TEAM_A';
 }

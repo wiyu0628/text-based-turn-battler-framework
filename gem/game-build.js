@@ -24,7 +24,7 @@ function listJs(dir) {
 
 // 遊戲層用到的模組（不含測試、模擬與打包腳本）
 const GAME_MODULES = ['statLayer', 'gems', 'gemCompiler', 'affixTable', 'craftTable', 'dropTable', 'energyTable',
-  'legendaryTable', 'accessoryTable', 'difficulty', 'monsters', 'bosses', 'saveLayer', 'game'].map(name => `gem/${name}.js`);
+  'legendaryTable', 'accessoryTable', 'difficulty', 'resonance', 'monsters', 'bosses', 'saveLayer', 'game'].map(name => `gem/${name}.js`);
 const files = [...listJs('src'), ...GAME_MODULES];
 
 const modules = files.map(file => {

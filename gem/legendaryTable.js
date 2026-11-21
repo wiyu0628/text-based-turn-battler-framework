@@ -44,8 +44,9 @@ const LEGENDARIES = {
     slot: 'weapon',
     attackStat: 'int',
     // 平衡第一輪：240 → 280、30% → 35%（原本比製作的第 5 階武器還弱；調整後單體 +2～3%、多隻怪 +5～10%）
-    base: [{ stat: 'int', op: 'flat', max: 532 }],   // 預算 ×10 後 × 1.9（原本 280、35%）
-    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.665 }],
+    // 2026-11-21 削弱（使用者：前期刻印少時傳說太強，會一路跳級）：主屬性 ×0.6（532 → 319、66.5% → 40%），目標介於隨機製作與配方製作武器之間
+    base: [{ stat: 'int', op: 'flat', max: 319 }],
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
     mechanics: [
       { type: 'castOnEnemyDeath', text: '{caster} 手中的報喪法杖為 {target} 敲響喪鐘！' },
       { type: 'grantSupport', gem: 'amp' }
@@ -59,12 +60,13 @@ const LEGENDARIES = {
     name: '連攜匕首',
     slot: 'weapon',
     attackStat: 'atk',
-    base: [{ stat: 'atk', op: 'flat', max: 532 }],
-    // 攻擊力提高 50%：2026-11-19 補強（少了刻印的攻擊力%，比同階製作武器弱）。試過速度提高 20～40%，難度 15 仍不到製作武器，改用攻擊力%（使用者）。
+    // 2026-11-21 削弱：主屬性 ×0.7（532 → 372、攻擊 inc 50% → 35%）；爆擊兩行不動
+    base: [{ stat: 'atk', op: 'flat', max: 372 }],
+    // 攻擊力提高 50%（2026-11-21 → 35%）：2026-11-19 補強（少了刻印的攻擊力%，比同階製作武器弱）。試過速度提高 20～40%，難度 15 仍不到製作武器，改用攻擊力%（使用者）。
     unique: [
       { scope: 'wearer', stat: 'cri', op: 'flat', max: 0.2 },
       { scope: 'wearer', stat: 'criDmg', op: 'flat', range: [-0.3, -0.2] },
-      { scope: 'wearer', stat: 'atk', op: 'inc', max: 0.5 }
+      { scope: 'wearer', stat: 'atk', op: 'inc', max: 0.35 }
     ],
     mechanics: [{ type: 'castOnCrit', chance: 0.4, text: '{caster}連攜追擊，' }]
   },
@@ -76,8 +78,9 @@ const LEGENDARIES = {
     name: '魔力循環法球',
     slot: 'weapon',
     attackStat: 'int',
-    base: [{ stat: 'int', op: 'flat', max: 532 }],
-    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
+    // 2026-11-21 削弱：主屬性 ×0.45（532 → 239、40% → 18%）；護盾機制不動
+    base: [{ stat: 'int', op: 'flat', max: 239 }],
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.18 }],
     mechanics: [
       { type: 'spShield', ratio: 0.04, duration: 3 },
       { type: 'shieldBreakSp', sp: 2 }
@@ -91,7 +94,8 @@ const LEGENDARIES = {
     name: '幻影戰斧',
     slot: 'weapon',
     attackStat: 'atk',
-    base: [{ stat: 'atk', op: 'flat', max: 532 }],
+    // 2026-11-21 削弱：主屬性 ×0.45（532 → 239）；速度、召喚物生命、幻影不動
+    base: [{ stat: 'atk', op: 'flat', max: 239 }],
     unique: [
       { scope: 'wearer', stat: 'spd', op: 'flat', max: 40 },
       { scope: 'effect', kind: 'summonHp', max: 0.4 }
@@ -99,11 +103,38 @@ const LEGENDARIES = {
     // 幻影倍率（使用者 2026-11-19 定案）：生命、速度 ×0.5，攻擊、智力、防禦 ×0.3（原設計全部 ×0.8 太強）。
     mechanics: [{ type: 'phantom', ratio: 0.3, ratios: { hp: 0.5, spd: 0.5 }, name: '{caster}的幻影',
       summonText: '{caster}揮動斧頭，一道幻影浮現在{caster}的身後。', chaseText: '{caster} 隨之追擊，' }]
+  },
+
+  // ── 第二區專屬（area 2，只在第二區掉落；2026-11-21 使用者設計，數值是我擬的初版）──────────
+  // 氣鳴楯【菲爾查哈】：強化玩家的閃避反擊。主屬性比照削弱後的水準（攻擊 372）。
+  fircha: {
+    id: 'fircha',
+    name: '氣鳴楯【菲爾查哈】',
+    slot: 'weapon',
+    attackStat: 'atk',
+    area: 2,
+    base: [{ stat: 'atk', op: 'flat', max: 372 }],
+    unique: [
+      { scope: 'wearer', stat: 'eva', op: 'flat', max: 80 },
+      { scope: 'wearer', stat: 'evadeCounter', op: 'flat', max: 80 }
+    ],
+    mechanics: [{ type: 'counterPower', power: 2 }]
+  },
+  // 撥弦槍【鶴之聲援】：智力武器，法術的多段攻擊有額外效益（第 2 段起每段 +15%，逐段累加）。主屬性比照報喪法杖削弱後（319、40%）。
+  cranelance: {
+    id: 'cranelance',
+    name: '撥弦槍【鶴之聲援】',
+    slot: 'weapon',
+    attackStat: 'int',
+    area: 2,
+    base: [{ stat: 'int', op: 'flat', max: 319 }],
+    unique: [{ scope: 'wearer', stat: 'int', op: 'inc', max: 0.4 }],
+    mechanics: [{ type: 'multiHitRamp', ramp: 0.15 }]
   }
 };
 
 const LEGENDARY_WEIGHT = { low: 60, high: 120 };
-const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom'];
+const MECHANIC_TYPES = ['grantSupport', 'castOnEnemyDeath', 'castOnCrit', 'spShield', 'shieldBreakSp', 'phantom', 'counterPower', 'multiHitRamp'];
 
 function round(stat, op, value) {
   // 只有 flat 的整數屬性取整（同 affixTable 的修正：inc 百分比不能取整）
@@ -175,8 +206,9 @@ function rollValues(def, tier, rng) {
 }
 
 /** 從所有傳說裝備平均抽一件的 id（之後有部位或難度限制時再加條件）。呼叫 rng 1 次。 */
-function pickLegendary(rng = Math.random) {
-  const ids = Object.keys(LEGENDARIES);
+// area：第幾區掉的（第一區的傳說每一區都掉，其他區的只在自己區掉；LEGENDARIES 每件可寫 area，沒寫＝1）
+function pickLegendary(rng = Math.random, area = 1) {
+  const ids = Object.keys(LEGENDARIES).filter(id => (LEGENDARIES[id].area ?? 1) === 1 || LEGENDARIES[id].area === area);
   return ids[Math.min(ids.length - 1, Math.floor(rng() * ids.length))];
 }
 
@@ -189,6 +221,8 @@ function describeMechanic(mechanic, supportName = id => id) {
     case 'spShield': return `施放技能時依消耗的 SP 獲得護盾，持續 ${mechanic.duration} 個行動槽`;
     case 'shieldBreakSp': return `護盾破裂時獲得 ${mechanic.sp} 點 SP`;
     case 'phantom': return '開戰時召喚幻影；裝備的主動寶石會讓幻影追擊';
+    case 'counterPower': return `閃避反擊的傷害 ×${mechanic.power}`;
+    case 'multiHitRamp': return `法術的多段攻擊：第 2 段起每段傷害 +${Math.round(mechanic.ramp * 100)}%（逐段累加）`;
     default: return mechanic.type;
   }
 }

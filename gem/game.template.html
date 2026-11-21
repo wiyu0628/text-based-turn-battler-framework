@@ -1010,6 +1010,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     for (const a of dmg) parts.push(`${a.targetType === 'ENEMY_ALL' ? '全體' : '單體'} ${Math.round((a.power ?? 1) * 100)}%`);
     for (const a of dmg) for (const ail of a.ailments || []) parts.push(`附加${G.AILMENTS[ail.kind]?.name ?? ail.kind}（${ail.basis === 'hit' ? '命中傷害' : '攻擊力'}的 ${Math.round(ail.power * 100)}%，${ail.duration} 槽）`);
     if (gem.actions.some(a => a.type === 'HEAL')) parts.push('治療');
+    if (gem.critEcho) parts.push(`根據爆擊率額外釋放一次（${Math.round(gem.critEcho.power * 100)}%）`);   // 2026-11-21 使用者：火焰風暴補上這句
     return parts.join('｜');
   }
   function renderGems() {

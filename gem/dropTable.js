@@ -14,8 +14,14 @@
  *     難度 6、9、12（下一階開放的前一級）有 3% 機率先掉下一階（預覽）。
  *   種類：所有刻印種類平均抽（affixTable.ENGRAVING_TYPES，目前 8 種）。
  *
+ * ── 區域專屬（2026-11-20 使用者）──────────────────────────────
+ *   刻印種類、輔助寶石、傳說裝備都可以寫 area（沒寫＝1，第一區）。第一區是基準：
+ *   在第 N 區打贏，掉落池＝第一區的東西＋第 N 區專屬的東西（不含其他區專屬的）。見 inArea。
+ *   專屬詞綴走「新的刻印種類」（使用者選 C）：刻印詞綴跟著只在該區掉落的刻印來。
+ *
  * ── 輔助寶石 ──────────────────────────────────────────────────
- *   GEM_CHANCE（30%）掉 1 顆，從所有輔助寶石平均抽；只掉輔助寶石（主動寶石不掉）。沒有難度門檻。
+ *   GEM_CHANCE 掉 1 顆，從所有輔助寶石平均抽；只掉輔助寶石（主動寶石不掉）。沒有難度門檻。
+ *   2026-11-21 使用者：一般 13%；那場有稀有怪 100%、有菁英怪（王戰比照菁英）75%。
  *
  * ── 傳說裝備 ──────────────────────────────────────────────────
  *   不能用刻印製作的獨有裝備。機率 0.5% 起、每升一級 +0.25%，難度 15 是 4%。沒有難度門檻。
@@ -75,7 +81,9 @@ const ENGRAVING_COUNT = {
   twoBase: 0.30, twoPerLevel: 0.015,
   threeFrom: 13, threePerLevel: 0.08
 };
-const GEM_CHANCE = 0.30;   // 第二版：15% → 30%（使用者：輔助寶石的機率可以調高）
+const GEM_CHANCE = 0.13;   // 15% → 30% → 13%（2026-11-21 使用者：改成看稀有／菁英）
+const GEM_CHANCE_RARE = 1;      // 有稀有怪的那場必掉
+const GEM_CHANCE_ELITE = 0.75;  // 有菁英怪（或王戰）的那場
 const LEGENDARY = { base: 0.005, perLevel: 0.0025 };
 const RARE_BONUS = { engravings: 2, rollsForTier: 2 };
 const ELITE_BONUS = { engravings: 1, rollsForTier: 1 };
@@ -127,16 +135,23 @@ function energyForWin(difficulty) {
  * @param {{ rare?: boolean, elite?: boolean }} [encounter] 這場有沒有稀有怪、菁英怪（rollEncounter 的 info）
  * @returns {{ engravings: { type: string, tier: number }[], supportGems: string[], legendary: number, energy: number }}
  */
-function rollDrops(difficulty, rng = Math.random, { rare = false, elite = false } = {}) {
+/** 這個東西（有 area 欄位的資料）會不會在第 area 區掉落：第一區的東西每一區都掉，其他區的只在自己區掉。 */
+function inArea(def, area = 1) {
+  const own = def?.area ?? 1;
+  return own === 1 || own === area;
+}
+
+function rollDrops(difficulty, rng = Math.random, { rare = false, elite = false, area = 1 } = {}) {
   const rates = dropRates(difficulty);
   const count = 1 + pickWeighted([rates.count[1], rates.count[2], rates.count[3]], rng());
-  const types = Object.keys(ENGRAVING_TYPES);
+  const types = Object.keys(ENGRAVING_TYPES).filter(id => inArea(ENGRAVING_TYPES[id], area));
   const engravings = [];
   for (let i = 0; i < count; i++) {
     const tier = pickWeighted(rates.tiers, rng()) + 1;
     engravings.push({ type: pickUniform(types, rng()), tier });
   }
-  const supportGems = rng() < rates.gem ? [pickUniform(Object.keys(SUPPORT_GEMS), rng())] : [];
+  const gemChance = rare ? GEM_CHANCE_RARE : elite ? GEM_CHANCE_ELITE : rates.gem;
+  const supportGems = rng() < gemChance ? [pickUniform(Object.keys(SUPPORT_GEMS).filter(id => inArea(SUPPORT_GEMS[id], area)), rng())] : [];
   const legendary = rng() < rates.legendary ? 1 : 0;
   const bonus = rare ? RARE_BONUS : elite ? ELITE_BONUS : null;
   for (let i = 0; bonus && i < bonus.engravings; i++) {
@@ -144,7 +159,14 @@ function rollDrops(difficulty, rng = Math.random, { rare = false, elite = false 
     for (let k = 0; k < bonus.rollsForTier; k++) tier = Math.max(tier, pickWeighted(rates.tiers, rng()) + 1);
     engravings.push({ type: pickUniform(types, rng()), tier });
   }
-  return { engravings, supportGems, legendary, energy: energyForWin(difficulty) };
+  return { engravings, supportGems, legendary, area, energy: energyForWin(difficulty) };
 }
 
-module.exports = { MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, openTier, energyForWin, ENGRAVING_COUNT, GEM_CHANCE, LEGENDARY, RARE_BONUS, ELITE_BONUS, dropRates, rollDrops };
+// 資料檢查：area 必須是正整數
+for (const [name, table] of [['刻印', ENGRAVING_TYPES], ['輔助寶石', SUPPORT_GEMS]]) {
+  for (const [id, def] of Object.entries(table)) {
+    if (def.area !== undefined && !(Number.isInteger(def.area) && def.area >= 1)) throw new Error(`${name}「${id}」的 area 必須是正整數`);
+  }
+}
+
+module.exports = { inArea, MIN_DIFFICULTY, MAX_DIFFICULTY, TIER_WEIGHTS, TIER_OPEN, openTier, energyForWin, ENGRAVING_COUNT, GEM_CHANCE, GEM_CHANCE_RARE, GEM_CHANCE_ELITE, LEGENDARY, RARE_BONUS, ELITE_BONUS, dropRates, rollDrops };
