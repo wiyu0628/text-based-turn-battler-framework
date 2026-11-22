@@ -148,15 +148,40 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   click([...ed.querySelectorAll('button')].find(b => b.textContent === '套用')); await sleep(50);
   const errText = $$('.link-editor .error').map(e => e.textContent).join('|');
   console.log('連結錯誤：', JSON.stringify(errText), '出現次數', errText.split('無法連結').length - 1, 'toast：', JSON.stringify($('#toast').textContent));
+  // 帶著不合法的修改離開：按「儲存」會留在寶石頁並顯示錯誤；再按「不儲存」才離開
+  click($$('#nav button').find(b => b.textContent === '裝備')); await sleep(30);
+  click($('#ask-yes')); await sleep(50);
+  console.log('不合法時儲存：留在', $$('#nav button').find(b => b.classList.contains('active')).textContent, 'toast：', $('#toast').textContent);
   // 裝備頁：穿上新武器、分解模式
-  click($$('#nav button').find(b => b.textContent === '裝備')); await sleep(50);
+  click($$('#nav button').find(b => b.textContent === '裝備')); await sleep(30);
+  click($('#ask-no')); await sleep(50);
   const wear = $$('.item button').find(b => b.textContent === '穿上');
   if (wear) { click(wear); await sleep(50); }
   console.log('穿著武器：', ui.state.equipped.weapon, '件數', ui.state.equipment.length);
   click(btn('分解模式')); await sleep(30);
+  // 批量分解：勾選 → 頂端列（可獲得刻印數、黑骰數）→ 取消／確認分解（兩次確認）
+  const picks = $$('.item .salvage-pick input[type=checkbox]');
+  console.log('分解勾選框：', picks.length, '新手武器：', $$('.item .salvage-pick').some(e => e.textContent === '不能分解'), '列隱藏：', $('#batch-bar').hidden);
+  if (picks.length) {
+    const check = el => { el.checked = true; el.dispatchEvent(new w.Event('change', { bubbles: true })); };
+    check(picks[0]); await sleep(20);
+    console.log('勾選後：', $('#batch-bar').hidden ? '列隱藏' : $('#batch-bar').textContent);
+    click([...$('#batch-bar').querySelectorAll('button')].find(b => b.textContent === '取消')); await sleep(30);
+    console.log('取消後：列隱藏', $('#batch-bar').hidden, '勾選', $$('.item .salvage-pick input:checked').length);
+    const count = ui.state.equipment.length;
+    check($$('.item .salvage-pick input[type=checkbox]')[0]); await sleep(20);
+    click([...$('#batch-bar').querySelectorAll('button')].find(b => b.textContent === '確認分解')); await sleep(20);
+    const first = $('#ask-text').textContent;
+    click($('#ask-yes')); await sleep(20);
+    const second = $('#ask-modal').classList.contains('open') ? $('#ask-text').textContent : '（沒有第二次確認）';
+    console.log('第一次確認：', first); console.log('第二次確認：', second);
+    await yes();
+    console.log('分解裝備：', $('#toast').textContent, '件數', count, '→', ui.state.equipment.length, '列隱藏', $('#batch-bar').hidden);
+  }
+  // 單件分解按鈕（保留，2026-11-22 使用者）
   const salv = $$('.item button').find(b => b.textContent.startsWith('分解（'));
-  console.log('分解按鈕：', salv ? salv.textContent : '無', '新手武器：', $$('.item button').some(b => b.textContent === '不能分解'));
-  if (salv) { click(salv); await yes(); console.log('分解裝備：', $('#toast').textContent, '件數', ui.state.equipment.length); }
+  console.log('單件分解按鈕：', salv ? salv.textContent : '無');
+  if (salv) { const n = ui.state.equipment.length; click(salv); await yes(); console.log('單件分解：', $('#toast').textContent, '件數', n, '→', ui.state.equipment.length); }
   // 王
   click($$('#nav button').find(b => b.textContent === '冒險')); await sleep(50);
   noCd(); await sleep(260);
@@ -187,6 +212,30 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
   console.log('主題：', t0, b0, '→', w.document.documentElement.dataset.theme, $('#theme-toggle').textContent, '記住：', w.localStorage.getItem('tbtf-game-theme'));
   click($('#theme-toggle')); await sleep(10);
   console.log('再切回：', w.document.documentElement.dataset.theme, w.localStorage.getItem('tbtf-game-theme'), '存檔沒有主題：', !w.localStorage.getItem('tbtf-game-save').includes('theme'));
+  // 寶石頁有未套用的修改時離開：點外面留下、不儲存、儲存（2026-11-22 使用者）
+  {
+    const nav = label => click($$('#nav button').find(b => b.textContent === label));
+    nav('寶石'); await sleep(40);
+    const sel = () => $$('.link-editor')[0].querySelectorAll('select')[0];
+    const before = JSON.stringify(ui.state.equipment.find(e => e.id === ui.state.equipped.weapon).links);
+    const other = [...sel().options].map(o => o.value).find(v => v && v !== sel().value) ?? '';
+    setSelect(sel(), other);
+    nav('冒險'); await sleep(30);
+    console.log('離開寶石頁的彈窗：', $('#ask-modal').classList.contains('open') ? $('#ask-text').textContent : '沒有', '按鈕：', $('#ask-yes').textContent, '/', $('#ask-no').textContent);
+    click($('#ask-modal')); await sleep(30);
+    console.log('點外面：留在', w.GameUI.ui && $$('#nav button').find(b => b.classList.contains('active')).textContent, '還原取消鍵文字：', $('#ask-no').textContent);
+    nav('工坊'); await sleep(30); click($('#ask-no')); await sleep(40);
+    const afterNo = JSON.stringify(ui.state.equipment.find(e => e.id === ui.state.equipped.weapon).links);
+    console.log('不儲存：到', $$('#nav button').find(b => b.classList.contains('active')).textContent, '連結不變', afterNo === before);
+    nav('寶石'); await sleep(40);
+    console.log('回到寶石頁：選單顯示已存的值', sel().value === (JSON.parse(before)[0]?.active ?? ''));
+    setSelect(sel(), other);
+    nav('裝備'); await sleep(30); click($('#ask-yes')); await sleep(60);
+    const afterYes = ui.state.equipment.find(e => e.id === ui.state.equipped.weapon).links;
+    console.log('儲存：到', $$('#nav button').find(b => b.classList.contains('active')).textContent, '主動寶石', JSON.stringify(afterYes), 'toast', $('#toast').textContent);
+    nav('寶石'); await sleep(40); nav('冒險'); await sleep(30);
+    console.log('沒修改直接離開：彈窗', $('#ask-modal').classList.contains('open'), '到', $$('#nav button').find(b => b.classList.contains('active')).textContent);
+  }
   const saved = w.localStorage.getItem('tbtf-game-save');
   console.log('存檔有寫入：', !!saved, '錯誤：', errors.length ? errors : '無');
   process.exit(0);

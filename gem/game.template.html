@@ -66,6 +66,14 @@
   .energy { display: flex; align-items: center; gap: 8px; margin-left: auto; }
   .energy .dice { white-space: nowrap; margin-left: 4px; }
   .header-actions { display: flex; gap: 6px; }
+  /* 批量分解列（裝備頁分解模式勾選後出現，在導覽列右方） */
+  .batch-bar { display: flex; align-items: center; gap: 8px; }
+  .batch-bar[hidden] { display: none; }
+  .batch-bar .batch-info { white-space: nowrap; font-size: 13px; }
+  .batch-bar button { flex: none; white-space: nowrap; }
+  .item .actions .salvage-pick { margin-left: auto; flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; user-select: none; }
+  .item .actions .salvage-pick input { width: 18px; height: 18px; margin: 0; }
+  .item.picked { outline: 2px solid var(--bad); outline-offset: -1px; }
 
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
@@ -175,6 +183,10 @@
     .header-actions button { flex: none; }
     nav { order: 4; width: 100%; margin: 0; }
     nav button { flex: 1; padding: 8px 0; }
+    /* 手機的 header 不黏在頂端，批量分解列改成固定在畫面最上方，捲動時也看得到 */
+    .batch-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 20; background: var(--panel); border-bottom: 1px solid var(--line);
+      padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+    .batch-bar .batch-info { margin-right: auto; white-space: normal; }
     .layout { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
     .layout > aside { order: -1; }
     .panel { padding: 12px; margin-bottom: 10px; }
@@ -212,6 +224,7 @@
     <button data-tab="equipment">裝備</button>
     <button data-tab="gems">寶石</button>
   </nav>
+  <div class="batch-bar" id="batch-bar" hidden></div>
   <div class="energy" title="能量：勝利與分解刻印取得，清除裝備上的刻印時消耗">
     <span>能量</span><strong id="energy-text"></strong>
     <span class="dice" title="黑骰：分解傳說裝備取得，用來重置一件傳說裝備的數值">黑骰 <strong id="dice-text">0</strong></span>
@@ -318,6 +331,19 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
       $('ask-yes').onclick = () => done(true);
       $('ask-no').onclick = () => done(false);
       $('ask-modal').onclick = ev => { if (ev.target === $('ask-modal')) done(false); };
+      $('ask-modal').classList.add('open');
+    });
+  }
+  // 三選一的確認框（同一個彈窗）：按「是」回傳 true、「否」回傳 false、點彈窗外面回傳 null（什麼都不做）
+  function choose(message, yes, no) {
+    return new Promise(resolve => {
+      $('ask-text').textContent = message;
+      $('ask-yes').textContent = yes;
+      $('ask-no').textContent = no;
+      const done = value => { $('ask-modal').classList.remove('open'); $('ask-no').textContent = '取消'; $('ask-yes').onclick = $('ask-no').onclick = $('ask-modal').onclick = null; resolve(value); };
+      $('ask-yes').onclick = () => done(true);
+      $('ask-no').onclick = () => done(false);
+      $('ask-modal').onclick = ev => { if (ev.target === $('ask-modal')) done(null); };
       $('ask-modal').classList.add('open');
     });
   }
@@ -433,7 +459,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   let tab = 'adventure';
   let history = [];
   const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], convertPicks: [], salvage: { kind: null, tier: 1, count: 1 },
-    workshopTab: 'craft', bossDiff: 13, engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, batchCombine: false, transfer: null, linkErrors: {} };
+    workshopTab: 'craft', bossDiff: 13, engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, salvageSel: [], batchCombine: false, transfer: null, linkErrors: {} };
 
   function loadHistory() {
     try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (e) { history = []; }
@@ -927,7 +953,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     ];
     const mech = legendary.mechanicsOf(item).map(m => legendary.describeMechanic(m, gemName));
     const links = S.equippedLinks({ ...state, equipped: { weapon: null, helmet: null, armor: null, boots: null, [item.slot]: item.id } });
-    return h('div', { class: 'item' + (worn ? ' worn' : '') },
+    return h('div', { class: 'item' + (worn ? ' worn' : '') + (!compact && ui.salvageMode && ui.salvageSel.includes(item.id) ? ' picked' : '') },
       h('div', { class: 'name' }, itemName(item), h('span', { class: 'muted', style: 'font-weight:normal', text: `　${SLOT_NAMES[item.slot]}` }),
         worn ? h('span', { class: 'tag equipped', text: '穿著' }) : null, item.legendaryId ? h('span', { class: 'tag legend', text: '傳說' }) : null),
       h('ul', {}, lines.map(t => h('li', { text: t })), mech.map(t => h('li', { text: t }))),
@@ -937,12 +963,17 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
         links.length ? `｜寶石：${links.map(l => [l.active, ...(l.supports || [])].map(gemName).join('＋')).join('；')}` : ''),
       compact ? null : h('div', { class: 'actions' },
         ui.salvageMode
-          ? (item.legendaryId
-            ? h('button', { class: 'small danger', text: `分解（得 ${S.BLACK_DICE_PER_SALVAGE} 顆黑骰）`,
-              onclick: async () => { if (await ask(`分解傳說裝備 ${itemName(item)}？得到 ${S.BLACK_DICE_PER_SALVAGE} 顆黑骰，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => `已分解 ${itemName(item)}，得到 ${v.blackDice} 顆黑骰`); } })
-            : h('button', { class: 'small danger', disabled: !item.materials, title: item.materials ? null : '只有用刻印製作的裝備與傳說裝備能分解',
-              text: item.materials ? `分解（退回 ${craft.SALVAGE_RETURN} 個刻印）` : '不能分解',
-              onclick: async () => { if (await ask(`分解 ${itemName(item)}？會隨機退回 ${craft.SALVAGE_RETURN} 個當初投入的刻印，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => '退回：' + v.returned.map(engravingLabel).join('、')); } }))
+          ? (S.canSalvage(item)
+            ? [item.legendaryId
+              ? h('button', { class: 'small danger', text: `分解（得 ${S.BLACK_DICE_PER_SALVAGE} 顆黑骰）`,
+                onclick: async () => { if (await ask(`分解傳說裝備 ${itemName(item)}？得到 ${S.BLACK_DICE_PER_SALVAGE} 顆黑骰，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => `已分解 ${itemName(item)}，得到 ${v.blackDice} 顆黑骰`); } })
+              : h('button', { class: 'small danger', text: `分解（退回 ${craft.SALVAGE_RETURN} 個刻印）`,
+                onclick: async () => { if (await ask(`分解 ${itemName(item)}？會隨機退回 ${craft.SALVAGE_RETURN} 個當初投入的刻印，鑲著的寶石退回背包。`, '分解')) apply(s => S.salvageEquipment(s, item.id), v => '退回：' + v.returned.map(engravingLabel).join('、')); } }),
+              h('label', { class: 'salvage-pick', title: item.legendaryId ? `分解得 ${S.BLACK_DICE_PER_SALVAGE} 顆黑骰` : `分解隨機退回 ${craft.SALVAGE_RETURN} 個當初投入的刻印` },
+              h('input', { type: 'checkbox', checked: ui.salvageSel.includes(item.id), 'aria-label': `選擇分解 ${itemName(item)}`,
+                onchange: ev => { togglePick(item.id, ev.target.checked); ev.target.closest('.item').classList.toggle('picked', ev.target.checked); } }),
+              '勾選')]
+            : h('span', { class: 'muted salvage-pick', style: 'cursor:default', title: '只有用刻印製作的裝備與傳說裝備能分解', text: '不能分解' }))
           : worn ? h('button', { class: 'small', text: '脫下', onclick: () => apply(s => S.unequip(s, item.slot), item.links?.length ? '已脫下，寶石退回背包' : null) })
             : h('button', { class: 'small primary', text: '穿上', onclick: () => {
               const old = state.equipment.find(x => x.id === state.equipped[item.slot]);
@@ -963,12 +994,45 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
           onclick: async () => { if (await ask(`用 ${S.BLACK_DICE_REROLL_COST} 顆黑骰重置 ${itemName(item)} 的所有數值？會依掉落時的階級重擲基礎數值與獨有詞綴，可能變高也可能變低；施放權重和鑲的寶石不變。`, '重置'))
             apply(s => S.rerollLegendary(s, item.id), v => '重置後：' + [...v.after.base.map(b => statLayer.describeStatBonus(b).text), ...v.after.affixes.map(describeAffix)].join('、')); } }) : null));
   }
+  // ── 批量分解（2026-11-22 使用者）：分解模式下勾選，頂端列顯示可獲得的刻印數與黑骰數，確認要兩次 ──
+  function togglePick(id, on) {
+    ui.salvageSel = ui.salvageSel.filter(x => x !== id);
+    if (on) ui.salvageSel.push(id);
+    renderBatchBar();
+  }
+  function pruneSalvageSel() {
+    if (tab !== 'equipment' || !ui.salvageMode) { ui.salvageSel = []; return; }
+    ui.salvageSel = ui.salvageSel.filter(id => S.canSalvage(state.equipment.find(item => item.id === id)));
+  }
+  function renderBatchBar() {
+    const bar = $('batch-bar');
+    const ids = ui.salvageSel;
+    const show = tab === 'equipment' && ui.salvageMode && ids.length > 0;
+    bar.hidden = !show;
+    if (!show) { bar.replaceChildren(); return; }
+    const p = S.salvagePreview(state, ids);
+    bar.replaceChildren(
+      h('span', { class: 'batch-info', text: `已選 ${p.count} 件｜可獲得 刻印 ${p.engravings} 個、黑骰 ${p.blackDice} 顆` }),
+      h('button', { class: 'small', text: '取消', onclick: () => { ui.salvageSel = []; render(); } }),
+      h('button', { class: 'small danger', text: '確認分解', onclick: confirmBatchSalvage }));
+  }
+  async function confirmBatchSalvage() {
+    const ids = [...ui.salvageSel];
+    if (!ids.length) return;
+    const p = S.salvagePreview(state, ids);
+    const worn = ids.filter(id => Object.values(state.equipped).includes(id)).length;
+    const legends = ids.filter(id => state.equipment.find(item => item.id === id)?.legendaryId).length;
+    if (!(await ask(`分解選取的 ${p.count} 件裝備？可獲得刻印 ${p.engravings} 個、黑骰 ${p.blackDice} 顆（刻印從各件當初投入的材料隨機退回）。鑲著的寶石退回背包。`, '分解'))) return;
+    const notes = [worn ? `其中 ${worn} 件正穿著` : '', legends ? `其中 ${legends} 件是傳說裝備` : ''].filter(Boolean).join('、');
+    if (!(await ask(`再次確認：分解後不能復原。${notes ? notes + '。' : ''}確定分解這 ${p.count} 件？`, '確認分解'))) return;
+    await apply(s => S.salvageEquipmentBatch(s, ids), v => { ui.salvageSel = []; return `已分解 ${v.count} 件：得到刻印 ${v.returned.length} 個、黑骰 ${v.blackDice} 顆`; });
+  }
   function renderEquipment() {
     const bySlot = slot => state.equipment.filter(item => item.slot === slot).sort((a, b) => (state.equipped[slot] === b.id) - (state.equipped[slot] === a.id));
     return [h('div', { class: 'panel' },
       h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:10px' },
         h('h2', { style: 'margin:0', text: `裝備（${state.equipment.length} 件）` }),
-        h('button', { class: 'toggle danger' + (ui.salvageMode ? ' active' : ''), text: ui.salvageMode ? '分解模式：開' : '分解模式：關', onclick: () => { ui.salvageMode = !ui.salvageMode; render(); } })),
+        h('button', { class: 'toggle danger' + (ui.salvageMode ? ' active' : ''), text: ui.salvageMode ? '分解模式：開' : '分解模式：關', onclick: () => { ui.salvageMode = !ui.salvageMode; ui.salvageSel = []; render(); } })),
       h('div', { class: 'grid4' }, Object.entries(SLOT_NAMES).map(([slot, name]) => h('div', { class: 'slot-col' },
         h('h3', {}, name, h('span', { class: 'muted', style: 'font-weight:normal', text: `${bySlot(slot).length} 件` })),
         h('div', { class: 'stack' }, bySlot(slot).length ? bySlot(slot).map(item => itemCard(item)) : h('div', { class: 'muted', text: '沒有' })))))),
@@ -1036,6 +1100,47 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     if (gem.critEcho) parts.push(`根據爆擊率額外釋放一次（${Math.round(gem.critEcho.power * 100)}%）`);   // 2026-11-21 使用者：火焰風暴補上這句
     return parts.join('｜');
   }
+  // ── 寶石頁未套用的修改（2026-11-22 使用者）：離開寶石頁前問要不要儲存 ──
+  function linkDraftFor(slot) {
+    const draft = ui[`link_${slot}`];
+    const id = state.equipped[slot];
+    if (!draft || draft.itemId !== id) return null;
+    const item = state.equipment.find(x => x.id === id);
+    if (!item) return null;
+    const links = draft.active ? [{ active: draft.active, supports: draft.supports.filter(Boolean) }] : [];
+    const saved = (item.links || [])[0] || null;
+    const norm = l => l ? JSON.stringify([l.active, [...(l.supports || [])].sort()]) : 'null';
+    return norm(links[0] ?? null) === norm(saved) ? null : { id, links };
+  }
+  function dirtyLinkSlots() { return Object.keys(SLOT_NAMES).filter(slot => linkDraftFor(slot)); }
+  function discardLinkDrafts() { for (const slot of Object.keys(SLOT_NAMES)) { delete ui[`link_${slot}`]; ui.linkErrors[slot] = null; } }
+  // 全部未套用的一次存（有一欄不合法就都不存、留在寶石頁並在那一欄顯示錯誤）
+  async function saveLinkDrafts() {
+    const slots = dirtyLinkSlots();
+    let next = state;
+    for (const slot of slots) {
+      const { id, links } = linkDraftFor(slot);
+      try { next = S.setLinks(next, id, links); }
+      catch (error) { ui.linkErrors[slot] = String(error.message || error).replace(/「(\w+)」/g, (m, gid) => `「${gemName(gid)}」`); render(); toast(`${SLOT_NAMES[slot]}的寶石連結不合法，沒有儲存`, true); return false; }
+    }
+    const ok = await apply(() => next, '寶石連結已更新');
+    if (ok) discardLinkDrafts();
+    return !!ok;
+  }
+  async function switchTab(next) {
+    if (next === tab) return;
+    if (tab === 'gems') {
+      const slots = dirtyLinkSlots();
+      if (slots.length) {
+        const answer = await choose(`寶石的修改還沒套用（${slots.map(s => SLOT_NAMES[s]).join('、')}），要儲存嗎？（點外面可以留在寶石頁）`, '儲存', '不儲存');
+        if (answer === null) return;
+        if (answer) { if (!(await saveLinkDrafts())) return; }
+        else discardLinkDrafts();
+      }
+    }
+    tab = next;
+    render();
+  }
   function renderGems() {
     const owned = Object.entries(state.gems).filter(([, n]) => n > 0);
     const actives = owned.filter(([id]) => G.ACTIVE_GEMS[id]);
@@ -1063,7 +1168,9 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     if (!state) return;
     for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('active', b.dataset.tab === tab);
     const views = { adventure: renderAdventure, workshop: renderWorkshop, equipment: renderEquipment, gems: renderGems };
+    pruneSalvageSel();
     $('main').replaceChildren(...views[tab]());
+    renderBatchBar();
     document.querySelector('.layout').classList.toggle('no-side', !['adventure', 'equipment'].includes(tab));
     renderHero();
   }
@@ -1074,7 +1181,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     input.click();
   }
 
-  document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => { tab = b.dataset.tab; render(); }));
+  document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   // 存檔匯出／匯入：文字（JSON）與檔案兩種方式，本機版與 Artifact 版互通（同一個格式；頭像、戰鬥紀錄、主題不在存檔裡）
   $('export-save').addEventListener('click', () => showText('匯出存檔', S.exportSave(state), {
     filename: `save-${new Date().toISOString().slice(0, 10)}.json`, type: 'application/json',

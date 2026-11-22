@@ -791,6 +791,49 @@ function salvageEquipment(save, id, rng = Math.random) {
   });
 }
 
+/** 這件裝備能不能分解：製作裝備（有 materials）或傳說裝備。新手武器等不行。 */
+function canSalvage(item) {
+  return !!item && (item.legendaryId !== undefined || (item.origin === 'craft' && Array.isArray(item.materials)));
+}
+
+/**
+ * 批量分解的預估：回傳 { count, engravings, blackDice }（刻印只算數量、不看階級；分解時才隨機挑）。
+ * 找不到或不能分解的 id 丟 SaveError。
+ */
+function salvagePreview(save, ids) {
+  const unique = [...new Set(ids)];
+  let engravings = 0, blackDice = 0;
+  for (const id of unique) {
+    const item = save.equipment.find(entry => entry.id === id);
+    if (!item) throw new SaveError(`找不到裝備「${id}」`);
+    if (!canSalvage(item)) throw new SaveError(`裝備「${id}」不是製作裝備或傳說裝備，不能分解`);
+    if (item.legendaryId !== undefined) blackDice += BLACK_DICE_PER_SALVAGE;
+    else engravings += Math.min(SALVAGE_RETURN, item.materials.length);
+  }
+  return { count: unique.length, engravings, blackDice };
+}
+
+/**
+ * 批量分解（2026-11-22 使用者）：依序對每件做 salvageEquipment，全部成功才算數；
+ * 任何一件不能分解就丟 SaveError，原存檔不變。重複的 id 只算一次。
+ * 回傳 { save, count, returned: ['fury@5', …], blackDice }。
+ */
+function salvageEquipmentBatch(save, ids, rng = Math.random) {
+  if (!Array.isArray(ids) || ids.length === 0) throw new SaveError('沒有選擇要分解的裝備');
+  const unique = [...new Set(ids)];
+  salvagePreview(save, unique);   // 先整批檢查，避免分解到一半才發現不行
+  let current = save;
+  const returned = [];
+  let blackDice = 0;
+  for (const id of unique) {
+    const result = salvageEquipment(current, id, rng);
+    current = result.save;
+    returned.push(...result.returned);
+    blackDice += result.blackDice ?? 0;
+  }
+  return { save: current, count: unique.length, returned, blackDice };
+}
+
 /**
  * 黑骰：消耗 1 顆，依裝備記的掉落階級重擲一件傳說裝備的所有數值（基礎與特殊詞綴；施放權重、鑲的寶石不變）。
  * 回傳 { save, before: { base, affixes }, after: { base, affixes } }。不是傳說裝備、黑骰不夠丟 SaveError，原存檔不變。
@@ -1220,7 +1263,7 @@ function createSaveStore(adapter, { now = () => new Date().toISOString(), gameVe
 module.exports = {
   SAVE_VERSION, SLOTS, SLOT_RULES, ORIGINS, ENGRAVABLE_ORIGINS, AFFIX_SCOPES, PROGRESS_KEYS, MIN_DIFFICULTY, MAX_DIFFICULTY, PLAYER_NAME_MAX, ITEM_NAME_MAX, MIGRATIONS, SaveError,
   createEmptySave, createStarterSave, validateSave, migrateSave, exportSave, importSave,
-  convertGems, GEM_CONVERT_INPUTS, combineAllEngravings, rerollLegendary, rerollCraftAffix, transferEngraving, BLACK_DICE_PER_SALVAGE, BLACK_DICE_REROLL_COST, equipAccessory, addAccessory, equippedAccessoryAffixes, addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
+  convertGems, GEM_CONVERT_INPUTS, combineAllEngravings, rerollLegendary, rerollCraftAffix, transferEngraving, BLACK_DICE_PER_SALVAGE, BLACK_DICE_REROLL_COST, equipAccessory, addAccessory, equippedAccessoryAffixes, addGems, removeGems, addEngraving, removeEngraving, combineEngravings, grantDrops, craftEquipment, addLegendary, bossStatus, recordBossVictory, availableRegions, equippedAttackStat, engraveEquipment, clearEngraving, salvageEngravings, salvageEquipment, salvageEquipmentBatch, salvagePreview, canSalvage, itemEngravings, addEquipment, removeEquipment, setLinks, equip, unequip, releaseUnwornLinks,
   setDifficulty, setPlayerName, addProgress, equippedBonuses, equippedEffects, compileEquipped, equippedMechanics, equippedLinks,
   createMemoryAdapter, createLocalStorageAdapter, createSaveStore
 };
