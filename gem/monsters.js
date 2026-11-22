@@ -166,7 +166,7 @@ const MONSTERS = {
   // 指揮家：清除隊友身上的減益（玩家的裂傷、殘刃、緩速、易傷……）
   conductor: {
     id: 'conductor', name: '指揮家', from: 1, cost: 0.4,
-    stats: { hp: 0.45, atk: 0.35, def: 60, spd: 180 },
+    stats: { hp: 0.55, atk: 0.3, def: 60, spd: 180 },   // HP 0.45 → 0.55、攻擊 0.35 → 0.3（2026-11-22 使用者：血略高、攻擊略低）
     skills: [
       { kind: 'cleanse', id: 'order', name: '整頓', from: 1, spCost: 15, target: 'allyAll', text: '{caster}揮動指揮棒，樂團重新整齊了起來！' },
       { kind: 'attack', id: 'baton', name: '強拍', from: 7, spCost: 10, power: 1.3, target: 'single' },
@@ -178,7 +178,7 @@ const MONSTERS = {
   // 難度 7 起多了「卡農」：其他隊友（不含自己）下一個能行動的槽重複上一次用的技能（卡農本身不會被記住）。
   cannon: {
     id: 'cannon', name: '卡農砲', from: 1, cost: 0.4,
-    stats: { hp: 0.5, atk: 0.5, def: 80, spd: 120 },
+    stats: { hp: 0.5, atk: 0.8, def: 80, spd: 120 },   // 攻擊 0.5 → 0.8（2026-11-22 使用者：第二區比水道容易）
     skills: [
       { kind: 'attack', id: 'boom', name: '轟鳴砲', from: 1, spCost: 15, power: 2.5, target: 'single', charge: true,
         chargeText: '{caster}的砲管開始聚集音波……', text: '{caster} 發射了轟鳴砲，' },
@@ -216,7 +216,7 @@ const REGIONS = {
   ruins: { id: 'ruins', name: '廢都', area: 1, count: [1, 3], budget: 0.7, monsters: ['dog', 'circle', 'doll', 'goblin', 'golem'] },
   sewer: { id: 'sewer', name: '地下水道', area: 1, count: [2, 5], budget: 0.85, monsters: ['rat', 'tentacle', 'slime', 'mimic', 'scavenger'] },
   // 第二區（2026-11-21）：打倒廢都中央廳後開放；地區特色＝共鳴（resonance.js）。第 3 種一般怪與稀有怪使用者還沒想好。
-  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 4], budget: 0.7, resonance: true, monsters: ['fairy', 'conductor', 'cannon', 'noise', 'organ'] }
+  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 4], budget: 0.75, resonance: true, monsters: ['fairy', 'conductor', 'cannon', 'noise', 'organ'] }
 };
 
 // ── 技能建構 ────────────────────────────────────────────────

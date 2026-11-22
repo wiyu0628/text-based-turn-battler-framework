@@ -6526,10 +6526,13 @@ const HIT_PER_LEVEL = 10;
 const DEF_PER_LEVEL = 18;
 const MIN_DIFFICULTY = 1;
 const MAX_DIFFICULTY = 15;
+// Boss 挑戰難度（2026-11-22 使用者：擊敗後可以調高難度重打，不設上限）：超過 15 照同一條公式延伸。
+// 999 只是防止數字溢位的技術上限（1.153^998 ≈ 1e62，再高血量會變成 Infinity），不是設計上的上限。
+const MAX_CHALLENGE_DIFFICULTY = 999;
 
 function checkDifficulty(difficulty) {
-  if (!Number.isInteger(difficulty) || difficulty < MIN_DIFFICULTY || difficulty > MAX_DIFFICULTY) {
-    throw new Error(`難度必須是 ${MIN_DIFFICULTY}～${MAX_DIFFICULTY} 的整數（收到 ${difficulty}）`);
+  if (!Number.isInteger(difficulty) || difficulty < MIN_DIFFICULTY || difficulty > MAX_CHALLENGE_DIFFICULTY) {
+    throw new Error(`難度必須是 ${MIN_DIFFICULTY}～${MAX_CHALLENGE_DIFFICULTY} 的整數（收到 ${difficulty}）`);
   }
 }
 
@@ -6553,7 +6556,7 @@ function scaleMonster(stats, difficulty) {
   return out;
 }
 
-module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, DEF_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICULTY, strength, scaleMonster };
+module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, DEF_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICULTY, MAX_CHALLENGE_DIFFICULTY, strength, scaleMonster };
 
 },
 "gem/resonance.js": function (module, exports, require) {
@@ -6916,7 +6919,7 @@ const MONSTERS = {
   // 指揮家：清除隊友身上的減益（玩家的裂傷、殘刃、緩速、易傷……）
   conductor: {
     id: 'conductor', name: '指揮家', from: 1, cost: 0.4,
-    stats: { hp: 0.45, atk: 0.35, def: 60, spd: 180 },
+    stats: { hp: 0.55, atk: 0.3, def: 60, spd: 180 },   // HP 0.45 → 0.55、攻擊 0.35 → 0.3（2026-11-22 使用者：血略高、攻擊略低）
     skills: [
       { kind: 'cleanse', id: 'order', name: '整頓', from: 1, spCost: 15, target: 'allyAll', text: '{caster}揮動指揮棒，樂團重新整齊了起來！' },
       { kind: 'attack', id: 'baton', name: '強拍', from: 7, spCost: 10, power: 1.3, target: 'single' },
@@ -6928,7 +6931,7 @@ const MONSTERS = {
   // 難度 7 起多了「卡農」：其他隊友（不含自己）下一個能行動的槽重複上一次用的技能（卡農本身不會被記住）。
   cannon: {
     id: 'cannon', name: '卡農砲', from: 1, cost: 0.4,
-    stats: { hp: 0.5, atk: 0.5, def: 80, spd: 120 },
+    stats: { hp: 0.5, atk: 0.8, def: 80, spd: 120 },   // 攻擊 0.5 → 0.8（2026-11-22 使用者：第二區比水道容易）
     skills: [
       { kind: 'attack', id: 'boom', name: '轟鳴砲', from: 1, spCost: 15, power: 2.5, target: 'single', charge: true,
         chargeText: '{caster}的砲管開始聚集音波……', text: '{caster} 發射了轟鳴砲，' },
@@ -6966,7 +6969,7 @@ const REGIONS = {
   ruins: { id: 'ruins', name: '廢都', area: 1, count: [1, 3], budget: 0.7, monsters: ['dog', 'circle', 'doll', 'goblin', 'golem'] },
   sewer: { id: 'sewer', name: '地下水道', area: 1, count: [2, 5], budget: 0.85, monsters: ['rat', 'tentacle', 'slime', 'mimic', 'scavenger'] },
   // 第二區（2026-11-21）：打倒廢都中央廳後開放；地區特色＝共鳴（resonance.js）。第 3 種一般怪與稀有怪使用者還沒想好。
-  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 4], budget: 0.7, resonance: true, monsters: ['fairy', 'conductor', 'cannon', 'noise', 'organ'] }
+  hall: { id: 'hall', name: '和聲音樂廳', area: 2, locked: true, count: [2, 4], budget: 0.75, resonance: true, monsters: ['fairy', 'conductor', 'cannon', 'noise', 'organ'] }
 };
 
 // ── 技能建構 ────────────────────────────────────────────────
@@ -7988,11 +7991,11 @@ function findBoss(bossId) {
   return boss;
 }
 
-/** 建一場王戰：回傳 { monsters: Entity[], difficulty }。 */
-function buildBossEncounter(bossId) {
+/** 建一場王戰：回傳 { monsters: Entity[], difficulty }。difficulty 不給＝王自己的難度（挑戰難度由 game.js 檢查）。 */
+function buildBossEncounter(bossId, difficulty = findBoss(bossId).difficulty) {
   const boss = findBoss(bossId);
-  const monsters = boss.monsters.map((def, i) => buildFromDef(def, boss.difficulty, { id: `boss_${def.id}_${i + 1}` }));
-  return { monsters, difficulty: boss.difficulty };
+  const monsters = boss.monsters.map((def, i) => buildFromDef(def, difficulty, { id: `boss_${def.id}_${i + 1}` }));
+  return { monsters, difficulty };
 }
 
 module.exports = { BOSSES, findBoss, buildBossEncounter };
@@ -9237,7 +9240,7 @@ module.exports = {
  *   prepareBattle(save, target, seed) → 建好角色與敵人（還沒打）
  *   runBattle(save, target, seed)     → 打完、打贏就發掉落與首次擊敗獎勵，回傳新存檔與「戰鬥紀錄」
  *   replayBattle(record)              → 用紀錄裡的存檔快照與種子重打一次，戰報逐行相同
- *   target：{ kind: 'region', id: 'ruins', difficulty } 或 { kind: 'boss', id: 'gatekeeper' }（王用自己的難度）
+ *   target：{ kind: 'region', id: 'ruins', difficulty } 或 { kind: 'boss', id: 'gatekeeper', difficulty? }（王預設用自己的難度；擊敗過可以帶更高的挑戰難度）
  *
  * ── 種子 ──────────────────────────────────────────────────────
  *   同一顆種子分成三條互不干擾的亂數：組敵人（seed）、戰鬥（seed + 1，engine 的 rng）、掉落（seed + 2）。
@@ -9258,6 +9261,7 @@ const { buildChordPassives, applyChordDamage, linkChordSummon } = require('./cho
 const { setupSilver } = require('./silver');
 const { accessoryAffixes } = require('./accessoryTable');
 const { buildBossEncounter, findBoss } = require('./bosses');
+const { MAX_DIFFICULTY, MAX_CHALLENGE_DIFFICULTY } = require('./difficulty');
 const { rollDrops } = require('./dropTable');
 
 const HERO_BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 200, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };   // 速度 2026-11-19 加倍（原本 100）
@@ -9352,7 +9356,14 @@ function checkTarget(state, target) {
     const status = save.bossStatus(state).find(b => b.id === target.id);
     if (!status) throw new save.SaveError(`找不到王「${target.id}」`);
     if (!status.available) throw new save.SaveError(`王「${status.name}」還沒開放`);
-    return { difficulty: findBoss(target.id).difficulty, name: status.name };
+    // 挑戰難度（2026-11-22）：擊敗過的王可以帶 difficulty 重打，最低是王自己的難度，上限只有技術上限
+    const base = findBoss(target.id).difficulty;
+    if (target.difficulty === undefined || target.difficulty === base) return { difficulty: base, name: status.name, challenge: false };
+    if (!status.defeated) throw new save.SaveError(`要先擊敗「${status.name}」才能調整挑戰難度`);
+    if (!Number.isInteger(target.difficulty) || target.difficulty < base || target.difficulty > MAX_CHALLENGE_DIFFICULTY) {
+      throw new save.SaveError(`挑戰難度必須是 ${base}～${MAX_CHALLENGE_DIFFICULTY} 的整數`);
+    }
+    return { difficulty: target.difficulty, name: status.name, challenge: true };
   }
   throw new save.SaveError('戰鬥目標必須是 { kind: "region", id, difficulty } 或 { kind: "boss", id }');
 }
@@ -9387,7 +9398,7 @@ function prepareBattle(state, target, seed) {
   if (target.kind === 'region') {
     ({ monsters, summonFactory, info } = rollEncounter(target.id, difficulty, createSeededRandom(seed)));
   } else {
-    ({ monsters } = buildBossEncounter(target.id));
+    ({ monsters } = buildBossEncounter(target.id, difficulty));
     info = { boss: true, elite: true };
   }
   // 第二區的地區特色「共鳴」（resonance.js）：雙方每個單位都掛上共鳴，戰鬥中召喚出來的也算
@@ -9427,8 +9438,10 @@ function runBattle(state, target, seed, { now = () => new Date().toISOString() }
     const dropRng = createSeededRandom(seed + 2);
     // 第幾區（掉落池＝第一區＋本區專屬）：地區看 REGIONS[id].area、王看 boss.area，沒寫＝1
     const area = target.kind === 'region' ? (REGIONS[target.id]?.area ?? 1) : (findBoss(target.id)?.area ?? 1);
-    drops = rollDrops(battle.difficulty, dropRng, { rare: battle.info.rare, elite: battle.info.elite, area });
-    next = save.grantDrops(next, drops, { difficulty: battle.difficulty, rng: dropRng });
+    // 挑戰難度超過 15：掉落以 15 計（使用者：照一般 Boss 掉落）
+    const dropDifficulty = Math.min(battle.difficulty, MAX_DIFFICULTY);
+    drops = rollDrops(dropDifficulty, dropRng, { rare: battle.info.rare, elite: battle.info.elite, area });
+    next = save.grantDrops(next, drops, { difficulty: dropDifficulty, rng: dropRng });
     if (target.kind === 'boss') {
       const recorded = save.recordBossVictory(next, target.id);
       next = recorded.save;
@@ -9505,7 +9518,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
 <script>
 (function () {
   'use strict';
-  const { game, save: S, gems: G, compiler, stats: statLayer, affix, craft, drops: dropTable, energy: energyTable, legendary, accessories: AC, monsters: M, bosses: B } = window.Game;
+  const { game, save: S, gems: G, compiler, stats: statLayer, affix, craft, drops: dropTable, energy: energyTable, legendary, accessories: AC, monsters: M, bosses: B, difficulty: DIFF } = window.Game;
 
   // ── 小工具 ──────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
@@ -9682,7 +9695,7 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   let tab = 'adventure';
   let history = [];
   const ui = { craftSlot: 'weapon', craftStat: 'atk', craftPicks: [], craftName: '', combinePicks: [], convertPicks: [], salvage: { kind: null, tier: 1, count: 1 },
-    workshopTab: 'craft', engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, batchCombine: false, transfer: null, linkErrors: {} };
+    workshopTab: 'craft', bossDiff: 13, engraveItem: null, engraveSel: null, heroOpen: false, salvageMode: false, batchCombine: false, transfer: null, linkErrors: {} };
 
   function loadHistory() {
     try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (e) { history = []; }
@@ -9749,11 +9762,14 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
         h('h3', { text: region.name }),
         battleButton(`出發（難度 ${d}）`, { kind: 'region', id: region.id, difficulty: d })));
     const bosses = S.bossStatus(state);
-    const bossPanel = h('div', { class: 'panel' }, h('h2', { text: '挑戰Boss' }), h('p', { class: 'muted', style: 'margin:-4px 0 8px', text: 'Boss難度固定，勝利可以開啟新地圖（尚未實裝）' }),
+    const bossPanel = h('div', { class: 'panel' }, h('h2', { text: '挑戰Boss' }), h('p', { class: 'muted', style: 'margin:-4px 0 8px', text: 'Boss難度固定，勝利可以開啟新地圖；擊敗後可以調高難度挑戰（掉落照一般 Boss，難度超過 15 以 15 計）' }),
+      challengeControl(),
       h('div', { class: 'stack' }, bosses.map(b => h('div', { class: 'boss' },
         h('div', {}, h('strong', { text: b.name }),
           b.defeated ? h('span', { class: 'tag equipped', text: '已擊敗' }) : null),
-        battleButton(b.available ? '挑戰' : '尚未開放', { kind: 'boss', id: b.id }, { disabled: !b.available })))));
+        h('div', { class: 'row' },
+          battleButton(b.available ? '挑戰' : '尚未開放', { kind: 'boss', id: b.id }, { disabled: !b.available }),
+          challengeButton(b))))));
     const historyPanel = h('div', { class: 'panel' }, h('h2', { text: '戰鬥紀錄' }),
       h('div', { class: 'row', style: 'margin-bottom:8px' },
         h('button', { class: 'small', text: '匯入紀錄檔重播', onclick: () => pickFile(text => openRecord(parseRecord(text))) }),
@@ -9798,8 +9814,23 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   }
   setInterval(() => { const left = cooldownLeft(); document.querySelectorAll('.battle-btn').forEach(el => paintBattleButton(el, left)); }, 250);
 
+  // Boss 挑戰難度（2026-11-22 使用者）：說明下面一格「− 難度 +」所有 Boss 共用（絕對難度）；每隻 Boss 的「挑戰難度」按鈕打贏該 Boss 後才能用，
+  // 低於該 Boss 原本難度時用原本難度。不設上限（只有技術上限 999）；掉落照一般 Boss（超過 15 以 15 計），和一般戰鬥共用冷卻。選的難度只記在頁面（ui.bossDiff），不進存檔。
+  const BOSS_DIFF_MIN = Math.min(...B.BOSSES.map(b => b.difficulty));
+  function challengeControl() {
+    const d = ui.bossDiff;
+    const set = v => { ui.bossDiff = Math.max(BOSS_DIFF_MIN, Math.min(DIFF.MAX_CHALLENGE_DIFFICULTY, Math.round(Number(v)) || BOSS_DIFF_MIN)); render(); };
+    return h('div', { class: 'row', style: 'margin-bottom:8px' }, h('span', { class: 'muted', text: '挑戰難度' }),
+      h('button', { class: 'small', text: '−', 'aria-label': '降低挑戰難度', disabled: d <= BOSS_DIFF_MIN, onclick: () => set(d - 1) }),
+      h('input', { type: 'number', min: BOSS_DIFF_MIN, max: DIFF.MAX_CHALLENGE_DIFFICULTY, value: d, style: 'width:64px', 'aria-label': '挑戰難度', onchange: ev => set(ev.target.value) }),
+      h('button', { class: 'small', text: '+', 'aria-label': '提高挑戰難度', disabled: d >= DIFF.MAX_CHALLENGE_DIFFICULTY, onclick: () => set(d + 1) }));
+  }
+  function challengeButton(b) {
+    const d = Math.max(ui.bossDiff, b.difficulty);
+    return battleButton(`挑戰難度 ${d}`, { kind: 'boss', id: b.id, difficulty: d }, { disabled: !b.defeated, title: b.defeated ? '' : '打贏這隻 Boss 後才能用' });
+  }
   function targetTitle(target, difficulty) {
-    if (target.kind === 'boss') return `Boss：${B.findBoss(target.id).name}`;
+    if (target.kind === 'boss') return `Boss：${B.findBoss(target.id).name}${target.difficulty !== undefined && target.difficulty !== B.findBoss(target.id).difficulty ? `（挑戰難度 ${target.difficulty}）` : ''}`;
     return `${M.REGIONS[target.id].name}（難度 ${difficulty ?? target.difficulty}）`;
   }
   async function startBattle(target) {
@@ -10256,9 +10287,9 @@ module.exports = { HERO_BASE, HERO_NAME, playerName, strengthLevel, MAX_TURNS, S
   }
   function describeActive(gem) {
     const dmg = gem.actions.filter(a => a.type === 'DAMAGE');
-    // 光環（2026-11-22，忍耐）：開啟後每回合開始扣 SP 發動
+    // 光環（2026-11-22，忍耐）：開啟後每回合開始扣 SP 發動。不列「只能連結…」（使用者：之後會加新輔助寶石；規則仍由 supportWhitelist 擋）
     if (gem.aura) return [`光環｜每回合開始 SP ${gem.spCost}`, gem.aura.kind === 'healTaken' ? `回復上一回合受到傷害的 ${Math.round(gem.aura.ratio * 100)}%` : '',
-      '使用後開啟並多行動一次；SP 不夠的回合不發動', `只能連結${gem.supportWhitelist.map(id => gemName(id)).join('、')}`].filter(Boolean).join('｜');
+      '使用後開啟並多行動一次；SP 不夠的回合不發動'].filter(Boolean).join('｜');
     const parts = [`SP ${gem.spCost}`, gem.tags.includes('spell') ? '法術' : '物理'];
     for (const a of dmg) parts.push(`${a.targetType === 'ENEMY_ALL' ? '全體' : '單體'} ${Math.round((a.power ?? 1) * 100)}%`);
     for (const a of dmg) for (const ail of a.ailments || []) parts.push(`附加${G.AILMENTS[ail.kind]?.name ?? ail.kind}（${ail.basis === 'hit' ? '命中傷害' : '攻擊力'}的 ${Math.round(ail.power * 100)}%，${ail.duration} 槽）`);

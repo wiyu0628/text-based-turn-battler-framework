@@ -8,7 +8,10 @@ test('strength grows 15.3% per level from 1.07 at difficulty 1', () => {
   assert.ok(Math.abs(strength(15) - 1.07 * 1.153 ** 14) < 1e-12);
   for (let d = 2; d <= 15; d++) assert.ok(strength(d) > strength(d - 1));
   assert.ok(strength(15) > 7.7 && strength(15) < 8);
-  for (const bad of [0, 16, 2.5, '3']) assert.throws(() => strength(bad), /難度/);
+  for (const bad of [0, 1000, 2.5, '3']) assert.throws(() => strength(bad), /難度/);
+  // Boss 挑戰難度（2026-11-22）：超過 15 照公式延伸，999 是技術上限
+  assert.ok(Math.abs(strength(20) - 1.07 * 1.153 ** 19) < 1e-9);
+  assert.ok(Number.isFinite(strength(999)));
 });
 
 test('scaleMonster multiplies hp, atk, int; adds hit and def; leaves spd, sp, eva, cri alone', () => {

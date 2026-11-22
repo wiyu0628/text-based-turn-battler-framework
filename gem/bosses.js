@@ -90,11 +90,11 @@ function findBoss(bossId) {
   return boss;
 }
 
-/** 建一場王戰：回傳 { monsters: Entity[], difficulty }。 */
-function buildBossEncounter(bossId) {
+/** 建一場王戰：回傳 { monsters: Entity[], difficulty }。difficulty 不給＝王自己的難度（挑戰難度由 game.js 檢查）。 */
+function buildBossEncounter(bossId, difficulty = findBoss(bossId).difficulty) {
   const boss = findBoss(bossId);
-  const monsters = boss.monsters.map((def, i) => buildFromDef(def, boss.difficulty, { id: `boss_${def.id}_${i + 1}` }));
-  return { monsters, difficulty: boss.difficulty };
+  const monsters = boss.monsters.map((def, i) => buildFromDef(def, difficulty, { id: `boss_${def.id}_${i + 1}` }));
+  return { monsters, difficulty };
 }
 
 module.exports = { BOSSES, findBoss, buildBossEncounter };

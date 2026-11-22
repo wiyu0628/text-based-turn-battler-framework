@@ -7,7 +7,7 @@
  *   prepareBattle(save, target, seed) → 建好角色與敵人（還沒打）
  *   runBattle(save, target, seed)     → 打完、打贏就發掉落與首次擊敗獎勵，回傳新存檔與「戰鬥紀錄」
  *   replayBattle(record)              → 用紀錄裡的存檔快照與種子重打一次，戰報逐行相同
- *   target：{ kind: 'region', id: 'ruins', difficulty } 或 { kind: 'boss', id: 'gatekeeper' }（王用自己的難度）
+ *   target：{ kind: 'region', id: 'ruins', difficulty } 或 { kind: 'boss', id: 'gatekeeper', difficulty? }（王預設用自己的難度；擊敗過可以帶更高的挑戰難度）
  *
  * ── 種子 ──────────────────────────────────────────────────────
  *   同一顆種子分成三條互不干擾的亂數：組敵人（seed）、戰鬥（seed + 1，engine 的 rng）、掉落（seed + 2）。
@@ -28,6 +28,7 @@ const { buildChordPassives, applyChordDamage, linkChordSummon } = require('./cho
 const { setupSilver } = require('./silver');
 const { accessoryAffixes } = require('./accessoryTable');
 const { buildBossEncounter, findBoss } = require('./bosses');
+const { MAX_DIFFICULTY, MAX_CHALLENGE_DIFFICULTY } = require('./difficulty');
 const { rollDrops } = require('./dropTable');
 
 const HERO_BASE = { hp: 3000, sp: 240, atk: 150, int: 150, def: 50, spd: 200, cri: 0.1, criDmg: 1.5, skillCastRate: 0.35 };   // 速度 2026-11-19 加倍（原本 100）
@@ -122,7 +123,14 @@ function checkTarget(state, target) {
     const status = save.bossStatus(state).find(b => b.id === target.id);
     if (!status) throw new save.SaveError(`找不到王「${target.id}」`);
     if (!status.available) throw new save.SaveError(`王「${status.name}」還沒開放`);
-    return { difficulty: findBoss(target.id).difficulty, name: status.name };
+    // 挑戰難度（2026-11-22）：擊敗過的王可以帶 difficulty 重打，最低是王自己的難度，上限只有技術上限
+    const base = findBoss(target.id).difficulty;
+    if (target.difficulty === undefined || target.difficulty === base) return { difficulty: base, name: status.name, challenge: false };
+    if (!status.defeated) throw new save.SaveError(`要先擊敗「${status.name}」才能調整挑戰難度`);
+    if (!Number.isInteger(target.difficulty) || target.difficulty < base || target.difficulty > MAX_CHALLENGE_DIFFICULTY) {
+      throw new save.SaveError(`挑戰難度必須是 ${base}～${MAX_CHALLENGE_DIFFICULTY} 的整數`);
+    }
+    return { difficulty: target.difficulty, name: status.name, challenge: true };
   }
   throw new save.SaveError('戰鬥目標必須是 { kind: "region", id, difficulty } 或 { kind: "boss", id }');
 }
@@ -157,7 +165,7 @@ function prepareBattle(state, target, seed) {
   if (target.kind === 'region') {
     ({ monsters, summonFactory, info } = rollEncounter(target.id, difficulty, createSeededRandom(seed)));
   } else {
-    ({ monsters } = buildBossEncounter(target.id));
+    ({ monsters } = buildBossEncounter(target.id, difficulty));
     info = { boss: true, elite: true };
   }
   // 第二區的地區特色「共鳴」（resonance.js）：雙方每個單位都掛上共鳴，戰鬥中召喚出來的也算
@@ -197,8 +205,10 @@ function runBattle(state, target, seed, { now = () => new Date().toISOString() }
     const dropRng = createSeededRandom(seed + 2);
     // 第幾區（掉落池＝第一區＋本區專屬）：地區看 REGIONS[id].area、王看 boss.area，沒寫＝1
     const area = target.kind === 'region' ? (REGIONS[target.id]?.area ?? 1) : (findBoss(target.id)?.area ?? 1);
-    drops = rollDrops(battle.difficulty, dropRng, { rare: battle.info.rare, elite: battle.info.elite, area });
-    next = save.grantDrops(next, drops, { difficulty: battle.difficulty, rng: dropRng });
+    // 挑戰難度超過 15：掉落以 15 計（使用者：照一般 Boss 掉落）
+    const dropDifficulty = Math.min(battle.difficulty, MAX_DIFFICULTY);
+    drops = rollDrops(dropDifficulty, dropRng, { rare: battle.info.rare, elite: battle.info.elite, area });
+    next = save.grantDrops(next, drops, { difficulty: dropDifficulty, rng: dropRng });
     if (target.kind === 'boss') {
       const recorded = save.recordBossVictory(next, target.id);
       next = recorded.save;

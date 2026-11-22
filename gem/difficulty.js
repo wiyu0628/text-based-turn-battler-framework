@@ -33,10 +33,13 @@ const HIT_PER_LEVEL = 10;
 const DEF_PER_LEVEL = 18;
 const MIN_DIFFICULTY = 1;
 const MAX_DIFFICULTY = 15;
+// Boss 挑戰難度（2026-11-22 使用者：擊敗後可以調高難度重打，不設上限）：超過 15 照同一條公式延伸。
+// 999 只是防止數字溢位的技術上限（1.153^998 ≈ 1e62，再高血量會變成 Infinity），不是設計上的上限。
+const MAX_CHALLENGE_DIFFICULTY = 999;
 
 function checkDifficulty(difficulty) {
-  if (!Number.isInteger(difficulty) || difficulty < MIN_DIFFICULTY || difficulty > MAX_DIFFICULTY) {
-    throw new Error(`難度必須是 ${MIN_DIFFICULTY}～${MAX_DIFFICULTY} 的整數（收到 ${difficulty}）`);
+  if (!Number.isInteger(difficulty) || difficulty < MIN_DIFFICULTY || difficulty > MAX_CHALLENGE_DIFFICULTY) {
+    throw new Error(`難度必須是 ${MIN_DIFFICULTY}～${MAX_CHALLENGE_DIFFICULTY} 的整數（收到 ${difficulty}）`);
   }
 }
 
@@ -60,4 +63,4 @@ function scaleMonster(stats, difficulty) {
   return out;
 }
 
-module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, DEF_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICULTY, strength, scaleMonster };
+module.exports = { DIFFICULTY_SCALE, HIT_PER_LEVEL, DEF_PER_LEVEL, MIN_DIFFICULTY, MAX_DIFFICULTY, MAX_CHALLENGE_DIFFICULTY, strength, scaleMonster };

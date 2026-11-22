@@ -17,7 +17,7 @@ node gem/gems-ui-build.js
 node gem/game-build.js                                  # 正式遊戲介面
 ```
 
-**預期**：`npm test` 753 項全過；`gem/` 內各測試檔：accessory 7、area 4、bossgems 8、affixTable 12、ailment 15、bosses 8、castWeight 22、combine 10、craft 17、deft 3、difficulty 2、dropTable 10、energy 8、engrave 12、equipment 12、game 13、gems 107、hall 23、legendary 19、monsters 15、saveLayer 52、silver 11、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 600 KB、29 個模組）。
+**預期**：`npm test` 758 項全過；`gem/` 內各測試檔：accessory 7、area 4、bossgems 8、affixTable 12、ailment 15、bosses 8、castWeight 22、challenge 5、combine 10、craft 17、deft 3、difficulty 2、dropTable 10、energy 8、engrave 12、equipment 12、game 13、gems 107、hall 23、legendary 19、monsters 15、saveLayer 52、silver 11、spRegen 3、spell 12、statLayer 42。`node gem/game-build.js` 產生 `gem/game.html`（約 600 KB、29 個模組）。
 
 **如果結果不同，先判斷是哪一種情況：**
 
@@ -388,7 +388,7 @@ node gem/game-build.js                                  # 正式遊戲介面
    - **清除沒反應的原因**：按鈕用了瀏覽器的 `confirm()`，有些環境（例如在 App 裡預覽、沙盒 iframe）會直接擋掉並回傳否，所以按了沒有任何反應；另外能量不夠時按鈕是停用的。改成頁面內的確認框（`ask()`，匯入存檔、重新開始、分解裝備也一起換掉），清除按鈕不再停用、能量不夠時提示差多少。`game-ui-check.js` 會在有人呼叫 `confirm()` 時報錯。
 5. **第二輪修改（使用者）**：
    - 難度底下只寫「怪物強度 N」（拿掉勝利能量與掉落階級）。
-   - 挑戰Boss：加說明「Boss難度固定，勝利可以開啟新地圖（尚未實裝）」，不顯示難度（彈窗標題也拿掉）。
+   - 挑戰Boss：加說明「Boss難度固定，勝利可以開啟新地圖」（2026-11-22 拿掉「（尚未實裝）」），不顯示難度（彈窗標題也拿掉）。
    - 製作裝備：**不預覽**；可以自己取名（最多 12 字，`saveLayer.ITEM_NAME_MAX`；存在裝備的 `name`，只有製作裝備能有；不填就用部位名）。顯示名稱是「品質的名字」，例如「上等的堅韌布甲」。
    - 寶石連結不合法時的提示出現兩次：原因是 `SaveError.message` 本身已含問題清單，介面又把 `problems` 再接一次，外加跳一次提示。改成只在那一欄顯示一次、不跳提示，訊息裡的寶石 id 換成名稱。
    - `GameUI.forceState(save)` 只給 `game-ui-check.js` 塞測試狀態用。
