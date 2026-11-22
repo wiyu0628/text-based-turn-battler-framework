@@ -304,6 +304,41 @@ const ACTIVE_GEMS = {
     ]
   },
 
+  // 連音（使用者設計 2026-11-22，第二區王的獎勵；數值我擬）：單體法術，基礎 2 連擊，
+  // 依速度連擊公式（框架 getCombos）增加：擊數 = 基礎 − 1 + 連擊數，最多 4 擊。開頭一行寫「N連音」，每擊「第 N 道音符，」。
+  tuplet: {
+    id: 'tuplet',
+    name: '連音',
+    tags: ['spell'],
+    spCost: 12,
+    uncounterable: true,
+    tuplet: { base: 2, max: 4, intro: '如子彈般的連音從{caster}的武器傳出——{n}連音！', hit: '第{i}道音符，' },
+    actions: [
+      {
+        type: 'DAMAGE',
+        targetType: 'ENEMY_SINGLE',
+        power: 0.7,
+        stat: 'int',
+        uncritable: true
+      }
+    ]
+  },
+
+  // 忍耐（使用者設計 2026-11-22，第二區王的獎勵；數值、文字我擬）：新類型「光環」。
+  // 使用後開啟（之後不會再選到），並立刻多行動一次；開啟後每回合開始扣 spCost 發動效果，SP 不夠就不扣、這回合不發動。
+  // 效果：回復上一回合受到傷害的 20%。只能連結佈局、撒手鐧（supportWhitelist）。
+  endure: {
+    id: 'endure',
+    name: '忍耐',
+    tags: ['aura'],
+    spCost: 8,
+    uncounterable: true,
+    supportWhitelist: ['layout', 'trump'],
+    aura: { kind: 'healTaken', ratio: 0.2, openText: '{caster} 開啟了忍耐！', text: '{caster} 忍耐著傷痛，回復了 {value} 點生命！',
+      lowSpText: '{caster} 的 SP 不足，忍耐沒有發動。' },   // 2026-11-22 使用者：SP 不夠的回合要提示
+    actions: []
+  },
+
   mend: {
     id: 'mend',
     name: '治癒術',
@@ -528,6 +563,28 @@ const SUPPORT_GEMS = {
     effects: [{ op: 'reaction', trigger: 'AFTER_DAMAGE_DEALT', scope: 'thisSkill', do: { kind: 'drainSp', ratio: 0.05 } }]
   },
 
+  // 反覆（使用者設計 2026-11-22，第二區）：穿戴中這組以外，每多一組相同的主動寶石，傷害 +35%（加算）。
+  reprise: {
+    id: 'reprise',
+    name: '反覆',
+    desc: '每裝備一顆此輔助寶石連結以外的相同主動寶石，傷害增加{sameActiveInc}。',
+    area: 2,
+    requires: { action: { type: 'DAMAGE' } },
+    addTags: [],
+    effects: [{ op: 'sameActiveInc', value: 0.35 }]
+  },
+
+  // 混沌爆擊（使用者設計 2026-11-22，第二區）：物理單體；暴擊時有 50% 機率追加目標生命上限 10% 的傷害（不會暴擊、受防禦影響）。
+  chaoscrit: {
+    id: 'chaoscrit',
+    name: '混沌爆擊',
+    desc: '爆擊時有{critChance}機率追加對方HP上限{critMaxHp}的傷害。',
+    area: 2,
+    requires: { action: { type: 'DAMAGE', targetType: 'ENEMY_SINGLE' }, tags: { none: ['spell', 'aoe'] } },
+    addTags: [],
+    effects: [{ op: 'reaction', trigger: 'AFTER_DAMAGE_DEALT', scope: 'thisSkill', do: { kind: 'critMaxHp', ratio: 0.1, chance: 0.5 } }]   // 機率 2026-11-22 使用者加
+  },
+
   // 追擊（使用者設計，2026-11-19）：普攻一次打出 3 連擊以上時，免費施放一次這個技能（每槽最多一次）。
   // 連擊數取決於自己與目標的速度差（差 > 80 才可能 3 連擊），所以是速度流派的寶石；速度同日加倍就是為了它。
   followup: {
@@ -591,7 +648,8 @@ const SUPPORT_GEMS = {
 // 名單是我擬的佔位：追刃留給打王。王的獎勵還沒做，BOSS_REWARD_GEMS 只是記錄。
 // 治癒術暫時不給（使用者：還沒有配套的輔助寶石），列在 UNOBTAINABLE_ACTIVE_GEMS，之後再決定來源。
 const STARTING_ACTIVE_GEMS = ['magicmissile', 'whirlwind', 'rend'];
-const BOSS_REWARD_GEMS = ['pursuit', 'firestorm'];   // 火焰風暴 2026-11-19 加入（使用者）
+// 連音、忍耐 2026-11-22 加入：第二區王的獎勵（王還沒做，暫時取不到）
+const BOSS_REWARD_GEMS = ['pursuit', 'firestorm', 'tuplet', 'endure'];   // 火焰風暴 2026-11-19 加入（使用者）
 const UNOBTAINABLE_ACTIVE_GEMS = ['mend'];
 
 module.exports = { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_GEMS, ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };

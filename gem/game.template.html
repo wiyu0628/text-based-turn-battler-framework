@@ -22,7 +22,7 @@
     --tag-rare-bg: #efe6f8; --tag-elite-bg: #f8e6e2; --tag-good-bg: #e3f2e8; --tag-legend-bg: #fbeed6;
     --chip: #efece7; --chip-hover: #f4d9d5; --worn-line: #9cc9ad; --worn-bg: #f6fbf8;
     --backdrop: rgba(30, 26, 22, .45); --shadow: rgba(0, 0, 0, .25);
-    --log-normal: var(--ink); --log-skill: #14807a; --log-heal: #2f9e5b; --log-dot: #f56262; --log-miss: #aaa49d; --result: #f6f4f0; --result-win: #eef7f1; --result-lose: #fbefed;
+    --log-normal: var(--ink); --log-skill: #14807a; --log-heal: #2f9e5b; --log-dot: #f56262; --log-miss: #aaa49d; --log-counter: #b45309; --result: #f6f4f0; --result-win: #eef7f1; --result-lose: #fbefed;
     --toast-bg: #2a2622; --toast-ink: #fff;
     color-scheme: light;
   }
@@ -35,7 +35,7 @@
     --tag-rare-bg: #352a45; --tag-elite-bg: #452b26; --tag-good-bg: #23392c; --tag-legend-bg: #42361f;
     --chip: #34312d; --chip-hover: #4a2f2b; --worn-line: #3f6b51; --worn-bg: #1f2a23;
     --backdrop: rgba(0, 0, 0, .6); --shadow: rgba(0, 0, 0, .6);
-    --log-normal: var(--ink); --log-skill: #4fd1c5; --log-heal: #62cf8c; --log-dot: #f56262; --log-miss: #7f7a74; --result: #2b2926; --result-win: #1f3327; --result-lose: #3a2422;
+    --log-normal: var(--ink); --log-skill: #4fd1c5; --log-heal: #62cf8c; --log-dot: #f56262; --log-miss: #7f7a74; --log-counter: #f6ad55; --result: #2b2926; --result-win: #1f3327; --result-lose: #3a2422;
     --toast-bg: #e8e3dc; --toast-ink: #1a1917;
     color-scheme: dark;
   }
@@ -124,6 +124,7 @@
   .log .heal { color: var(--log-heal); }
   .log .dot { color: var(--log-dot); }
   .log .miss { color: var(--log-miss); }
+  .log .counter { color: var(--log-counter); }
   .log .end { font-weight: 600; margin-top: 6px; }
   .log .crit { font-weight: 700; }
   .drop-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 4px; }
@@ -398,11 +399,12 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   const QUALITY = Object.fromEntries(craft.QUALITIES.map(q => [q.id, q]));
   const KINDS = Object.keys(affix.ENGRAVING_TYPES);
   const kindName = kind => affix.ENGRAVING_TYPES[kind]?.name ?? kind;
-  const EFFECT_NAMES = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '每個行動槽回復 SP', summonHp: '召喚物生命' };
+  const EFFECT_NAMES = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '每個行動槽回復 SP', summonHp: '召喚物生命', comboFloor: '普攻連擊每擊倍率最低' };
   function describeAffix(a) {
     if (a.scope === 'wearer') return statLayer.describeStatBonus(a).text;
     if (a.scope === 'effect') {
       if (a.kind === 'ailmentDuration') return `${EFFECT_NAMES[a.kind]} +${a.value} 槽`;
+      if (a.kind === 'comboFloor') return `${EFFECT_NAMES[a.kind]} ${pct(a.value)}（召喚物不受影響）`;
       if (a.kind === 'spRegen') return `${EFFECT_NAMES[a.kind]} ${Math.round(a.value * 100) / 100}`;
       return `${EFFECT_NAMES[a.kind] ?? a.kind} +${pct(a.value)}`;
     }
@@ -584,12 +586,13 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   }
   function encodeRecord(record) { return btoa(unescape(encodeURIComponent(JSON.stringify(record)))); }
   function decodeRecord(code) { return JSON.parse(decodeURIComponent(escape(atob(code)))); }
-  // 戰報顏色不分敵我：普攻 = 一般文字色、技能（淺色 #14807a、深色 #4fd1c5）、恢復、持續傷害、閃避各一色；會心一擊加粗
+  // 戰報顏色不分敵我：普攻 = 一般文字色、技能（淺色 #14807a、深色 #4fd1c5）、恢復、持續傷害、閃避、反擊（2026-11-22 使用者：琥珀色）各一色；會心一擊加粗
   function logClass(log) {
     if (log.type === 'TURN_START') return 'turn';
     if (log.type === 'BATTLE_START' || log.type === 'TEXT') return 'sys';
     if (log.type === 'BATTLE_END') return 'end';
     if (log.type === 'MISS') return 'miss';
+    if (log.isCounter || log.type === 'COUNTER') return 'counter';
     if (log.type === 'BUFF_EFFECT') return log.buffType === 'DOT' ? 'dot' : log.buffType === 'HOT' ? 'heal' : 'normal';
     if (log.type === 'HEAL' || log.type === 'SP_RECOVER' || log.type === 'REST') return 'heal';
     if (log.skillId && log.isNormalAttack === false) return 'skill';
@@ -1004,10 +1007,14 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   }
   function describeActive(gem) {
     const dmg = gem.actions.filter(a => a.type === 'DAMAGE');
+    // 光環（2026-11-22，忍耐）：開啟後每回合開始扣 SP 發動
+    if (gem.aura) return [`光環｜每回合開始 SP ${gem.spCost}`, gem.aura.kind === 'healTaken' ? `回復上一回合受到傷害的 ${Math.round(gem.aura.ratio * 100)}%` : '',
+      '使用後開啟並多行動一次；SP 不夠的回合不發動', `只能連結${gem.supportWhitelist.map(id => gemName(id)).join('、')}`].filter(Boolean).join('｜');
     const parts = [`SP ${gem.spCost}`, gem.tags.includes('spell') ? '法術' : '物理'];
     for (const a of dmg) parts.push(`${a.targetType === 'ENEMY_ALL' ? '全體' : '單體'} ${Math.round((a.power ?? 1) * 100)}%`);
     for (const a of dmg) for (const ail of a.ailments || []) parts.push(`附加${G.AILMENTS[ail.kind]?.name ?? ail.kind}（${ail.basis === 'hit' ? '命中傷害' : '攻擊力'}的 ${Math.round(ail.power * 100)}%，${ail.duration} 槽）`);
     if (gem.actions.some(a => a.type === 'HEAL')) parts.push('治療');
+    if (gem.tuplet) parts.push(`基礎 ${gem.tuplet.base} 連擊，依速度連擊增加，最多 ${gem.tuplet.max} 連擊（每擊 ${Math.round(gem.actions[0].power * 100)}%）`);
     if (gem.critEcho) parts.push(`根據爆擊率額外釋放一次（${Math.round(gem.critEcho.power * 100)}%）`);   // 2026-11-21 使用者：火焰風暴補上這句
     return parts.join('｜');
   }
@@ -1021,7 +1028,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     const cp = ui.convertPicks;
     return [h('div', { class: 'grid4' }, Object.keys(SLOT_NAMES).map(linkEditor)),
       h('div', { class: 'grid2' },
-        h('div', { class: 'panel' }, h('h2', { text: '已擁有的主動寶石' }), h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: '擁有一次就能鑲在任意多件裝備上；穿在身上的裝備裡同一種只能有一顆。' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id]) => h('li', {}, h('strong', { text: gemName(id) }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有' })),
+        h('div', { class: 'panel' }, h('h2', { text: '已擁有的主動寶石' }), h('p', { class: 'muted', style: 'font-size:12px;margin:0 0 6px', text: '擁有一次就能鑲在任意多件裝備上，穿在身上的裝備也可以重複裝同一種。' }), actives.length ? h('ul', { class: 'gem-list' }, actives.map(([id]) => h('li', {}, h('strong', { text: gemName(id) }), h('div', { class: 'muted', style: 'font-size:12px', text: describeActive(G.ACTIVE_GEMS[id]) })))) : h('div', { class: 'muted', text: '沒有' })),
         h('div', { class: 'panel' }, h('h2', { text: '背包：輔助寶石' }), supports.length ? h('ul', { class: 'gem-list' }, supports.map(([id, n]) => h('li', {},
           h('strong', { text: `${gemName(id)} ×${n}` }),
           h('button', { class: 'small', style: 'margin-left:6px', disabled: cp.length >= S.GEM_CONVERT_INPUTS || cp.filter(x => x === id).length >= n, text: '放入轉換', onclick: () => { ui.convertPicks.push(id); render(); } }),

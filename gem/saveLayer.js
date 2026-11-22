@@ -93,7 +93,7 @@ class SaveError extends Error {
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isCount = value => Number.isInteger(value) && value >= 1;
 // 主動寶石是「擁有制」（使用者決定）：背包數量只會是 1（擁有）或沒有；鑲上去不扣背包，同一顆可以鑲在任意多件裝備上
-// （穿戴中的裝備仍然同一種主動寶石只能有一顆生效，見 compileEquipped）。輔助寶石照舊一顆一顆算，鑲上去會從背包扣。
+// （2026-11-22 起穿戴中的裝備也可以重複裝同一種主動寶石，連輔助都相同時技能 id 加 #2、#3 區分）。輔助寶石照舊一顆一顆算，鑲上去會從背包扣。
 const isActiveGem = id => Object.hasOwn(ACTIVE_GEMS, id);
 const isGemId = id => Object.hasOwn(ACTIVE_GEMS, id) || Object.hasOwn(SUPPORT_GEMS, id);
 
@@ -1123,7 +1123,9 @@ function equippedEffects(save) {
  * 屬性加成仍要自己用 equippedBonuses 套到角色基礎屬性上。
  */
 function compileEquipped(save, options = {}) {
-  return { ...compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save), mechanics: equippedMechanics(save) }), normalAttackStat: equippedAttackStat(save) };
+  // extraMechanics：戰鬥場景加的機制（例如銀的場景和弦，讓寶石技能吃和弦加成）
+  const mechanics = [...equippedMechanics(save), ...(options.extraMechanics ?? [])];
+  return { ...compileLoadout(equippedLinks(save), { ...options, equipment: equippedEffects(save), mechanics }), normalAttackStat: equippedAttackStat(save) };
 }
 
 /** 穿戴中的傳說裝備給的角色層級機制（spShield、shieldBreakSp），交給 compileLoadout 的 options.mechanics。 */

@@ -24,7 +24,9 @@
  *   （舊的守門者：旋風斬 34%、法術 89%。動力源讓群攻有發揮空間，旋風斬比較打得動。）
  */
 
-const { buildFromDef } = require('./monsters');
+const { buildFromDef, MONSTERS } = require('./monsters');
+const { SILVER_DEF, WINGBUG_DEF } = require('./silver');
+const BOSS_FAIRY = { ...MONSTERS.fairy, stats: { ...MONSTERS.fairy.stats, hp: 0.15, atk: 0.2 } };
 
 const BOSSES = [
   {
@@ -67,6 +69,18 @@ const BOSSES = [
       }]
     }],
     rewards: { gems: ['pursuit', 'firestorm'], unlockRegions: ['hall'], accessories: ['hourglass'] }   // 「烈風爪痕」的碎片 2026-11-20（使用者：首次打王固定掉飾品）
+  },
+  {
+    // 第二區王「老婦人 銀」（使用者設計 2026-11-22；數值、文本是佔位）。機制在 silver.js（場景和弦、四個被動、舉盾、冰盾）。
+    // 首次擊敗：連音、忍耐；新地區或飾品使用者還沒設計。
+    id: 'silver',
+    name: '老婦人 銀',
+    difficulty: 12,
+    area: 2,
+    setup: 'silver',
+    // 王戰的和聲妖精：技能、追擊同音樂廳，屬性調低（HP 0.15、攻擊 0.2；音樂廳是 0.2／0.3），王戰不套強度預算
+    monsters: [SILVER_DEF, WINGBUG_DEF, WINGBUG_DEF, BOSS_FAIRY, BOSS_FAIRY],
+    rewards: { gems: ['tuplet', 'endure'], accessories: ['relative'] }   // 「相對機動」的碎片 2026-11-22
   }
 ];
 

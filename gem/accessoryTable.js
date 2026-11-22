@@ -33,6 +33,14 @@ const ACCESSORIES = {
     affixes: [
       { scope: 'effect', kind: 'ailmentDuration', value: 1 }
     ]
+  },
+  // 「相對機動」的碎片（2026-11-22 使用者設計，首次擊敗銀固定掉落）：玩家普攻連擊每擊倍率最低 10%。
+  // 框架的連擊遞減是第 i 擊（從 0 數）× 0.6^i；有這個碎片時改成 × max(0.6^i, 0.1)（第 6 擊起才有差）。召喚物不受影響。
+  relative: {
+    id: 'relative', name: '「相對機動」的碎片',
+    affixes: [
+      { scope: 'effect', kind: 'comboFloor', value: 0.1 }
+    ]
   }
 };
 

@@ -146,33 +146,26 @@ test('enrage（舊守門者用的特性，保留）：血量低於 at 時某屬�
 });
 
 test('bosses unlock in order, old ones stay available; first clear gives rewards once', () => {
-  const extra = { id: 'test_second', name: '第二隻王', difficulty: 9, monsters: [], rewards: { gems: [], unlockRegions: ['test_region'] } };
-  BOSSES.push(extra);
-  REGIONS.test_region = { id: 'test_region', name: '測試區', locked: true, count: [1, 1], budget: 1, monsters: ['dog'] };
-  try {
-    let state = starter();
-    assert.deepEqual(save.bossStatus(state).map(b => [b.id, b.defeated, b.available]), [['gatekeeper', false, true], ['test_second', false, false]]);
-    assert.throws(() => save.recordBossVictory(state, 'test_second'), /還沒開放/);
-    assert.deepEqual(save.availableRegions(state), ['ruins', 'sewer']);
-    const first = save.recordBossVictory(state, 'gatekeeper');
-    assert.equal(first.firstClear, true);
-    assert.deepEqual(first.rewards.unlockRegions, ['hall']);                 // 中央廳開放第二區（2026-11-21）
-    assert.equal(first.save.gems.pursuit, 1);
-    assert.equal(first.save.gems.firestorm, 1);
-    assert.equal(state.gems.pursuit, undefined);                              // 原存檔不變
-    state = first.save;
-    assert.deepEqual(save.bossStatus(state).map(b => b.available), [true, true]);
-    const again = save.recordBossVictory(state, 'gatekeeper');
-    assert.equal(again.firstClear, false);
-    assert.equal(again.save.gems.pursuit, 1);                                 // 不重複發
-    const second = save.recordBossVictory(state, 'test_second');
-    assert.deepEqual(second.rewards.unlockRegions, ['test_region']);
-    assert.deepEqual(save.availableRegions(second.save), ['ruins', 'sewer', 'hall', 'test_region']);
-    assert.throws(() => save.recordBossVictory(state, 'nope'), /找不到王/);
-  } finally {
-    BOSSES.pop();
-    delete REGIONS.test_region;
-  }
+  let state = starter();
+  assert.deepEqual(save.bossStatus(state).map(b => [b.id, b.defeated, b.available]), [['gatekeeper', false, true], ['silver', false, false]]);
+  assert.throws(() => save.recordBossVictory(state, 'silver'), /還沒開放/);
+  assert.deepEqual(save.availableRegions(state), ['ruins', 'sewer']);
+  const first = save.recordBossVictory(state, 'gatekeeper');
+  assert.equal(first.firstClear, true);
+  assert.deepEqual(first.rewards.unlockRegions, ['hall']);                 // 中央廳開放第二區（2026-11-21）
+  assert.equal(first.save.gems.pursuit, 1);
+  assert.equal(first.save.gems.firestorm, 1);
+  assert.equal(state.gems.pursuit, undefined);                              // 原存檔不變
+  state = first.save;
+  assert.deepEqual(save.bossStatus(state).map(b => b.available), [true, true]);
+  const again = save.recordBossVictory(state, 'gatekeeper');
+  assert.equal(again.firstClear, false);
+  assert.equal(again.save.gems.pursuit, 1);                                 // 不重複發
+  const second = save.recordBossVictory(state, 'silver');                   // 第二隻王「老婦人 銀」（2026-11-22）
+  assert.equal(second.save.gems.tuplet, 1);
+  assert.equal(second.save.gems.endure, 1);
+  assert.deepEqual(save.availableRegions(second.save), ['ruins', 'sewer', 'hall']);
+  assert.throws(() => save.recordBossVictory(state, 'nope'), /找不到王/);
 });
 
 test('應急動力源的魔力汲取：讓主角失去 6 點 SP（不夠扣到 0），不造成傷害；旁白的 {player} 用玩家改過的名字', () => {

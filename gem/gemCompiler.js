@@ -6,7 +6,7 @@
  * 只依賴框架公開的 Skill，不改框架任何檔案。流程與規則見 gems.js 開頭的說明。
  * 你的專案裡把下面的 require 換成 require('text-based-turn-battler-framework')。
  */
-const { Skill, Buff, Entity, random } = require('../src');
+const { Skill, Buff, Entity, Formulas, random } = require('../src');
 const { ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT } = require('./gems');
 const { validateBuffBonuses, statModifier } = require('./statLayer');
 
@@ -26,7 +26,7 @@ class GemLinkError extends Error {
   }
 }
 
-const KNOWN_OPS = new Set(['inc', 'more', 'cost', 'scope', 'actionFlag', 'appendAction', 'prependAction', 'reaction', 'grant', 'wrap', 'castCondition', 'proc', 'repeat', 'condInc', 'critAsDamage']);
+const KNOWN_OPS = new Set(['inc', 'more', 'cost', 'scope', 'actionFlag', 'appendAction', 'prependAction', 'reaction', 'grant', 'wrap', 'castCondition', 'proc', 'repeat', 'condInc', 'critAsDamage', 'sameActiveInc']);
 const CONDITION_STATS = { selfHp: { name: '自身生命', ratio: true }, enemyCount: { name: '敵人數量', ratio: false } };
 const GRANT_KINDS = new Set(['opening', 'lastResort', 'onCrit', 'comboCast']);
 const WRAP_KINDS = new Set(['charge', 'echo']);
@@ -120,6 +120,12 @@ function validateGemData(supportGems, groups) {
         if (!finite(effect.value)) problems.push(`${where}的 condInc 需要有限數字 value`);
         const below = effect.when?.hpBelow;
         if (!(finite(below) && below > 0 && below <= 1)) problems.push(`${where}的 condInc 需要 when.hpBelow（0 到 1 之間，不含 0）`);
+      }
+      if (effect.op === 'sameActiveInc' && !finite(effect.value)) problems.push(`${where}的 sameActiveInc 需要有限數字 value`);
+      if (effect.op === 'reaction' && effect.do?.kind === 'critMaxHp') {
+        if (effect.trigger !== 'AFTER_DAMAGE_DEALT') problems.push(`${where}的 critMaxHp 只能掛在 AFTER_DAMAGE_DEALT`);
+        if (!(finite(effect.do.ratio) && effect.do.ratio > 0 && effect.do.ratio <= 1)) problems.push(`${where}的 critMaxHp 需要 0 到 1 之間（不含 0）的 ratio`);
+        if (effect.do.chance !== undefined && !(finite(effect.do.chance) && effect.do.chance > 0 && effect.do.chance <= 1)) problems.push(`${where}的 critMaxHp 的 chance 要在 0 到 1 之間（不含 0）`);
       }
       if (effect.op === 'reaction' && effect.do?.kind === 'drainSp') {
         if (effect.trigger !== 'AFTER_DAMAGE_DEALT') problems.push(`${where}的 drainSp 只能掛在 AFTER_DAMAGE_DEALT`);
@@ -288,7 +294,10 @@ function describeEffect(effect) {
       return { kind: 'effect', text: effect.do.kind === 'leech'
         ? `造成實際傷害的 ${pct(effect.do.ratio)} 回復自身生命`
         : effect.do.kind === 'drainSp' ? `每一擊命中時，減少目標 ${pct(effect.do.ratio)} SP 上限的 SP`
+        : effect.do.kind === 'critMaxHp' ? `暴擊時${(effect.do.chance ?? 1) < 1 ? `有 ${pct(effect.do.chance)} 機率` : ''}追加目標生命上限 ${pct(effect.do.ratio)} 的傷害（不會暴擊、受防禦影響）`
         : `${effect.trigger} 時觸發 ${effect.do.kind}` };
+    case 'sameActiveInc':
+      return { kind: 'inc', text: `穿戴中每多一組相同的主動寶石（這組以外），提高 ${pct(effect.value)} 傷害（加算）` };
     case 'proc':
       return { kind: 'proc', text: `${effect.per === 'hit' ? '每一擊' : '每個被打中的敵人'}有 ${pct(effect.chance)} 機率：${effect.summary}` };
     case 'castCondition':
@@ -364,6 +373,8 @@ function playerPlaceholders(gem) {
     if (e.op === 'actionFlag' && e.flag === 'ignoreDefense') values.ignoreDefense = pct(e.value);
     if (e.op === 'reaction' && e.do?.kind === 'leech') values.leech = pct(e.do.ratio);
     if (e.op === 'reaction' && e.do?.kind === 'drainSp') values.drain = pct(e.do.ratio);
+    if (e.op === 'reaction' && e.do?.kind === 'critMaxHp') { values.critMaxHp = pct(e.do.ratio); values.critChance = pct(e.do.chance ?? 1); }
+    if (e.op === 'sameActiveInc') values.sameActiveInc = pct(e.value);
     if (e.op === 'condInc') { values.condInc = pct(e.value); values.hpBelow = pct(e.when.hpBelow); }
     if (e.op === 'grant' && e.threshold !== undefined) values.threshold = pct(e.threshold);
     if (e.op === 'grant' && e.chance !== undefined) values.chance = pct(e.chance);
@@ -427,6 +438,25 @@ function buildPassive(skillId, reaction) {
         if (lost <= 0) return;
         target.stats.sp -= lost;
         logger.addLog({ type: 'TEXT', actorId: self.id, targetId: target.id, skillId, value: lost, message: `${target.name} 失去了 ${lost} 點 SP！` });
+      }
+    };
+  }
+  // 混沌爆擊（2026-11-22 使用者）：這個技能暴擊的那一擊之後，追加目標生命上限 ratio 的傷害。
+  // 不會暴擊；受防禦影響（同框架公式 300 ÷ (防禦 + 300)，讀目標含 Buff 的防禦）；當成直接扣血，不再觸發攻擊類反應。
+  if (reaction.trigger === 'AFTER_DAMAGE_DEALT' && reaction.do?.kind === 'critMaxHp') {
+    const { ratio, chance = 1 } = reaction.do;
+    return {
+      trigger: 'AFTER_DAMAGE_DEALT',
+      enabled: (self, hit) => self.isAlive && hit.skill?.id === skillId && hit.isCrit && hit.target?.isAlive,
+      action(self, hit, logger, engine) {
+        if (chance < 1 && random() >= chance) return;   // 2026-11-22 使用者：50% 機率
+        const target = hit.target;
+        const def = Math.max(0, (target.getEffectiveStats?.() ?? target.stats).def ?? 0);
+        const amount = Math.max(1, Math.floor((target.stats.maxHp ?? 0) * ratio * 300 / (def + 300)));
+        const dealt = target.takeDamage(amount, logger, { source: 'DIRECT', tags: ['chaos'] });
+        logger.addLog({ type: 'DAMAGE', actorId: self.id, targetId: target.id, skillId, isNormalAttack: false, value: dealt.actualDamage ?? amount,
+          message: `混沌的裂痕撕開了 ${target.name}，追加 ${dealt.actualDamage ?? amount} 點傷害！` });
+        target.finishDamage?.(dealt, logger, engine);
       }
     };
   }
@@ -910,7 +940,7 @@ const makeSkill = (config, conditions) => Object.keys(conditions).length ? new C
  * @throws {Error} 寶石資料本身有誤時（見 validateGemData）
  */
 function compileSkill(activeId, supportIds = [], {
-  activeGems = ACTIVE_GEMS, supportGems = SUPPORT_GEMS, groups = GROUPS, maxSupports = MAX_SUPPORTS, equipment = null, mechanics = []
+  activeGems = ACTIVE_GEMS, supportGems = SUPPORT_GEMS, groups = GROUPS, maxSupports = MAX_SUPPORTS, equipment = null, mechanics = [], copy = 1, sameActiveOthers = 0
 } = {}) {
   if (!Number.isInteger(maxSupports) || maxSupports < 0) {
     throw new Error(`maxSupports 必須是不小於 0 的整數，收到 ${maxSupports}`);
@@ -929,6 +959,11 @@ function compileSkill(activeId, supportIds = [], {
 
   // 固定處理順序：與插槽順序無關。
   const ids = [...supportIds].sort();
+  // 光環這類只能連結特定輔助寶石的主動寶石（supportWhitelist）；照排序後的順序找，錯誤訊息才與插槽順序無關
+  if (active.supportWhitelist) {
+    const bad = ids.find(gemId => !active.supportWhitelist.includes(gemId));
+    if (bad) throw new GemLinkError(bad, `「${active.name}」只能連結${active.supportWhitelist.map(gemId => supportGems[gemId]?.name ?? gemId).join('、')}`);
+  }
   for (let i = 1; i < ids.length; i++) {
     if (ids[i] === ids[i - 1]) throw new GemLinkError(ids[i], '同一個技能不能連結兩次');
   }
@@ -1011,6 +1046,8 @@ function compileSkill(activeId, supportIds = [], {
         case 'proc': draft.procs.push(effect); break;
         case 'repeat': draft.repeats.push(effect); break;
         case 'condInc': case 'critAsDamage': draft.dynamics.push(effect); break;
+        // 反覆：穿戴中這組以外每多一組相同的主動寶石（compileLoadout 算好傳進來），加算區 +value
+        case 'sameActiveInc': if (sameActiveOthers > 0) draft.inc.push(effect.value * sameActiveOthers); break;
         case 'wrap': if (!draft.wraps.includes(effect.kind)) draft.wraps.push(effect.kind); break;
         case 'castCondition': {
           // 同一個量取最嚴格的上下界；寶石依 id 字母序處理，數值相同時留先處理到的，所以與連結順序無關。
@@ -1095,7 +1132,8 @@ function compileSkill(activeId, supportIds = [], {
   const spCost = active.spCost > 0
     ? Math.max(1, Math.ceil(+(active.spCost * draft.costMult).toFixed(6)))
     : 0;
-  const id = [activeId, ...ids].join('+');
+  // copy：同一組（主動＋輔助完全相同）在配置裡第 n 次出現時加 #n，技能 id 才不會撞（2026-11-22 使用者：相同主動寶石可以重複裝）
+  const id = [activeId, ...ids].join('+') + (copy > 1 ? `#${copy}` : '');
   const tags = draft.tags;
   const uncounterable = active.uncounterable === true;
 
@@ -1103,6 +1141,8 @@ function compileSkill(activeId, supportIds = [], {
     throw new GemLinkError(activeId, '迴響與蓄力不能同時連結');
   }
   const critEcho = active.critEcho ?? null;
+
+  if (active.aura) return compileAura(active, { id, tags, conditions, grants: draft.grants, ids });
 
   // 迴響：玩家選到的是外殼（付 SP、掛「迴響中」標記、不造成傷害），開啟後外殼不能再選；
   // 本體（release）每回合開始時由被動插隊免費釋放。觸發類（佈局、追擊、撒手鐧、裝備的倒下釋放）用分派版本：
@@ -1116,6 +1156,7 @@ function compileSkill(activeId, supportIds = [], {
     if (releaseActions[leadAt]) releaseActions[leadAt] = { ...releaseActions[leadAt], text: { ...(releaseActions[leadAt].text || {}), action: expandPart('{caster}的迴響引發{skill}，') } };
     let release = withDynamicDamage(new Skill({ id: releaseId, name: active.name, tags: [...tags], actions: releaseActions, uncounterable }), draft.dynamics);
     if (critEcho) release = withCritEcho(release, critEcho);
+    if (active.tuplet) release = withTuplet(release, active.tuplet);
     release.gemLeadIndex = draft.prepended.length;
     release.gemSlotBuffIds = slotBuffIds(releaseActions);
     const releaseUse = release;
@@ -1159,6 +1200,7 @@ function compileSkill(activeId, supportIds = [], {
     const markerId = `gem_charged:${releaseId}`;
     let release = withDynamicDamage(new Skill({ id: releaseId, name: active.name, tags: [...tags], actions, uncounterable }), draft.dynamics);
     if (critEcho) release = withCritEcho(release, critEcho);
+    if (active.tuplet) release = withTuplet(release, active.tuplet);
     release.gemLeadIndex = draft.prepended.length;
     release.gemSlotBuffIds = slotBuffIds(actions);
     const shellAction = {
@@ -1178,6 +1220,7 @@ function compileSkill(activeId, supportIds = [], {
   if (actions.length) actions[0] = { ...actions[0], spCost };
   let skill = withDynamicDamage(makeSkill({ id, name: active.name, tags, actions, uncounterable }, conditions), draft.dynamics);
   if (critEcho) skill = withCritEcho(skill, critEcho);
+  if (active.tuplet) skill = withTuplet(skill, active.tuplet);
   // 前置動作（例如爆擊強化的提示）排在技能那一行之前；佈局的開頭文字要接在技能那一行，不能接在前置動作上。
   skill.gemLeadIndex = draft.prepended.length;
   skill.gemSlotBuffIds = slotBuffIds(actions);
@@ -1186,15 +1229,114 @@ function compileSkill(activeId, supportIds = [], {
   return { skill, release: null, charge: null, passives, grants: draft.grants, conditions, spCost, damageFactor: round4(factor), links: ids };
 }
 
+// ── 連音（tuplet）與光環（aura），2026-11-22 ─────────────────────
+
+const CN_NUMBERS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+
+/**
+ * 連音：施放時先決定目標（engine.selectTargets，照框架的單體選法），擊數 = base − 1 + 速度連擊數（框架 getCombos），
+ * 夾在 base～max；開頭寫一行「…——N連音！」，每一擊的句子是「第 N 道音符，」。迅擊之類複製出來的段落也照同樣擊數、同樣句子。
+ */
+function withTuplet(skill, { base, max, intro, hit }) {
+  const baseExecute = skill.execute;
+  const hitText = ctx => hit.replace('{i}', CN_NUMBERS[ctx.hitIndex] ?? String(ctx.hitIndex));
+  skill.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    const target = options.targets?.find(t => t.isAlive)
+      ?? (context?.selectTargets ? context.selectTargets(caster, 'ENEMY_SINGLE')[0] : enemies.find(e => e.isAlive));
+    if (!target) return baseExecute.call(this, caster, allies, enemies, logger, context, options);
+    const hits = Math.min(max, Math.max(base, base - 1 + Formulas.getCombos(caster, target)));
+    const variant = Object.create(this);
+    variant.actions = this.actions.map(action => action.type === 'DAMAGE'
+      ? { ...action, hits, text: { ...(action.text || {}), action: hitText, combo: hitText } }
+      : action);
+    logger.addLog({ type: 'SKILL_TEXT', actorId: caster.id, skillId: this.id, isNormalAttack: false,
+      message: intro.replace('{caster}', caster.name).replace('{n}', CN_NUMBERS[hits] ?? String(hits)) });
+    return baseExecute.call(variant, caster, allies, enemies, logger, context, { ...options, targets: [target] });
+  };
+  return skill;
+}
+
+/**
+ * 光環（忍耐）：外殼開啟光環（不扣 SP、掛「光環」標記、開啟後不能再選），開啟後立刻多行動一次（照平常選招）。
+ * 每回合開始：付得起 spCost 就扣 SP、發動效果；付不起就不扣、這回合不發動。觸發類（佈局、撒手鐧）開啟時一樣多行動一次。
+ *   healTaken：回復上一回合受到傷害的 ratio（任何來源；每回合開始結算後歸零）。
+ */
+function compileAura(active, { id, tags, conditions, grants, ids }) {
+  const { aura, spCost } = active;
+  const markerId = `gem_aura:${id}`;
+  const isOpen = entity => entity.buffs?.some(buff => buff.id === markerId);
+  const shell = makeSkill({ id, name: active.name, tags: [...tags], actions: [{
+    type: 'BUFF', targetType: 'SELF',
+    text: { action: expandPart(aura.openText), buff: '' },
+    buffs: [{ id: markerId, name: active.name, type: 'STAT', polarity: 'positive', duration: 1e6, stackPolicy: 'refresh', dispellable: false }]
+  }] }, conditions);
+  const shellCanCast = shell.canCast.bind(shell);
+  shell.canCast = (entity, ...rest) => !isOpen(entity) && shellCanCast(entity, ...rest);
+  const shellExecute = shell.execute;
+  shell.execute = function execute(caster, allies, enemies, logger, context, options) {
+    const result = shellExecute.call(this, caster, allies, enemies, logger, context, options);
+    if (context?.insertAction && isOpen(caster)) context.insertAction(caster, extraTurnSkill(markerId));
+    return result;
+  };
+  shell.gemSlotBuffIds = [];
+  const taken = `gemAuraTaken:${id}`;
+  const passives = [
+    {
+      id: `gem_aura_taken:${id}`,
+      trigger: 'AFTER_DAMAGE_RECEIVED',
+      enabled: self => isOpen(self),
+      action(self, hit) { self[taken] = (self[taken] ?? 0) + (hit?.actualDamage ?? 0); }
+    },
+    {
+      id: `gem_aura_round:${id}`,
+      trigger: 'ROUND_START',
+      enabled: self => self.isAlive && isOpen(self),
+      action(self, round, logger, engine) {
+        const amount = Math.floor((self[taken] ?? 0) * aura.ratio);
+        self[taken] = 0;
+        if (self.stats.sp < spCost) {   // SP 不夠：不扣、不發動，提示一句
+          if (aura.lowSpText) logger.addLog({ type: 'TEXT', actorId: self.id, skillId: id, message: aura.lowSpText.replace('{caster}', self.name) });
+          return;
+        }
+        self.stats.sp -= spCost;
+        self.syncFatigue?.(logger);
+        if (amount <= 0) return;
+        const healed = self.heal(amount, logger, { engine });
+        if (healed > 0) logger.addLog({ type: 'HEAL', actorId: self.id, targetId: self.id, skillId: id, value: healed,
+          message: aura.text.replace('{caster}', self.name).replace('{value}', String(healed)) });
+      }
+    }
+  ];
+  return { skill: shell, release: null, charge: null, grantSkill: shell, aura: { markerId }, passives, grants, conditions, spCost, damageFactor: 0, links: ids };
+}
+
+/**
+ * 「多行動一次」用的技能：照引擎平常的選法——擲技能施放率，從能用的技能裡挑一個（再交給 skillSelectionResolver，
+ * 權重、蓄力釋放照樣適用），沒擲中或沒有能用的就普攻。已開啟的光環本來就不能再選。
+ */
+function extraTurnSkill(markerId) {
+  const picker = new Skill({ id: `gem_extra_turn:${markerId}`, name: '額外行動', actions: [{ type: 'TEXT', text: { action: '' } }] });
+  picker.execute = function execute(caster, allies, enemies, logger, engine) {
+    const rng = engine.rng ?? Math.random;
+    const usable = caster.skills.filter(skill => skill.canCast(caster, engine));
+    let chosen = usable.length && rng() < engine.getSkillCastChance(caster) ? usable[Math.floor(rng() * usable.length)] : caster.normalAttack;
+    const replaced = engine.skillSelectionResolver?.({ caster, skill: chosen, allies, enemies, engine });
+    if (replaced) chosen = replaced;
+    return chosen.execute(caster, allies, enemies, logger, engine);
+  };
+  return picker;
+}
+
 /**
  * 施放當下才決定的傷害加成（condInc 暴怒、critAsDamage 法術會心）：包住 execute，
  * 每次施放依施放者當下的狀態算出倍率，用一個暫時的變體（Object.create）帶著改好 power 的動作去打，不改技能本身。
  *   condInc      條件成立時把 value 加進這段的加算區：power × (底數 + value) ÷ 底數
  *   critAsDamage 乘上 1 + 爆擊率 × (爆擊傷害 − 1)（爆擊率夾在 0～1；讀含 Buff 的實際屬性）
- *   chordInc     撥弦槍的和弦：施放者的 gemChordBonus（和弦值 × 1%）加進「智力」傷害段（法術）的加算區
+ *   chordInc     撥弦槍的和弦：施放者的 gemChordBonus（和弦值 × 1%）加進所有傷害段（物理與法術，2026-11-22 使用者改）的加算區
  */
 function withDynamicDamage(skill, dynamics) {
   if (!dynamics.length) return skill;
+  if (dynamics.some(effect => effect.op === 'chordInc')) skill.gemChordAware = true;   // chord.js 的 applyChordDamage 不再重複包
   const base = skill.execute;
   skill.execute = function execute(caster, ...rest) {
     const stats = caster.getEffectiveStats?.() ?? caster.stats;
@@ -1210,7 +1352,7 @@ function withDynamicDamage(skill, dynamics) {
     variant.actions = this.actions.map(action => {
       if (action.type !== 'DAMAGE') return action;
       const incBase = action.gemIncBase ?? 1;
-      const add = inc + (action.stat === 'int' ? spellInc : 0);
+      const add = inc + spellInc;   // 和弦：物理與法術都加（2026-11-22 使用者）
       return { ...action, power: round4(action.power * (incBase + add) / incBase * more) };
     });
     return base.call(variant, caster, ...rest);
@@ -1447,10 +1589,13 @@ function buildWeightGuardPassive() {
  *   weights        { 技能 id: 權重 }，給 UI 與除錯看
  *   releaseSkills  蓄力技能的本體（給 UI 或除錯看，不要放進 Entity.skills）
  *   compiled  每組的完整編譯結果（含 spCost、damageFactor、links），給 UI 顯示用
- * @throws {GemLinkError} 任何一組連結不合法，或兩組編譯出同一個技能 id（同一顆主動寶石連結相同輔助寶石兩次）
+ * @throws {GemLinkError} 任何一組連結不合法。同一組（主動＋輔助完全相同）重複出現時，第 n 組的技能 id 加上 #n，不再報錯
  */
 function compileLoadout(gems, options = {}) {
   const compiled = [];
+  // 反覆（sameActiveInc）用：每顆主動寶石在這份配置裡出現幾組
+  const activeCounts = new Map();
+  for (const { active } of gems) activeCounts.set(active, (activeCounts.get(active) ?? 0) + 1);
   const seen = new Set();
   const deathCasts = [];
   const critCasts = [];
@@ -1463,15 +1608,16 @@ function compileLoadout(gems, options = {}) {
     for (const gemId of grantedSupports) {
       if (!Object.hasOwn(options.supportGems ?? SUPPORT_GEMS, gemId)) throw new GemLinkError(gemId, '裝備給的輔助寶石不存在');
     }
-    const result = grantedSupports.length ? compileWithGranted(active, supports, grantedSupports, options) : compileSkill(active, supports, options);
+    const compileAs = copyOptions => grantedSupports.length ? compileWithGranted(active, supports, grantedSupports, copyOptions) : compileSkill(active, supports, copyOptions);
+    const linkOptions = { ...options, sameActiveOthers: activeCounts.get(active) - 1 };
+    let result = compileAs(linkOptions);
+    // 同一組重複裝：第 n 次出現的那組重新編譯成 #n（各自獨立的技能，權重、蓄力、迴響都分開算）
+    for (let copy = 2; seen.has(result.skill.id); copy++) result = compileAs({ ...linkOptions, copy });
     result.weight = weight;
     result.activeId = active;
     if (castOnEnemyDeath) deathCasts.push([result, castOnEnemyDeath.text]);
     if (castOnCrit) critCasts.push([result, castOnCrit]);
     if (phantomChase) chasers.push(result);
-    if (seen.has(result.skill.id)) {
-      throw new GemLinkError(active, `配置重複：${result.skill.id} 出現兩次（同一個技能 id 無法同時存在）`);
-    }
     seen.add(result.skill.id);
     compiled.push(result);
   }

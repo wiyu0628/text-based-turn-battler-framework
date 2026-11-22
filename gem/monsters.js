@@ -249,6 +249,7 @@ function buildSkill(spec, def, stats, casterName) {
       return new Skill({ ...base, ...spellFlags, actions: [...intro, ...actions] });
     }
     const actions = [...intro, { type: 'DAMAGE', targetType: TARGET[spec.target], power: spec.power, stat, text, ...(spec.hits ? { hits: spec.hits } : {}), ...spellFlags }];
+    if (spec.recoil) return withRecoil(new Skill({ ...base, ...spellFlags, actions }), spec, casterName);
     if (spec.debuff) {
       const d = spec.debuff;
       actions.push({ type: 'BUFF', targetType: TARGET[spec.target], requiresDamage: true, text: { action: '', buff: template(d.text ?? `{target} 受到了${d.name}！`, casterName) },
@@ -532,7 +533,7 @@ function withSpCost(skill, cost) {
 function buildEvadeCounterPassive(def, stats, entityName) {
   const spec = def.evadeCounter;
   stats.evadeCounter = spec.points;
-  return makeEvadeCounterPassive({ id: `monster_evade_counter:${def.id}`, stat: def.spell ? 'int' : 'atk', crit: !def.spell, text: spec.text, entityName,
+  return makeEvadeCounterPassive({ id: `monster_evade_counter:${def.id}`, stat: def.spell ? 'int' : 'atk', crit: !def.spell, text: spec.text, entityName, hits: spec.hits ?? 1, power: spec.power ?? 1,
     special: spec.skill ? buildSkill(spec.skill, def, stats, entityName) : null, specialCost: spec.skill?.spCost ?? 0, skillId: def.id });
 }
 
@@ -543,10 +544,18 @@ function buildPlayerEvadeCounterPassive({ stat = 'atk', power = 1, ignoreDefense
   return makeEvadeCounterPassive({ id: 'player_evade_counter', stat, crit: true, power, ignoreDefense, text, entityName: name, skillId: 'hero' });
 }
 
-function makeEvadeCounterPassive({ id, stat, crit, power = 1, ignoreDefense = false, text, entityName, special = null, specialCost = 0, skillId }) {
+// 反擊的句子：字串（第一擊；連擊用預設「第 N 擊」），或陣列 [第一擊, 第二擊, …]（{target} 換成被反擊的人，銀用）
+function counterText(text, entityName) {
+  if (!Array.isArray(text)) return { action: template(text ?? '{caster} 趁隙反擊，', entityName) };
+  const resolve = (line, ctx) => { const t = template(line, entityName); return typeof t === 'function' ? t(ctx) : t; };
+  return { action: ctx => resolve(text[0], ctx), combo: ctx => resolve(text[Math.min(text.length - 1, (ctx.hitIndex ?? 1) - 1)], ctx) };
+}
+
+// hits：反擊打幾下（銀是兩下）。self.counterBoost = { points, power }（選填，王的狀態用）：反擊點數加成、反擊傷害倍率。
+function makeEvadeCounterPassive({ id, stat, crit, power = 1, hits = 1, ignoreDefense = false, text, entityName, special = null, specialCost = 0, skillId }) {
   const flags = crit ? {} : { uncritable: true };
   const basic = new Skill({ id: `${skillId}_evade_counter`, name: '反擊', ...flags,
-    actions: [{ type: 'DAMAGE', stat, power, ...flags, ...(ignoreDefense ? { ignoreDefense: true } : {}), text: { action: template(text ?? '{caster} 趁隙反擊，', entityName) } }] });
+    actions: [{ type: 'DAMAGE', stat, power, ...(hits > 1 ? { hits } : {}), ...flags, ...(ignoreDefense ? { ignoreDefense: true } : {}), text: counterText(text, entityName) }] });
   return {
     id,
     trigger: 'AFTER_EVADE',
@@ -554,7 +563,8 @@ function makeEvadeCounterPassive({ id, stat, crit, power = 1, ignoreDefense = fa
     action(self, evasion, logger, engine) {
       if (!engine || engine.result || engine.counterSource || !self.canAct()) return;
       const attacker = evasion.caster;
-      const chance = evadeCounterChance(self.stats.evadeCounter ?? 0, attacker.stats?.evadeCounter ?? 0);
+      const boost = self.counterBoost ?? {};
+      const chance = evadeCounterChance((self.stats.evadeCounter ?? 0) + (boost.points ?? 0), attacker.stats?.evadeCounter ?? 0);
       if (!((engine.rng ?? Math.random)() < chance)) return;
       // 怪物技能的 spCost 寫在技能規格上（框架的 Skill 只看 action.spCost），這裡自己扣
       const cost = specialCost;
@@ -564,7 +574,12 @@ function makeEvadeCounterPassive({ id, stat, crit, power = 1, ignoreDefense = fa
       const source = { actorId: self.id, targetId: attacker.id, incomingSkillId: evasion.skill?.id };
       const allies = self.team === 'A' ? engine.teamA : engine.teamB;
       const enemies = self.team === 'A' ? engine.teamB : engine.teamA;
-      engine.withCounterSource(source, () => reply.execute(self, allies, enemies, logger, engine, { targets: [attacker], ignoreSp: true }));
+      const mult = boost.power ?? 1;
+      const saved = reply.actions;
+      if (mult !== 1) reply.actions = saved.map(action => action.type === 'DAMAGE' ? { ...action, power: (action.power ?? 1) * mult } : action);
+      try {
+        engine.withCounterSource(source, () => reply.execute(self, allies, enemies, logger, engine, { targets: [attacker], ignoreSp: true }));
+      } finally { reply.actions = saved; }
     }
   };
 }
@@ -638,6 +653,33 @@ function buildFromDef(def, difficulty, { id, name, scale = 1, statsOverride } = 
   return entity;
 }
 
+/**
+ * 反噬（翅音蟲的捨身連擊）：這次施放對敵人造成的傷害合計 × spec.recoil，施放完自己受到同量的直接傷害（不吃防禦、可能致死）。
+ * 從這次施放新增的戰報裡加總（反擊等別人打的不算）。
+ */
+function withRecoil(skill, spec, casterName) {
+  const base = skill.execute;
+  skill.execute = function execute(caster, allies, enemies, logger, context, options) {
+    const start = logger.logs?.length;
+    const seen = [];
+    const tap = start === undefined ? { addLog: entry => { seen.push(entry); logger.addLog(entry); } } : logger;
+    const result = base.call(this, caster, allies, enemies, tap, context, options);
+    const fresh = start === undefined ? seen : logger.logs.slice(start);
+    const dealt = fresh.filter(l => l.type === 'DAMAGE' && l.actorId === caster.id && !l.isCounter && enemies.some(e => e.id === l.targetId))
+      .reduce((sum, l) => sum + (l.value ?? 0), 0);
+    const amount = Math.floor(dealt * spec.recoil);
+    if (amount > 0 && caster.isAlive && !context?.result) {
+      const hit = caster.takeDamage(amount, logger, { source: 'DIRECT', tags: ['recoil'] });
+      const lost = hit.actualDamage ?? amount;
+      logger.addLog({ type: 'DAMAGE', actorId: caster.id, targetId: caster.id, skillId: this.id, value: lost,
+        message: (spec.recoilText ?? '{caster}受到了反噬，損失了 {value} 點生命！').replaceAll('{caster}', casterName).replaceAll('{value}', String(lost)) });
+      caster.finishDamage?.(hit, logger, context);
+    }
+    return result;
+  };
+  return skill;
+}
+
 // 記住上一次用的技能（卡農用）：卡農本身不包，所以不會被記住
 function remember(skill) {
   const baseExecute = skill.execute;
@@ -667,8 +709,11 @@ function pickMonsterAction(entity, engine, { exclude } = {}) {
   return entity.normalAttack;
 }
 
-function monsterSkillResolver({ caster, engine }) {
+function monsterSkillResolver(ctx) {
+  const { caster, engine } = ctx;
   if (!caster?.monsterId) return undefined;
+  const custom = caster.gemResolver?.(ctx);   // 王自己的選招規則（例如銀的舉盾）優先
+  if (custom) return custom;
   const charge = caster.monsterCharge;
   if (charge && caster.buffs.some(b => b.id === charge.markerId)) {
     caster.buffs = caster.buffs.filter(b => b.id !== charge.markerId);
@@ -787,4 +832,4 @@ function rollEncounter(regionId, difficulty, rng = Math.random) {
 }
 
 module.exports = {
-  monsterSkillResolver, BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildPlayerEvadeCounterPassive, buildMonster, buildFromDef, availableMonsters, rollEncounter };
+  monsterSkillResolver, pickMonsterAction, BASE_MONSTER, MONSTER_SP, RARE_CHANCE, ELITE_CHANCE, MONSTERS, REGIONS, EVADE_COUNTER, evadeCounterChance, buildPlayerEvadeCounterPassive, buildMonster, buildFromDef, availableMonsters, rollEncounter };

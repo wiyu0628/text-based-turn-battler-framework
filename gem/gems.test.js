@@ -572,9 +572,14 @@ test('compileLoadout：多組寶石合併成 skills 與 passives，並保留各�
   assert.deepEqual(loadout.compiled[1].links, ['leech']);
 });
 
-test('compileLoadout：同一個技能 id 出現兩次會被拒絕；不合法的連結照常丟 GemLinkError', () => {
-  assert.throws(() => compileLoadout([{ active: 'magicmissile', supports: ['amp', 'heavy'] }, { active: 'magicmissile', supports: ['heavy', 'amp'] }]),
-    error => error instanceof GemLinkError && error.gemId === 'magicmissile');
+test('compileLoadout：同一組重複裝（2026-11-22）會變成各自獨立的技能 #2、#3；不合法的連結照常丟 GemLinkError', () => {
+  const loadout = compileLoadout([{ active: 'magicmissile', supports: ['amp', 'heavy'] }, { active: 'magicmissile', supports: ['heavy', 'amp'] },
+    { active: 'magicmissile', supports: ['amp', 'heavy'], weight: 50 }, { active: 'magicmissile', supports: [] }]);
+  const ids = loadout.skills.map(s => s.id);
+  assert.equal(new Set(ids).size, 4);
+  assert.deepEqual(ids.slice(0, 3).map(id => id.replace(/^.*?(#\d+)?$/, '$1')), ['', '#2', '#3']);
+  assert.equal(loadout.weights[ids[2]], 50);
+  assert.ok(loadout.skills.every(s => s.name === loadout.skills[0].name || s.id === ids[3]));
   assert.throws(() => compileLoadout([{ active: 'magicmissile', supports: ['heavy', 'lean'] }]), GemLinkError);
 });
 

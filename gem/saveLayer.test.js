@@ -232,7 +232,7 @@ test('連結規則：驗證與鑲嵌都透過 SLOT_RULES 詢問，改規則就�
     SLOT_RULES.maxLinks = () => 2;
     const two = setLinks(state, id, [{ active: 'magicmissile', supports: ['heavy'] }, { active: 'whirlwind', supports: [] }].slice(0, 1));
     assert.equal(two.equipment[0].links.length, 1);
-    assert.throws(() => setLinks(state, id, [{ active: 'magicmissile' }, { active: 'magicmissile' }]), /重複/);
+    assert.equal(setLinks(state, id, [{ active: 'magicmissile' }, { active: 'magicmissile' }]).equipment[0].links.length, 2);   // 2026-11-22 起可以重複裝
   } finally {
     Object.assign(SLOT_RULES, original);
   }
@@ -269,23 +269,24 @@ test('穿戴：換另一件同部位的會取代', () => {
   assert.equal(state.equipped.weapon, b.id);
 });
 
-test('穿戴：兩件裝備上有相同的技能，穿第二件時被擋；沒穿時各自存在沒問題', () => {
+test('穿戴：兩件裝備上有相同的技能也能一起穿（2026-11-22 起），各自是獨立的技能', () => {
   let state = addGems(fresh(), 'magicmissile', 2);
   const a = addEquipment(state, sword());
   const b = addEquipment(a.save, helmet());
   state = setLinks(setLinks(b.save, a.id, [{ active: 'magicmissile' }]), b.id, [{ active: 'magicmissile' }]);
   assert.deepEqual(validateSave(state), []);
-  state = equip(state, a.id);
-  assert.throws(() => equip(state, b.id), error => error instanceof SaveError && /重複/.test(error.message));
+  state = equip(equip(state, a.id), b.id);
+  assert.deepEqual(validateSave(state), []);
+  assert.equal(new Set(save.compileEquipped(state).skills.map(s => s.id)).size, 2);
 });
 
-test('穿戴中的裝備改連結造成合併後衝突，也會被擋', () => {
+test('穿戴中的裝備改成相同連結也可以（不再衝突）', () => {
   let state = addGems(fresh(), 'magicmissile', 2);
   const a = addEquipment(state, sword());
   const b = addEquipment(a.save, helmet());
   state = equip(equip(b.save, a.id), b.id);
   state = setLinks(state, a.id, [{ active: 'magicmissile' }]);
-  assert.throws(() => setLinks(state, b.id, [{ active: 'magicmissile' }]), /重複/);
+  assert.equal(save.compileEquipped(setLinks(state, b.id, [{ active: 'magicmissile' }])).skills.length, 2);
 });
 
 test('驗證：equipped 放錯部位、指向不存在的裝備會被指出', () => {

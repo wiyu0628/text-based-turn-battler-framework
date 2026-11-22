@@ -87,7 +87,7 @@ test('summons get resonance too: the phantom axe phantom in the hall, but not in
   const phantomOf = target => {
     const battle = game.prepareBattle(state, target, 5);
     battle.engine.start();
-    return [...battle.engine.teamA].find(e => e.gemPhantom);
+    return [...battle.engine.teamA].find(e => e.summonerId === 'hero');
   };
   assert.equal(phantomOf(hall(3)).hasResonance, true);
   assert.ok(!phantomOf({ kind: 'region', id: 'ruins', difficulty: 3 }).hasResonance);
@@ -346,6 +346,56 @@ test('cranelance: int + SP base, int % and speed; chord builds on hits, drains o
   };
   const plain = cast(0), boosted = cast(1);
   assert.ok(boosted > plain * 1.4, `${plain} → ${boosted}`);
+});
+
+test('chord boosts physical damage too: the normal attack and physical gem skills (2026-11-22)', () => {
+  const { BattleEngine } = require('../src');
+  let state = newGame();
+  const added = save.addLegendary(state, 'cranelance', 15, () => 0.9999999);
+  state = save.setLinks(save.equip(added.save, added.id), added.id, [{ active: 'rend', supports: [] }]);
+  const { hero } = game.buildHero(state);
+  hero.passives = hero.passives.filter(p => !String(p.id ?? '').startsWith('gem_chord'));   // 只看加成：不讓和弦自己累積、集滿加速
+  const avg = (skill, bonus) => {
+    let total = 0;
+    for (let i = 0; i < 30; i++) {
+      const target = buildMonster('organ', 15);
+      hero.gemChordBonus = bonus;
+      const before = target.stats.hp;
+      skill.execute(hero, [hero], [target], quiet(), new BattleEngine([hero], [target], { rng: () => 0.5 }), { targets: [target], ignoreSp: true });
+      total += before - target.stats.hp;
+    }
+    return total / 30;
+  };
+  assert.ok(avg(hero.normalAttack, 1) > avg(hero.normalAttack, 0) * 1.6, '普攻');
+  assert.ok(avg(hero.skills[0], 1) > avg(hero.skills[0], 0) * 1.4, '撕裂（物理寶石技能）');
+});
+
+test('a summon of ours being hit drains the owner chord by 1 (not while locked, not from DOT)', () => {
+  const { linkChordSummon } = require('./chord');
+  let state = newGame();
+  const added = save.addLegendary(state, 'cranelance', 15, () => 0.9999999);
+  state = save.equip(added.save, added.id);
+  const { hero } = game.buildHero(state);
+  const pet = buildMonster('fairy', 3);
+  pet.team = 'A';
+  pet.summonerId = hero.id;
+  const engine = { teamA: [hero, pet], teamB: [] };
+  linkChordSummon(pet, engine);
+  hero.gemChord = 10;
+  const link = pet.passives.find(p => p.id === 'gem_chord_summon_loss');
+  assert.ok(!link.enabled(pet, { source: 'DOT' }));
+  link.action(pet, { source: 'ATTACK' }, quiet());
+  assert.equal(hero.gemChord, 9);
+  hero.gemChordLeft = 2;                                   // 勝利的旋律期間鎖住
+  link.action(pet, { source: 'ATTACK' }, quiet());
+  assert.equal(hero.gemChord, 9);
+  // 實戰：幻影戰斧的幻影也會接上
+  let axe = withHall(newGame());
+  const a2 = save.addLegendary(axe, 'phantomaxe', 15, () => 0.9999999);
+  axe = save.equip(a2.save, a2.id);
+  const battle = game.prepareBattle(axe, hall(3), 5);
+  battle.engine.start();
+  assert.ok(battle.engine.teamA.find(e => e.summonerId === 'hero').passives.some(p => p.id === 'gem_chord_summon_loss'));
 });
 
 test('chord at 100: line + buff text, heal 25%, cleanse, speed ×2 for 3 rounds, then back to 0', () => {

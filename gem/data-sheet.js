@@ -25,7 +25,7 @@ const game = require('./game');
 const SHOW_DIFFS = [1, 4, 7, 10, 13, 15];
 const SLOT = { weapon: '武器', helmet: '頭盔', armor: '護甲', boots: '鞋子' };
 const TARGET = { single: '敵方單體', all: '敵方全體', self: '自己', enemy: '敵方單體', allySingle: '我方單體', allyAll: '我方全體', random: '敵方隨機（每發）' };
-const EFFECT = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '行動回復 SP' };
+const EFFECT = { physDmg: '物理傷害提高', spellDmg: '法術傷害提高', reduction: '減傷', ailmentDmg: '異常傷害增加', ailmentDuration: '異常持續時間', spRegen: '行動回復 SP', comboFloor: '普攻連擊每擊倍率最低' };
 const statName = key => S.STAT_DEFS[key]?.name ?? key;
 const r2 = x => Math.round(x * 100) / 100;
 const r4 = x => Math.round(x * 10000) / 10000;
@@ -76,6 +76,7 @@ add('怪物', '怪物屬性', `倍率欄以基準怪（HP ${M.BASE_MONSTER.hp}�
 // ── 怪物技能與特性（Boss 一起列） ──
 function skillEffect(s) {
   if (s.kind === 'attack') return [`${Math.round(s.power * 100)}%${s.hits ? ` × ${s.hits} ${s.target === 'random' ? '發' : '段'}` : ''}`, [
+    s.recoil ? `打完自己受到造成傷害 ${Math.round(s.recoil * 100)}% 的反噬（直接扣血）` : '',
     s.spell !== undefined ? (s.spell ? '法術（智力，不可暴擊、不可反擊）' : '物理（攻擊）') : '',
     s.target === 'random' ? '每一發各自隨機挑目標' : '',
     s.dot ? `命中附加「${s.dot.name}」：每槽 攻擊/智力 × ${Math.round(s.dot.power * 100)}%，${s.dot.duration} 槽` : '',
@@ -93,7 +94,7 @@ function skillEffect(s) {
   return ['', JSON.stringify(s)];
 }
 const KIND = { attack: '攻擊', buff: '增減益', shield: '護盾', heal: '治療', cleanse: '淨化', canon: '卡農', debuff: '干擾', silence: '干擾', drain: '干擾', resonate: '干擾', solo: '輔助' };
-const bossDefs = B.BOSSES.flatMap(b => b.monsters.map(m => ({ ...m, boss: b })));
+const bossDefs = B.BOSSES.flatMap(b => b.monsters.map(m => ({ ...m, boss: b }))).filter((d, i, all) => !M.MONSTERS[d.id] && all.findIndex(o => o.id === d.id) === i);   // 王戰借用的地區怪（和聲妖精）與重複的不再列
 add('怪物技能', '怪物技能', '「解鎖難度」起才會使用；倍率是攻擊或智力（法術怪）的百分比。',
   ['怪物', '技能 id', '技能', '種類', '解鎖難度', 'SP', '目標', '倍率', '效果'],
   [...Object.values(M.MONSTERS), ...bossDefs].flatMap(def => def.skills.map(s => {
@@ -115,12 +116,18 @@ add('怪物特性', '怪物特性', '', ['怪物', '特性', '解鎖難度', '�
   [...Object.values(M.MONSTERS), ...bossDefs].flatMap(def => (def.traits ?? []).map(t => [def.boss ? `Boss：${def.name}` : def.name, t.kind, t.from ?? 1, traitText(t)])));
 
 // ── Boss ──
+const SV = require('./silver');
+const SILVER_NOTE = `場景和弦 ${SV.FIELD.min}～${SV.FIELD.max}（撥弦槍入場 ${SV.FIELD.cranelanceStart}）：玩家每擊 +${SV.FIELD.gain}，銀打中 −${SV.FIELD.silverLoss}、其他怪 −${SV.FIELD.otherLoss}，玩家傷害 ±1%／點，滿 100 玩家的勝利的旋律 3 回合，到 50 印一次文本。`
+  + `被動：銀扣的和弦累計 ${SV.SILVER.melodyAfterLoss} → 銀的勝利的旋律 ${SV.SILVER.melodyRounds} 回合（和弦 −60 但玩家傷害不減、閃避所有攻擊、反擊點數 +${SV.SILVER.melodyBoost.points}、反擊傷害 ×${SV.SILVER.melodyBoost.power}）；`
+  + `50% 鎖血、無敵到下一槽並舉盾，獲得冰盾；50% 以下每扣 ${SV.SILVER.aoeEvery} 放音爆（智力 ${SV.SILVER.quake.power * 100}%）；第 1 回合無敵不動，第 2 回合殘滅大魔術（智力 ${SV.SILVER.grand.power * 100}%，之後每回合 ${SV.SILVER.grand.echo * 100}%）。`
+  + `法術抗性：法術技能的傷害 × ${SV.SILVER.spellWard}（常駐）。舉盾：閃避 ×${SV.SILVER.shield.evaMult} ＋ ${SV.SILVER.shield.evaFlat}、承受傷害 × ${SV.SILVER.shield.damageTaken}、反擊點數 +${SV.SILVER.shield.points}，每槽 ${SV.SILVER.shield.lowerChance * 100}% 放下並多行動一次；冰盾：生命上限 ${SV.SILVER.ice.ratio * 100}%、冷卻 ${SV.SILVER.ice.cooldown} 回合、被打破時攻擊 ${SV.SILVER.ice.burst * 100}%；反擊兩下（點數 ${SV.SILVER_DEF.evadeCounter.points}）；放下盾牌、冰盾給的額外行動不會選到舉盾；第 1 回合不行動時印使用者的文本。`;
 add('Boss', 'Boss', 'Boss 難度固定；勝利掉落比照菁英（+1 個刻印），首次擊敗另有獎勵。', ['id', '名稱', '難度', 'HP', '攻擊', '智力', '防禦', '速度', '施放率', '首次擊敗獎勵', '備註'],
   B.BOSSES.flatMap(b => b.monsters.map(m => {
     const s = M.buildFromDef(m, b.difficulty, { id: 'x' }).stats;
     return [b.id, m.name, b.difficulty, s.maxHp, s.atk, s.int, s.def, s.spd, m.skillCastRate ?? 0.35,
-      [b.rewards.gems.length ? '主動寶石：' + b.rewards.gems.map(g => G.ACTIVE_GEMS[g]?.name ?? g).join('、') : '', b.rewards.unlockRegions.length ? '開放地區：' + b.rewards.unlockRegions.join('、') : '', b.rewards.accessories?.length ? '飾品：' + b.rewards.accessories.map(a => AC.ACCESSORIES[a]?.name ?? a).join('、') : ''].filter(Boolean).join('；'),
-      b.placeholder ? '佔位，待重新設計' : `普攻物理；技能法術；SP ${b.monsters[0].stats.sp ?? 800}`];
+      [b.rewards.gems.length ? '主動寶石：' + b.rewards.gems.map(g => G.ACTIVE_GEMS[g]?.name ?? g).join('、') : '', b.rewards.unlockRegions?.length ? '開放地區：' + b.rewards.unlockRegions.join('、') : '', b.rewards.accessories?.length ? '飾品：' + b.rewards.accessories.map(a => AC.ACCESSORIES[a]?.name ?? a).join('、') : ''].filter(Boolean).join('；'),
+      b.placeholder ? '佔位，待重新設計' : b.setup === 'silver' ? (m.id === 'silver' ? SILVER_NOTE : m.id === 'wingbug' ? '捨身連擊：三連擊、打完反噬造成傷害的 30%' : '王戰版：技能同音樂廳，屬性調低')
+        : `普攻物理；技能法術；SP ${b.monsters[0].stats.sp ?? 800}`];
   })));
 
 // ── 刻印 ──
@@ -154,12 +161,17 @@ const AIL = G.AILMENTS;
 function activeRow(id, gem) {
   const dmg = gem.actions.filter(a => a.type === 'DAMAGE');
   const source = G.STARTING_ACTIVE_GEMS.includes(id) ? '開局' : G.BOSS_REWARD_GEMS.includes(id) ? 'Boss 首次擊敗' : G.UNOBTAINABLE_ACTIVE_GEMS.includes(id) ? '暫不可取得' : '';
+  const source2 = G.BOSS_REWARD_GEMS.includes(id) && !B.BOSSES.some(b => b.rewards.gems?.includes(id)) ? 'Boss 首次擊敗（第二區王，還沒做）' : source;
+  if (gem.aura) return [id, gem.name, '光環', `每回合開始 ${gem.spCost}`, '自己', '', '',
+    `使用後開啟（之後不會再選到）並立刻多行動一次；開啟後每回合開始扣 SP，回復上一回合受到傷害的 ${Math.round(gem.aura.ratio * 100)}%（SP 不夠就不扣、不發動）；只能連結${gem.supportWhitelist.map(g => G.SUPPORT_GEMS[g]?.name ?? g).join('、')}`,
+    gem.tags.join('、'), source2];
   return [id, gem.name, gem.tags.includes('spell') ? '法術（智力，不可暴擊、不可反擊）' : '物理（攻擊）', gem.spCost,
     dmg.map(a => a.targetType === 'ENEMY_ALL' ? '敵方全體' : '敵方單體').join('、') || (gem.actions.some(a => a.type === 'HEAL') ? '治療' : ''),
     dmg.map(a => `${Math.round((a.power ?? 1) * 100)}%`).join('、') || gem.actions.filter(a => a.type === 'HEAL').map(a => `${Math.round((a.power ?? 1) * 100)}%`).join('、'),
     dmg.flatMap(a => (a.ailments ?? []).map(x => `${AIL[x.kind]?.name ?? x.kind}：${x.basis === 'hit' ? '命中傷害' : '攻擊力'} × ${Math.round(x.power * 100)}%，${x.duration} 槽`)).join('；'),
-    gem.critEcho ? `施放後依爆擊率再打一次 ${Math.round(gem.critEcho.power * 100)}%（不連鎖）` : '',
-    gem.tags.join('、'), source];
+    [gem.critEcho ? `施放後依爆擊率再打一次 ${Math.round(gem.critEcho.power * 100)}%（不連鎖）` : '',
+      gem.tuplet ? `每擊倍率；基礎 ${gem.tuplet.base} 連擊，擊數 = ${gem.tuplet.base - 1} + 速度連擊數（同普攻的連擊公式），最多 ${gem.tuplet.max} 擊` : ''].filter(Boolean).join('；'),
+    gem.tags.join('、'), source2];
 }
 add('主動寶石', '主動寶石', '倍率是攻擊或智力的百分比；異常傷害吃裝備的「異常傷害增加」，持續時間吃「異常持續時間」。',
   ['id', '名稱', '類型', 'SP', '目標', '倍率', '附加異常', '特殊效果', '標籤', '取得'],
@@ -177,7 +189,7 @@ add('輔助寶石', '輔助寶石', `每個主動寶石最多連 ${G.MAX_SUPPORT
   ['id', '名稱', '背包說明', '效果（詳細規則）', '連結限制', '互斥組'],
   Object.entries(G.SUPPORT_GEMS).map(([id, gem]) => {
     const lines = describeSupport(gem).lines.map(l => l.text);
-    return [id, gem.name, describePlayer(gem).join(''), lines.filter(t => !t.startsWith('互斥組')).join('；'), reqText(gem.requires), lines.find(t => t.startsWith('互斥組'))?.replace(/^互斥組：/, '').replace(/（.*$/, '') ?? ''];
+    return [id, gem.name, describePlayer(gem).join(''), [...lines.filter(t => !t.startsWith('互斥組')), (gem.area ?? 1) > 1 ? `只在第 ${gem.area} 區掉落` : ''].filter(Boolean).join('；'), reqText(gem.requires), lines.find(t => t.startsWith('互斥組'))?.replace(/^互斥組：/, '').replace(/（.*$/, '') ?? ''];
   }));
 add('異常', '異常狀態', '持續時間以中招者的行動槽計；重複獲得可疊加，持續時間分別計算；不會暴擊、沒有浮動。',
   ['id', '名稱', '可延長', '說明'],
@@ -193,7 +205,7 @@ add('傳說裝備', '傳說裝備', '只能掉落，不能刻刻印、沒有製�
 
 // ── 飾品 ──
 const accessoryLine = a => a.scope === 'effect'
-  ? (a.kind === 'ailmentDuration' ? `異常持續時間 +${a.value} 槽` : `${a.kind} +${a.value}`)
+  ? (a.kind === 'ailmentDuration' ? `異常持續時間 +${a.value} 槽` : a.kind === 'comboFloor' ? `普攻連擊每擊倍率最低 ${pct(a.value)}（原本第 i 擊 × 0.6^i 沒有下限；召喚物不受影響）` : `${a.kind} +${a.value}`)
   : (S.STAT_DEFS[a.stat]?.display === 'percent' ? `${statName(a.stat)} +${pct(a.value)}` : `${statName(a.stat)} +${a.value}`);
 const accessorySource = id => (AC.STARTING_ACCESSORIES.includes(id) ? '開局' : B.BOSSES.filter(b => b.rewards.accessories?.includes(id)).map(b => `${b.name}首次擊敗`).join('、') || '暫不可取得');
 add('飾品', '飾品', `玩家看到的類別名是${AC.ACCESSORY_LABEL}。飾品欄只有 1 個；飾品沒有基礎數值、刻印與寶石，只有固定的特殊詞綴（擁有制，每種最多 1 個）。`,

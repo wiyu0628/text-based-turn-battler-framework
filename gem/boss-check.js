@@ -6,6 +6,9 @@ const { Entity, Skill, BattleEngine, createSeededRandom } = require('../src');
 const { compileLoadout } = require('./gemCompiler');
 const { gear, BASE } = require('./affix-budget');
 const { buildBossEncounter, findBoss } = require('./bosses');
+const { setupSilver } = require('./silver');
+const { applyChordDamage } = require('./chord');
+const { monsterSkillResolver } = require('./monsters');
 
 const MIX = main => ({ weapon: [[main, 10]], helmet: [['vital', 5], ['bulwark', 5]], armor: [[main, 4], ['vital', 3], ['bulwark', 3]], boots: [['gale', 4], ['vital', 3], ['bulwark', 3]] });
 const ENGR = {
@@ -22,11 +25,14 @@ function winRate(bossId, buildSpec, tier, n) {
   let wins = 0, total = 0;
   for (const { stats, fx } of sets) {
     for (let seed = 1; seed <= n; seed++) {
-      const loadout = compileLoadout([{ active: activeOverride ?? (build === 'spell' ? 'magicmissile' : 'whirlwind'), supports: [] }], { equipment: fx });
-      const hero = new Entity({ id: 'h', name: '勇者', team: 'A', normalAttack: new Skill({ id: 'na', name: '普攻', actions: [{ type: 'DAMAGE', stat: build === 'spell' ? 'int' : 'atk' }] }),
+      const silver = findBoss(bossId).setup === 'silver';   // 銀：場景和弦（寶石技能與普攻都吃和弦加成）
+      const loadout = compileLoadout([{ active: activeOverride ?? (build === 'spell' ? 'magicmissile' : 'whirlwind'), supports: [] }], { equipment: fx, mechanics: silver ? [{ type: 'chord' }] : [] });
+      const hero = new Entity({ id: 'hero', name: '勇者', team: 'A', normalAttack: new Skill({ id: 'na', name: '普攻', actions: [{ type: 'DAMAGE', stat: build === 'spell' ? 'int' : 'atk' }] }),
         normalAttackSpCost: 2, skills: loadout.skills, passives: loadout.passives, stats: { ...stats } });
       const { monsters } = buildBossEncounter(bossId);
-      const engine = new BattleEngine([hero], monsters, { rng: createSeededRandom(seed), maxTurns: 60, skillSelectionResolver: loadout.resolver, hitFormula: 'contest' });
+      const engine = new BattleEngine([hero], monsters, { rng: createSeededRandom(seed), maxTurns: 60, hitFormula: 'contest',
+        skillSelectionResolver: ctx => monsterSkillResolver(ctx) ?? loadout.resolver?.(ctx) });
+      if (silver) { applyChordDamage(hero); setupSilver({ engine, hero, monsters, cranelance: false }); }
       total++;
       if (engine.start().winner === 'TEAM_A') wins++;
     }
@@ -40,7 +46,7 @@ if (require.main === module) {
   const boss = findBoss(bossId);
   console.log(`${boss.name}（難度 ${boss.difficulty}）：每格約 ${n * SAMPLES} 場`);
   for (const build of ['phys', 'phys:rend', 'spell']) {
-    console.log(`${build}：` + [0, 1, 2, 3].map(t => `第${t}階 ${(winRate(bossId, build, t, n) * 100).toFixed(0)}%`).join('  '));
+    console.log(`${build}：` + (process.env.TIERS ? process.env.TIERS.split(',').map(Number) : [0, 1, 2, 3]).map(t => `第${t}階 ${(winRate(bossId, build, t, n) * 100).toFixed(0)}%`).join('  '));
   }
 }
 

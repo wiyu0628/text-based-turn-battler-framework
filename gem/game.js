@@ -24,7 +24,9 @@ const { applyStatBonuses } = require('./statLayer');
 const save = require('./saveLayer');
 const { rollEncounter, availableMonsters, REGIONS, buildPlayerEvadeCounterPassive, monsterSkillResolver } = require('./monsters');
 const { applyResonance } = require('./resonance');
-const { buildChordPassives } = require('./chord');
+const { buildChordPassives, applyChordDamage, linkChordSummon } = require('./chord');
+const { setupSilver } = require('./silver');
+const { accessoryAffixes } = require('./accessoryTable');
 const { buildBossEncounter, findBoss } = require('./bosses');
 const { rollDrops } = require('./dropTable');
 
@@ -59,8 +61,30 @@ function heroStats(state) {
 }
 
 /** 建角色 Entity 與編譯好的 loadout。每場戰鬥都要重建（被動帶戰鬥狀態）。 */
-function buildHero(state) {
-  const loadout = save.compileEquipped(state);
+/**
+ * 普攻連擊每擊倍率加下限：框架是第 i 擊 × (1 − damageDecay)^i（預設 decay 0.4）。damageDecay 做成 getter，
+ * 依「下一擊是第幾擊」回傳讓 (1 − d)^i = max(0.6^i, floor) 的 d。第幾擊由戰報句子的開頭得知（框架每一擊在算完傷害後
+ * 組句子，ctx.hitIndex 是這一擊的序號，所以下一擊的 i 就是它），每次施放重設。
+ */
+const COMBO_DECAY = 0.4;
+function withComboFloor(skill, floor) {
+  const action = skill.actions.find(a => a.type === 'DAMAGE');
+  if (!action) return skill;
+  let next = 1;
+  const track = text => ctx => { next = ctx.hitIndex; return typeof text === 'function' ? text(ctx) : text; };
+  action.text = { ...(action.text || {}),
+    action: track(action.text?.action ?? (ctx => `${ctx.caster.name} 攻擊，`)),
+    combo: track(action.text?.combo ?? (ctx => `第 ${ctx.hitIndex} 擊，`)) };
+  Object.defineProperty(action, 'damageDecay', { enumerable: true, configurable: true,
+    get: () => 1 - Math.pow(Math.max(Math.pow(1 - COMBO_DECAY, next), floor), 1 / next) });
+  const base = skill.execute;
+  skill.execute = function execute(...args) { next = 1; return base.apply(this, args); };
+  return skill;
+}
+
+// options.fieldChord：場景有和弦（銀的王戰）→ 寶石技能一律帶和弦的動態加成、普攻也包；撥弦槍自己的和弦被動由場景版取代
+function buildHero(state, { fieldChord = false } = {}) {
+  const loadout = save.compileEquipped(state, fieldChord ? { extraMechanics: [{ type: 'chord' }] } : {});
   const stat = loadout.normalAttackStat;
   const stats = heroStats(state);
   const passives = [...loadout.passives];
@@ -72,13 +96,18 @@ function buildHero(state) {
     const text = ignoreDefense ? '{caster} 趁隙使用防禦性抓技反擊，這擊視防禦為無物，' : undefined;
     passives.push(buildPlayerEvadeCounterPassive({ stat, power: 1 + (stats.counterDmg ?? 0), ignoreDefense, text, name: playerName(state) }));
   }
-  // 撥弦槍【鶴之聲援】的「妖精的和弦」（chord.js；法術傷害加成在 gemCompiler 的 withDynamicDamage）
-  for (const m of mechanics.filter(m => m.type === 'chord')) passives.push(...buildChordPassives(m));
+  // 撥弦槍【鶴之聲援】的「妖精的和弦」（chord.js；寶石技能的加成在 gemCompiler 的 withDynamicDamage，普攻由 applyChordDamage 包）
+  const chord = mechanics.filter(m => m.type === 'chord');
+  for (const m of chord) passives.push(...buildChordPassives(m));
   const hero = new Entity({
     id: 'hero', name: playerName(state), team: 'A', normalAttackSpCost: 2,
     normalAttack: new Skill({ id: 'hero_attack', name: '普攻', actions: [{ type: 'DAMAGE', stat }] }),
     skills: loadout.skills, passives, stats
   });
+  // 「相對機動」的碎片：普攻連擊每擊倍率最低 comboFloor（只套玩家自己的普攻，召喚物不受影響）
+  const comboFloor = accessoryAffixes(state.accessories?.equipped).find(a => a.kind === 'comboFloor')?.value;
+  if (comboFloor) withComboFloor(hero.normalAttack, comboFloor);
+  if (chord.length || fieldChord) applyChordDamage(hero);
   return { hero, loadout };
 }
 
@@ -122,7 +151,8 @@ function finish(battle, result) {
 function prepareBattle(state, target, seed) {
   if (!Number.isInteger(seed)) throw new save.SaveError('種子必須是整數');
   const { difficulty, name } = checkTarget(state, target);
-  const { hero, loadout } = buildHero(state);
+  const bossDef = target.kind === 'boss' ? findBoss(target.id) : null;
+  const { hero, loadout } = buildHero(state, { fieldChord: bossDef?.setup === 'silver' });
   let monsters, summonFactory, info = { rare: false, elite: false };
   if (target.kind === 'region') {
     ({ monsters, summonFactory, info } = rollEncounter(target.id, difficulty, createSeededRandom(seed)));
@@ -134,14 +164,19 @@ function prepareBattle(state, target, seed) {
   //（引擎召喚走 summonFactory；幻影戰斧的幻影是 gem 自己加進隊伍的，走 engine.onGemSummon）
   const resonance = target.kind === 'region' && REGIONS[target.id].resonance;
   if (resonance) applyResonance([hero, ...monsters]);
-  const factory = resonance && summonFactory ? (id, options) => { const e = summonFactory(id, options); if (e) applyResonance([e]); return e; } : summonFactory;
-  const engine = new BattleEngine([hero], monsters, {
+  // 戰鬥中召喚出來的單位：有共鳴就套共鳴；一律接上和弦（召喚物被打中扣主人的和弦，主人沒和弦時沒作用）
+  let engine;
+  const onSummon = entity => { if (resonance) applyResonance([entity]); linkChordSummon(entity, engine); };
+  const factory = summonFactory ? (id, options) => { const e = summonFactory(id, options); if (e) onSummon(e); return e; } : summonFactory;
+  engine = new BattleEngine([hero], monsters, {
     maxTurns: MAX_TURNS, rng: createSeededRandom(seed + 1),
     // 怪物的蓄力與卡農（monsterSkillResolver）先問，玩家的蓄力等（loadout.resolver）再問
     skillSelectionResolver: ctx => monsterSkillResolver(ctx) ?? loadout.resolver?.(ctx),
     hitFormula: 'contest', summonFactory: factory
   });
-  if (resonance) engine.onGemSummon = entity => applyResonance([entity]);
+  engine.onGemSummon = onSummon;
+  // 王的特殊機制（silver.js：場景和弦與銀的被動）
+  if (bossDef?.setup === 'silver') setupSilver({ engine, hero, monsters, cranelance: save.equippedMechanics(state).some(m => m.type === 'chord') });
   // 開場的敵人血量（介面只顯示血量，其他數值不顯示）
   const opening = monsters.map(hpOf);
   return { engine, hero, monsters, info, difficulty, name, opening };

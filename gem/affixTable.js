@@ -90,7 +90,8 @@ for (const type of Object.keys(ENGRAVING_TYPES)) {
 
 const ENGRAVINGS_PER_ITEM = 2;
 const LINES_PER_ENGRAVING = 3;      // 每種刻印固定的詞綴行數；刻印時落選 1 行、取 2 行
-const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg', 'ailmentDuration', 'spRegen', 'summonHp'];   // summonHp：召喚物生命增加（2026-11-19，幻影戰斧）
+// comboFloor：普攻連擊每擊倍率的下限（「相對機動」的碎片，2026-11-22；不進 sumEffectAffixes，game.js 直接讀飾品）
+const EFFECT_KINDS = ['physDmg', 'spellDmg', 'reduction', 'ailmentDmg', 'ailmentDuration', 'spRegen', 'summonHp', 'comboFloor'];   // summonHp：召喚物生命增加（2026-11-19，幻影戰斧）
 const AILMENT_DURATION_CAP = 1;   // 異常持續時間加成合計上限（槽）；2026-11-20 改成 1（只有飾品給，使用者）
 
 // 裝備基底（固定值，第 5 階滿骰）。階級用同一個 TIER_SCALE；擲值同 ROLL_MIN。
