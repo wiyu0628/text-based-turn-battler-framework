@@ -333,10 +333,56 @@ const ACTIVE_GEMS = {
     tags: ['aura'],
     spCost: 8,
     uncounterable: true,
-    supportWhitelist: ['layout', 'trump'],
+    supportWhitelist: ['layout', 'trump', 'chainaura', 'recycle'],
     aura: { kind: 'healTaken', ratio: 0.2, openText: '{caster} 開啟了忍耐！', text: '{caster} 忍耐著傷痛，回復了 {value} 點生命！',
       lowSpText: '{caster} 的 SP 不足，忍耐沒有發動。' },   // 2026-11-22 使用者：SP 不夠的回合要提示
     actions: []
+  },
+
+  // 荊棘（使用者設計 2026-11-23，光環；第三區王的獎勵，王還沒做，暫時取不到）。規則在 gemCompiler.compileThorns。
+  // 反彈 =（扣血量＋護盾吸收量）×（防禦＋300）× ratio，再吃攻擊者防禦；ratio 1/600 ≈ 對方原始傷害的 50%；SP 5（2026-11-23 使用者；倍率試過 1/1400，使用者先維持 1/600 實測）。
+  // 開啟照忍耐（不扣 SP、多行動一次）；開啟的回合免費，之後每回合扣 SP。戰報文字是使用者的。
+  thorns: {
+    id: 'thorns',
+    name: '荊棘',
+    tags: ['aura'],
+    spCost: 5,
+    uncounterable: true,
+    supportWhitelist: ['layout', 'trump', 'chainaura', 'recycle'],
+    aura: { kind: 'thorns', ratio: 1 / 600, openText: '{caster}開啟了荊棘！', text: '{caster}身上的荊棘反彈了{value}點傷害給{target}！',
+      lowSpText: '{caster} 的 SP 不足，荊棘沒有發動。' },
+    actions: []
+  },
+
+  // 喚劍（使用者設計 2026-11-23，第三區王的獎勵；王還沒做，暫時取不到）。SP、每擊倍率、戰報文字我擬。
+  // 召喚 initial 把飛劍，自己每個行動槽結束 +1 把（上限 max），持續 rounds 回合；普攻那一槽結束後 chase 把追擊一次，結束時每把再攻擊一次。
+  // 持續期間這個技能不再被選；觸發類（佈局、撒手鐧…）在飛劍不在時召喚、在場時 volley 把攻擊一次。反擊率 × 1 / 一起出手的把數。
+  // 每擊 35% → 30%（2026-11-23 使用者）。
+  // 下面的 DAMAGE 是「一把飛劍一擊」，連結的輔助寶石作用在每一擊上。規則在 gemCompiler.compileSwords。
+  summonsword: {
+    id: 'summonsword',
+    name: '喚劍',
+    tags: ['attack'],
+    spCost: 15,
+    swords: {
+      initial: 1, max: 3, rounds: 2,
+      chase: 1, volley: 1,   // 2026-11-23 使用者：普攻追擊（與觸發的齊射）只有 1 把，3 把只在結束時用到
+      texts: {
+        summon: '{caster} 召喚了一把飛劍！',
+        grow: '{caster}身邊的飛劍增加到{n}把。',
+        chase: '飛劍隨之追擊，',
+        volley: '飛劍一齊斬向敵人，',
+        finalIntro: '身旁的飛劍一齊飛向敵人——',   // 2026-11-23 使用者：最後一擊照連音的寫法
+        finalHit: '第{i}擊，'   // 2026-11-23 使用者：拿掉「{caster}身邊的飛劍消散了。」（要加回就寫 end）
+      }
+    },
+    actions: [
+      {
+        type: 'DAMAGE',
+        targetType: 'ENEMY_SINGLE',
+        power: 0.3
+      }
+    ]
   },
 
   mend: {
@@ -585,6 +631,33 @@ const SUPPORT_GEMS = {
     effects: [{ op: 'reaction', trigger: 'AFTER_DAMAGE_DEALT', scope: 'thisSkill', do: { kind: 'critMaxHp', ratio: 0.1, chance: 0.5 } }]   // 機率 2026-11-22 使用者加
   },
 
+  // 能量回收（使用者設計 2026-11-25，第三區掉落）：連結的光環每回合的維持費累計滿 per 點，就回復 gain 點 SP
+  // （零頭跨回合保留；開啟前不算；SP 不超過上限）。每個光環各自累計；被連續光環連結的光環也吃（共用主光環的輔助寶石）。使用者初版 50／10，效益不明顯，2026-11-25 提高到 50／25（模擬見 CONTENT-HANDOFF）。
+  recycle: {
+    id: 'recycle',
+    name: '能量回收',
+    linkText: '與光環技能連結。',
+    desc: '每消耗{per}點SP，獲得{gain}點SP。',
+    area: 3,
+    requires: { tags: { all: ['aura'] } },
+    addTags: [],
+    effects: [{ op: 'auraRecycle', per: 50, gain: 25, text: '{caster}從{skill}散逸的魔力裡回收了{value}點SP。' }]
+  },
+
+  // 連續光環（使用者設計 2026-11-24，第三區掉落）：輔助光環技能。連了它的光環主動寶石，輔助槽可以放其他光環主動寶石
+  // （本身佔 1 格，最多再放 2 顆）；被放進輔助槽的光環不會自己開啟，主光環開啟時一起開啟。規則在 gemCompiler.compileLoadout。
+  // 連到不是光環的主動寶石時「沒有效果」而不是報錯（使用者：之後條件細分時不要報錯）；這只寫在這顆的 op 上，其他寶石照舊報錯。
+  chainaura: {
+    id: 'chainaura',
+    name: '連續光環',
+    linkText: '與光環技能連結。',
+    desc: '輔助寶石位可以裝上光環主動寶石，被連結的主動寶石不會自動開啟。光環開啟時會開啟被連結的光環主動寶石。',
+    area: 3,
+    requires: {},
+    addTags: [],
+    effects: [{ op: 'chainAura' }]
+  },
+
   // 追擊（使用者設計，2026-11-19）：普攻一次打出 3 連擊以上時，免費施放一次這個技能（每槽最多一次）。
   // 連擊數取決於自己與目標的速度差（差 > 80 才可能 3 連擊），所以是速度流派的寶石；速度同日加倍就是為了它。
   followup: {
@@ -649,7 +722,8 @@ const SUPPORT_GEMS = {
 // 治癒術暫時不給（使用者：還沒有配套的輔助寶石），列在 UNOBTAINABLE_ACTIVE_GEMS，之後再決定來源。
 const STARTING_ACTIVE_GEMS = ['magicmissile', 'whirlwind', 'rend'];
 // 連音、忍耐 2026-11-22 加入：第二區王的獎勵（王還沒做，暫時取不到）
-const BOSS_REWARD_GEMS = ['pursuit', 'firestorm', 'tuplet', 'endure'];   // 火焰風暴 2026-11-19 加入（使用者）
+// 喚劍 2026-11-23 加入：第三區王的獎勵（王還沒做，暫時取不到）
+const BOSS_REWARD_GEMS = ['pursuit', 'firestorm', 'tuplet', 'endure', 'summonsword', 'thorns'];   // 荊棘 2026-11-23：第三區王的獎勵（王還沒做）   // 火焰風暴 2026-11-19 加入（使用者）
 const UNOBTAINABLE_ACTIVE_GEMS = ['mend'];
 
 module.exports = { STARTING_ACTIVE_GEMS, BOSS_REWARD_GEMS, UNOBTAINABLE_ACTIVE_GEMS, ACTIVE_GEMS, SUPPORT_GEMS, AILMENTS, GROUPS, MAX_SUPPORTS, DEFAULT_WEIGHT, MIN_WEIGHT, MAX_WEIGHT };

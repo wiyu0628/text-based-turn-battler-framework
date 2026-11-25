@@ -564,7 +564,9 @@ function makeEvadeCounterPassive({ id, stat, crit, power = 1, hits = 1, ignoreDe
       if (!engine || engine.result || engine.counterSource || !self.canAct()) return;
       const attacker = evasion.caster;
       const boost = self.counterBoost ?? {};
-      const chance = evadeCounterChance((self.stats.evadeCounter ?? 0) + (boost.points ?? 0), attacker.stats?.evadeCounter ?? 0);
+      // 技能的反擊率倍率（框架的 counterChanceMultiplier，預設 1；2026-11-23 喚劍：飛劍數越多每擊越難被反擊）
+      const chance = evadeCounterChance((self.stats.evadeCounter ?? 0) + (boost.points ?? 0), attacker.stats?.evadeCounter ?? 0)
+        * (evasion.skill?.counterChanceMultiplier ?? 1);
       if (!((engine.rng ?? Math.random)() < chance)) return;
       // 怪物技能的 spCost 寫在技能規格上（框架的 Skill 只看 action.spCost），這裡自己扣
       const cost = specialCost;

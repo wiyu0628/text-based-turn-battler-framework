@@ -637,6 +637,7 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     if (log.type === 'BATTLE_END') return 'end';
     if (log.type === 'MISS') return 'miss';
     if (log.isCounter || log.type === 'COUNTER') return 'counter';
+    if (log.logStyle) return log.logStyle;   // 資料指定的顏色（荊棘反傷 = 持續傷害色，2026-11-24 使用者）
     if (log.type === 'BUFF_EFFECT') return log.buffType === 'DOT' ? 'dot' : log.buffType === 'HOT' ? 'heal' : 'normal';
     if (log.type === 'HEAL' || log.type === 'SP_RECOVER' || log.type === 'REST') return 'heal';
     if (log.skillId && log.isNormalAttack === false) return 'skill';
@@ -1065,15 +1066,38 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
     // 主動寶石擁有制：有就能選；輔助寶石算背包＋這件已鑲的
     const has = gemId => G.ACTIVE_GEMS[gemId] ? (state.gems[gemId] ?? 0) : (state.gems[gemId] ?? 0) + (link.supports || []).filter(g => g === gemId).length;
     const activeOptions = Object.keys(G.ACTIVE_GEMS).filter(g => has(g) > 0);
-    const supportOptions = Object.keys(G.SUPPORT_GEMS).filter(g => has(g) > 0);
+    // 連續光環（2026-11-24）：主動寶石是光環、輔助槽有連續光環時，輔助槽也列出其他光環主動寶石
+    const isAura = g => !!G.ACTIVE_GEMS[g]?.tags?.includes('aura');
+    const chainHost = isAura(draft.active) && draft.supports.includes('chainaura');
+    const supportOptions = [...Object.keys(G.SUPPORT_GEMS).filter(g => has(g) > 0),
+      ...(chainHost ? Object.keys(G.ACTIVE_GEMS).filter(g => isAura(g) && g !== draft.active && has(g) > 0) : [])];
+    const chainInert = draft.active && !isAura(draft.active) && draft.supports.includes('chainaura');
+    // 穿戴中同一顆光環只能開一個（2026-11-24）：照裝備順序第一個保留；被連結的光環輸給任何直接裝的（同 compileLoadout）
+    const order = Object.keys(SLOT_NAMES);
+    const otherLinks = order.filter(s => s !== slot).map(s => ({ s, link: (state.equipment.find(x => x.id === state.equipped[s])?.links || [])[0] })).filter(o => o.link);
+    const before = o => order.indexOf(o.s) < order.indexOf(slot);
+    const hostDupe = isAura(draft.active) && otherLinks.find(o => before(o) && o.link.active === draft.active);
+    const chainDupes = chainHost ? draft.supports.filter(g => g && G.ACTIVE_GEMS[g] && otherLinks.some(o => o.link.active === g || (before(o) && (o.link.supports || []).includes(g)))) : [];
     const granted = legendary.mechanicsOf(item).filter(m => m.type === 'grantSupport').map(m => gemName(m.gem));
     return h('div', { class: 'panel link-editor' },
       h('h3', {}, SLOT_NAMES[slot], h('span', { class: 'muted', style: 'font-weight:normal', text: `　${itemName(item)}　權重 ${item.castWeight}` })),
       h('div', { class: 'stack' },
-        h('label', {}, '主動寶石', h('select', { onchange: ev => { draft.active = ev.target.value || null; if (!draft.active) draft.supports = []; } },
+        h('label', {}, '主動寶石', h('select', { onchange: ev => { draft.active = ev.target.value || null; if (!draft.active) draft.supports = []; render(); } },
           h('option', { value: '', text: '（不放）' }), activeOptions.map(g => h('option', { value: g, selected: g === draft.active, text: gemName(g) })))),
-        Array.from({ length: G.MAX_SUPPORTS }, (_, i) => h('label', {}, `輔助 ${i + 1}`, h('select', { onchange: ev => { draft.supports[i] = ev.target.value || null; } },
-          h('option', { value: '', text: '（不放）' }), supportOptions.map(g => h('option', { value: g, selected: g === draft.supports[i], text: `${gemName(g)}（有 ${has(g)}）` }))))),
+        Array.from({ length: G.MAX_SUPPORTS }, (_, i) => h('label', {}, `輔助 ${i + 1}`, h('select', { onchange: ev => { draft.supports[i] = ev.target.value || null; render(); } },
+          h('option', { value: '', text: '（不放）' }),
+          // 草稿裡已放、但目前不該列出的光環主動寶石（例如拿掉了連續光環）也照樣顯示，套用時才報錯
+          [...supportOptions, ...(draft.supports[i] && !supportOptions.includes(draft.supports[i]) ? [draft.supports[i]] : [])]
+            .map(g => h('option', { value: g, selected: g === draft.supports[i], text: G.ACTIVE_GEMS[g] ? `${gemName(g)}（光環）` : `${gemName(g)}（有 ${has(g)}）` }))))),
+        chainInert ? h('div', { class: 'muted', style: 'font-size:12px', text: '連續光環只對光環主動寶石有效，目前沒有效果。' }) : null,
+        // 被連結的光環共用主光環的輔助寶石（觸發型與不合法的除外，2026-11-25）
+        ...(chainHost ? draft.supports.filter(g => g && G.ACTIVE_GEMS[g]).map(g => {
+          let inherited = [];
+          try { inherited = compiler.inheritedSupports(g, draft.supports.filter(s => s && !G.ACTIVE_GEMS[s])); } catch (e) { inherited = []; }
+          return h('div', { class: 'muted', style: 'font-size:12px', text: `被連結的${gemName(g)}也吃：${inherited.length ? inherited.map(gemName).join('、') : '（沒有）'}` });
+        }) : []),
+        hostDupe ? h('div', { class: 'muted', style: 'font-size:12px', text: `${gemName(draft.active)}已在${SLOT_NAMES[hostDupe.s]}開啟，同一顆光環只能開一個，這組沒有效果。` }) : null,
+        chainDupes.length ? h('div', { class: 'muted', style: 'font-size:12px', text: `${chainDupes.map(gemName).join('、')}已在其他部位開啟，同一顆光環只能開一個，連結的這顆沒有效果。` }) : null,
         granted.length ? h('div', { class: 'muted', style: 'font-size:12px', text: `裝備額外給：${granted.join('、')}（不佔位）` }) : null,
         h('div', { class: 'row' },
           h('button', { class: 'primary small', text: '套用', onclick: () => {
@@ -1090,8 +1114,12 @@ if (typeof structuredClone !== 'function') window.structuredClone = value => JSO
   function describeActive(gem) {
     const dmg = gem.actions.filter(a => a.type === 'DAMAGE');
     // 光環（2026-11-22，忍耐）：開啟後每回合開始扣 SP 發動。不列「只能連結…」（使用者：之後會加新輔助寶石；規則仍由 supportWhitelist 擋）
-    if (gem.aura) return [`光環｜每回合開始 SP ${gem.spCost}`, gem.aura.kind === 'healTaken' ? `回復上一回合受到傷害的 ${Math.round(gem.aura.ratio * 100)}%` : '',
+    if (gem.aura) return [`光環｜每回合開始 SP ${gem.spCost}`, gem.aura.kind === 'healTaken' ? `回復上一回合受到傷害的 ${Math.round(gem.aura.ratio * 100)}%`
+      : gem.aura.kind === 'thorns' ? '受到攻擊會反彈傷害，傷害受自身防禦影響' : '',   // 荊棘（2026-11-23）：使用者的文本
       '使用後開啟並多行動一次；SP 不夠的回合不發動'].filter(Boolean).join('｜');
+    // 喚劍（2026-11-23）：使用者的文本，數字讀資料
+    if (gem.swords) { const s = gem.swords; return [`SP ${gem.spCost}`, '物理',
+      `召喚${s.initial}把飛劍，每次行動增加1把，上限${s.max}把，持續${s.rounds}回合。普通攻擊時飛劍會追擊，結束時飛劍會額外進行一次攻擊（每把每擊 ${Math.round(gem.actions[0].power * 100)}%）`].join('｜'); }
     const parts = [`SP ${gem.spCost}`, gem.tags.includes('spell') ? '法術' : '物理'];
     for (const a of dmg) parts.push(`${a.targetType === 'ENEMY_ALL' ? '全體' : '單體'} ${Math.round((a.power ?? 1) * 100)}%`);
     for (const a of dmg) for (const ail of a.ailments || []) parts.push(`附加${G.AILMENTS[ail.kind]?.name ?? ail.kind}（${ail.basis === 'hit' ? '命中傷害' : '攻擊力'}的 ${Math.round(ail.power * 100)}%，${ail.duration} 槽）`);

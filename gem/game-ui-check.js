@@ -236,6 +236,29 @@ const setSelect = (sel, value) => { sel.value = value; sel.dispatchEvent(new w.E
     nav('寶石'); await sleep(40); nav('冒險'); await sleep(30);
     console.log('沒修改直接離開：彈窗', $('#ask-modal').classList.contains('open'), '到', $$('#nav button').find(b => b.classList.contains('active')).textContent);
   }
+  // 連續光環（2026-11-24）：主動寶石是光環且輔助槽有連續光環時，輔助槽才列出其他光環主動寶石
+  {
+    const S = w.Game.save;
+    let st = ui.state;
+    for (const g of ['thorns', 'endure', 'chainaura']) if (!(st.gems[g] > 0)) st = S.addGems(st, g, 1);
+    w.GameUI.forceState(st); await sleep(30);
+    click($$('#nav button').find(b => b.textContent === '寶石')); await sleep(40);
+    const sels = () => $$('.link-editor')[0].querySelectorAll('select');
+    const opts = i => [...sels()[i].options].map(o => o.value);
+    setSelect(sels()[0], 'thorns'); await sleep(20);
+    for (let i = 1; i < sels().length; i++) setSelect(sels()[i], '');
+    await sleep(20);
+    console.log('連續光環：沒連時輔助槽有忍耐', opts(1).includes('endure'));
+    setSelect(sels()[1], 'chainaura'); await sleep(20);
+    console.log('連續光環：連了之後輔助槽有忍耐', opts(2).includes('endure'), '沒有荊棘自己', !opts(2).includes('thorns'));
+    setSelect(sels()[2], 'endure'); await sleep(20);
+    click([...$$('.link-editor')[0].querySelectorAll('button')].find(b => b.textContent === '套用')); await sleep(60);
+    console.log('連續光環：套用', JSON.stringify(ui.state.equipment.find(e => e.id === ui.state.equipped.weapon).links), '忍耐仍擁有', ui.state.gems.endure);
+    console.log('連續光環：被連結的光環也吃的提示', ($$('.link-editor')[0].textContent.match(/被連結的忍耐也吃：[^被套還]*/) || ['沒有'])[0]);
+    setSelect(sels()[0], 'magicmissile'); await sleep(20);
+    console.log('連續光環：連到魔法飛彈的提示', $$('.link-editor')[0].textContent.includes('目前沒有效果'));
+    click([...$$('.link-editor')[0].querySelectorAll('button')].find(b => b.textContent === '還原')); await sleep(30);
+  }
   const saved = w.localStorage.getItem('tbtf-game-save');
   console.log('存檔有寫入：', !!saved, '錯誤：', errors.length ? errors : '無');
   process.exit(0);

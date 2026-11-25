@@ -26,7 +26,7 @@ class GemLinkError extends Error {
   }
 }
 
-const KNOWN_OPS = new Set(['inc', 'more', 'cost', 'scope', 'actionFlag', 'appendAction', 'prependAction', 'reaction', 'grant', 'wrap', 'castCondition', 'proc', 'repeat', 'condInc', 'critAsDamage', 'sameActiveInc']);
+const KNOWN_OPS = new Set(['inc', 'more', 'cost', 'scope', 'actionFlag', 'appendAction', 'prependAction', 'reaction', 'grant', 'wrap', 'castCondition', 'proc', 'repeat', 'condInc', 'critAsDamage', 'sameActiveInc', 'chainAura', 'auraRecycle']);
 const CONDITION_STATS = { selfHp: { name: '自身生命', ratio: true }, enemyCount: { name: '敵人數量', ratio: false } };
 const GRANT_KINDS = new Set(['opening', 'lastResort', 'onCrit', 'comboCast']);
 const WRAP_KINDS = new Set(['charge', 'echo']);
@@ -296,6 +296,10 @@ function describeEffect(effect) {
         : effect.do.kind === 'drainSp' ? `每一擊命中時，減少目標 ${pct(effect.do.ratio)} SP 上限的 SP`
         : effect.do.kind === 'critMaxHp' ? `暴擊時${(effect.do.chance ?? 1) < 1 ? `有 ${pct(effect.do.chance)} 機率` : ''}追加目標生命上限 ${pct(effect.do.ratio)} 的傷害（不會暴擊、受防禦影響）`
         : `${effect.trigger} 時觸發 ${effect.do.kind}` };
+    case 'auraRecycle':
+      return { kind: 'effect', text: `光環每回合的維持費累計每 ${effect.per} 點，回復 ${effect.gain} 點 SP（零頭保留；開啟前不算；不超過 SP 上限；每個光環各自累計）` };
+    case 'chainAura':
+      return { kind: 'effect', text: '只對光環主動寶石有效（連到其他主動寶石沒有效果）：輔助槽可以放其他光環主動寶石，被放進來的光環不會自己開啟，這個光環開啟時一起開啟（不會多給行動；SP 各自每回合扣、各自判斷）' };
     case 'sameActiveInc':
       return { kind: 'inc', text: `穿戴中每多一組相同的主動寶石（這組以外），提高 ${pct(effect.value)} 傷害（加算）` };
     case 'proc':
@@ -351,6 +355,7 @@ function describeSupport(gem, groups = GROUPS) {
 
 /** 依連結條件產生「與○○技能連結。」 */
 function linkTargetText(gem) {
+  if (gem.linkText) return gem.linkText;   // 條件不寫在 requires 的寶石（例如連續光環：連錯沒有效果、不報錯）自己寫第一行
   const action = gem.requires?.action;
   if (!action) return '與任意技能連結。';
   const tags = gem.requires?.tags ?? {};
@@ -375,6 +380,7 @@ function playerPlaceholders(gem) {
     if (e.op === 'reaction' && e.do?.kind === 'drainSp') values.drain = pct(e.do.ratio);
     if (e.op === 'reaction' && e.do?.kind === 'critMaxHp') { values.critMaxHp = pct(e.do.ratio); values.critChance = pct(e.do.chance ?? 1); }
     if (e.op === 'sameActiveInc') values.sameActiveInc = pct(e.value);
+    if (e.op === 'auraRecycle') { values.per = String(e.per); values.gain = String(e.gain); }
     if (e.op === 'condInc') { values.condInc = pct(e.value); values.hpBelow = pct(e.when.hpBelow); }
     if (e.op === 'grant' && e.threshold !== undefined) values.threshold = pct(e.threshold);
     if (e.op === 'grant' && e.chance !== undefined) values.chance = pct(e.chance);
@@ -973,7 +979,7 @@ function compileSkill(activeId, supportIds = [], {
   const draft = {
     tags: [...active.tags],
     actions: structuredClone(active.actions),
-    inc: [], more: [], costMult: 1, prepended: [], appended: [], reactions: [], grants: [], wraps: [], procs: [], repeats: [], dynamics: []
+    inc: [], more: [], costMult: 1, prepended: [], appended: [], reactions: [], grants: [], wraps: [], procs: [], repeats: [], dynamics: [], recycles: []
   };
   const groupOwner = new Map();   // 互斥組 id → 先處理到的寶石 id
   const scopeWriters = new Map(); // 基準動作的索引 → { to, gemId }
@@ -1047,6 +1053,8 @@ function compileSkill(activeId, supportIds = [], {
         case 'repeat': draft.repeats.push(effect); break;
         case 'condInc': case 'critAsDamage': draft.dynamics.push(effect); break;
         // 反覆：穿戴中這組以外每多一組相同的主動寶石（compileLoadout 算好傳進來），加算區 +value
+        case 'auraRecycle': draft.recycles.push(effect); break;   // 能量回收：光環付維持費時結算（compileAura／compileThorns）
+        case 'chainAura': break;   // 連續光環：效果在 compileLoadout（接上被連結的光環），單一技能本身不變
         case 'sameActiveInc': if (sameActiveOthers > 0) draft.inc.push(effect.value * sameActiveOthers); break;
         case 'wrap': if (!draft.wraps.includes(effect.kind)) draft.wraps.push(effect.kind); break;
         case 'castCondition': {
@@ -1142,7 +1150,11 @@ function compileSkill(activeId, supportIds = [], {
   }
   const critEcho = active.critEcho ?? null;
 
-  if (active.aura) return compileAura(active, { id, tags, conditions, grants: draft.grants, ids });
+  if (active.aura) return compileAura(active, { id, tags, conditions, grants: draft.grants, ids, recycles: draft.recycles });
+  if (active.swords) {
+    if (draft.wraps.includes('charge') || draft.wraps.includes('echo')) throw new GemLinkError(activeId, `${active.name}不能連結蓄力或迴響`);
+    return compileSwords(active, { id, tags, conditions, actions, draft, ids, spCost, factor });
+  }
 
   // 迴響：玩家選到的是外殼（付 SP、掛「迴響中」標記、不造成傷害），開啟後外殼不能再選；
   // 本體（release）每回合開始時由被動插隊免費釋放。觸發類（佈局、追擊、撒手鐧、裝備的倒下釋放）用分派版本：
@@ -1260,8 +1272,35 @@ function withTuplet(skill, { base, max, intro, hit }) {
  * 光環（忍耐）：外殼開啟光環（不扣 SP、掛「光環」標記、開啟後不能再選），開啟後立刻多行動一次（照平常選招）。
  * 每回合開始：付得起 spCost 就扣 SP、發動效果；付不起就不扣、這回合不發動。觸發類（佈局、撒手鐧）開啟時一樣多行動一次。
  *   healTaken：回復上一回合受到傷害的 ratio（任何來源；每回合開始結算後歸零）。
+ *   thorns（荊棘，2026-11-23 使用者設計）：被攻擊擊中時，反彈（扣血量＋被護盾吸收的量）×（自己的防禦＋300）× ratio 給攻擊者，
+ *     再吃攻擊者的防禦（× 300 ÷（攻擊者防禦＋300））。自己的防禦和受傷公式的 300 ÷（防禦＋300）剛好抵消，
+ *     所以反彈量≈對方這一擊防禦前的傷害 × 300 × ratio，防禦不是負收益。持續傷害、共鳴爆發、直接傷害、被閃避、
+ *     被無敵擋下的都不算；打在護盾上算（2026-11-24 使用者）；反彈是直接傷害（不暴擊、沒有浮動、可以致死、不觸發反擊／和弦／共鳴等）。
+ *     開啟的那一回合免費生效；之後每回合開始付 spCost，付不起這回合不反彈。
  */
-function compileAura(active, { id, tags, conditions, grants, ids }) {
+/**
+ * 光環每回合付維持費；有能量回收（auraRecycle）時，每顆各自累計付掉的 SP，每滿 per 點回復 gain 點（零頭保留、不超過上限）。
+ */
+function payAuraUpkeep(self, id, skillName, spCost, recycles, logger) {
+  self.stats.sp -= spCost;
+  recycles.forEach((effect, index) => {
+    const key = `gemRecycle:${id}:${index}`;
+    const total = (self[key] ?? 0) + spCost;
+    const times = Math.floor(total / effect.per);
+    self[key] = total - times * effect.per;
+    if (times <= 0) return;
+    const max = self.stats.maxSp ?? Infinity;
+    const value = Math.max(0, Math.min(times * effect.gain, max - self.stats.sp));
+    if (value <= 0) return;
+    self.stats.sp += value;
+    logger.addLog({ type: 'TEXT', actorId: self.id, skillId: id, value,
+      message: effect.text.replace('{caster}', self.name).replace('{skill}', skillName).replace('{value}', String(value)) });
+  });
+  self.syncFatigue?.(logger);
+}
+
+function compileAura(active, { id, tags, conditions, grants, ids, recycles = [] }) {
+  if (active.aura.kind === 'thorns') return compileThorns(active, { id, tags, conditions, grants, ids, recycles });
   const { aura, spCost } = active;
   const markerId = `gem_aura:${id}`;
   const isOpen = entity => entity.buffs?.some(buff => buff.id === markerId);
@@ -1298,8 +1337,7 @@ function compileAura(active, { id, tags, conditions, grants, ids }) {
           if (aura.lowSpText) logger.addLog({ type: 'TEXT', actorId: self.id, skillId: id, message: aura.lowSpText.replace('{caster}', self.name) });
           return;
         }
-        self.stats.sp -= spCost;
-        self.syncFatigue?.(logger);
+        payAuraUpkeep(self, id, active.name, spCost, recycles, logger);
         if (amount <= 0) return;
         const healed = self.heal(amount, logger, { engine });
         if (healed > 0) logger.addLog({ type: 'HEAL', actorId: self.id, targetId: self.id, skillId: id, value: healed,
@@ -1308,6 +1346,235 @@ function compileAura(active, { id, tags, conditions, grants, ids }) {
     }
   ];
   return { skill: shell, release: null, charge: null, grantSkill: shell, aura: { markerId }, passives, grants, conditions, spCost, damageFactor: 0, links: ids };
+}
+
+function compileThorns(active, { id, tags, conditions, grants, ids, recycles = [] }) {
+  const { aura, spCost } = active;
+  const markerId = `gem_aura:${id}`;
+  const armedKey = `gemThornsArmed:${id}`;
+  const isOpen = entity => entity.buffs?.some(buff => buff.id === markerId);
+  const fill = (line, vars) => Object.entries(vars).reduce((text, [k, v]) => text.replaceAll(`{${k}}`, String(v)), line);
+  const shell = makeSkill({ id, name: active.name, tags: [...tags], actions: [{
+    type: 'BUFF', targetType: 'SELF',
+    text: { action: expandPart(aura.openText), buff: '' },
+    buffs: [{ id: markerId, name: active.name, type: 'STAT', polarity: 'positive', duration: 1e6, stackPolicy: 'refresh', dispellable: false }]
+  }] }, conditions);
+  const shellCanCast = shell.canCast.bind(shell);
+  shell.canCast = (entity, ...rest) => !isOpen(entity) && shellCanCast(entity, ...rest);
+  const shellExecute = shell.execute;
+  shell.execute = function execute(caster, allies, enemies, logger, context, options) {
+    const wasOpen = isOpen(caster);
+    const result = shellExecute.call(this, caster, allies, enemies, logger, context, options);
+    if (!wasOpen && isOpen(caster)) caster[armedKey] = true;   // 開啟的那一回合免費生效
+    if (context?.insertAction && isOpen(caster)) context.insertAction(caster, extraTurnSkill(markerId));
+    return result;
+  };
+  shell.gemSlotBuffIds = [];
+  const defOf = entity => Math.max(0, (entity.getEffectiveStats?.() ?? entity.stats).def ?? 0);
+  // 受到的量＝扣血＋被護盾吸收的部分（2026-11-24 使用者：護盾也吃得到反傷）
+  const taken = hit => (hit?.actualDamage > 0 ? hit.actualDamage : 0) + (hit?.shieldAbsorbed > 0 ? hit.shieldAbsorbed : 0);
+  const canReflect = (self, hit) => self.isAlive && isOpen(self) && self[armedKey] && hit?.source === 'ATTACK'
+    && taken(hit) > 0 && hit.caster && hit.caster !== self && hit.caster.isAlive && hit.caster.team !== self.team;
+  const reflect = (self, hit, logger, engine) => {
+    const attacker = hit.caster;
+    const raw = taken(hit) * (defOf(self) + 300) * aura.ratio;
+    const amount = Math.max(1, Math.floor(raw * 300 / (defOf(attacker) + 300)));
+    const dealt = attacker.takeDamage(amount, logger, { source: 'DIRECT', tags: ['thorns'] });
+    const value = dealt.actualDamage ?? amount;
+    logger.addLog({ type: 'DAMAGE', actorId: self.id, targetId: attacker.id, skillId: id, isNormalAttack: false, value, logStyle: 'dot',
+      message: fill(aura.text, { caster: self.name, value, target: attacker.name }) });
+    attacker.finishDamage?.(dealt, logger, engine);
+  };
+  const wrappedKey = `gemThornsWrapped:${id}`;
+  const passives = [
+    {
+      // 有扣到血的一擊：照框架的受傷反應時機（傷害行之後、攻擊方的造成傷害反應之前）
+      id: `gem_thorns:${id}`,
+      trigger: 'AFTER_DAMAGE_RECEIVED',
+      enabled: (self, hit) => canReflect(self, hit),
+      action: (self, hit, logger, engine) => reflect(self, hit, logger, engine)
+    },
+    {
+      // 整擊被護盾吃光：框架不響 AFTER_DAMAGE_RECEIVED，改包 finishDamage（同共鳴的做法）
+      id: `gem_thorns_shield:${id}`,
+      trigger: 'BATTLE_START',
+      enabled: self => !self[wrappedKey],
+      action(self) {
+        self[wrappedKey] = true;
+        const baseFinish = self.finishDamage;
+        self.finishDamage = function finishDamage(hit, logger, engine) {
+          const fresh = !this.settledDamage?.has(hit);
+          const result = baseFinish.call(this, hit, logger, engine);
+          if (fresh && !(hit?.actualDamage > 0) && !engine?.result && canReflect(this, hit)) {
+            reflect(this, hit, logger, engine);
+            engine?.settleDeaths?.();
+            engine?.checkWinCondition?.();
+          }
+          return result;
+        };
+      }
+    },
+    {
+      id: `gem_thorns_round:${id}`,
+      trigger: 'ROUND_START',
+      enabled: self => self.isAlive && isOpen(self),
+      action(self, round, logger) {
+        if (self.stats.sp < spCost) {
+          self[armedKey] = false;
+          if (aura.lowSpText) logger.addLog({ type: 'TEXT', actorId: self.id, skillId: id, message: fill(aura.lowSpText, { caster: self.name }) });
+          return;
+        }
+        payAuraUpkeep(self, id, active.name, spCost, recycles, logger);
+        self[armedKey] = true;
+      }
+    }
+  ];
+  return { skill: shell, release: null, charge: null, grantSkill: shell, aura: { markerId }, passives, grants, conditions, spCost, damageFactor: 0, links: ids };
+}
+
+// ── 喚劍（swords），2026-11-23 使用者設計（第三區獎勵；SP、倍率、戰報文字我擬）────────
+// 外殼：付 SP、召喚 initial 把飛劍（不造成傷害），持續期間外殼不能再選（其他技能照常）。
+// 飛劍狀態記在施放者身上（self[gemSwords:id] = { count, left, fresh }），「飛劍 ×N」標記只是顯示。
+//   ・每把飛劍一擊＝本體（release：主動寶石原本的傷害段，已套用連結的輔助寶石）打一次；反擊率 × 1 / 這次一起出手的把數
+//     （框架的 counterChanceMultiplier，gem 的閃避反擊也讀它）。
+//   ・自己的普攻那一槽結束後（AFTER_ACTION），cfg.chase 把（1）追擊一次：打這槽普攻第一個打中的目標，倒下或沒打中就隨機挑。
+//   ・自己的行動槽結束後 +1 把（上限 max）；插隊的行動槽（追擊、佈局、多行動一次…）與召喚的那一槽不加。
+//   ・持續 rounds 回合（施放的回合算第 1 回合，第 rounds 次回合開始時結束，同勝利的旋律），結束時每把各隨機挑目標再攻擊一次。
+//   ・觸發類（佈局、撒手鐧、追擊、報喪法杖…）用分派版：飛劍不在＝召喚，飛劍在場＝cfg.volley 把（1）立刻攻擊一次。
+//   2026-11-23 使用者：追擊與齊射只有 1 把，3 把的上限只在結束時用到（原本每把都追擊，混沌爆擊觸發太多）。
+function compileSwords(active, { id, tags, conditions, actions, draft, ids, spCost, factor }) {
+  const cfg = active.swords;
+  const texts = cfg.texts ?? {};
+  const releaseId = `${id}#sword`;
+  const markerId = `gem_swords:${id}`;
+  const key = `gemSwords:${id}`;
+  const memoKey = `gemSwordTarget:${id}`;
+  const leadAt = draft.prepended.length;
+  // 三種出手（追擊、結束、齊射）只差在開頭那句；id 都是 releaseId，汲取、異常等反應被動綁在它身上
+  const makeRelease = lead => {
+    const strikeActions = actions.map(action => { const next = { ...action }; delete next.spCost; return next; });
+    if (lead && strikeActions[leadAt]) strikeActions[leadAt] = { ...strikeActions[leadAt], text: { ...(strikeActions[leadAt].text || {}), action: expandPart(lead) } };
+    const release = withDynamicDamage(new Skill({ id: releaseId, name: active.name, tags: [...tags], actions: strikeActions }), draft.dynamics);
+    release.gemLeadIndex = leadAt;
+    release.gemSlotBuffIds = slotBuffIds(strikeActions);
+    return release;
+  };
+  const chase = makeRelease(texts.chase), volley = makeRelease(texts.volley);
+  // 結束時的最後一擊照連音的寫法（2026-11-23 使用者）：先一行 finalIntro，每把一句 finalHit（「第{i}擊，」）
+  const finals = Array.from({ length: cfg.max }, (_, i) => makeRelease((texts.finalHit ?? '第{i}擊，').replace('{i}', CN_NUMBERS[i + 1] ?? String(i + 1))));
+  const stateOf = self => self[key];
+  const isOn = self => (stateOf(self)?.left ?? 0) > 0;
+  const label = n => `飛劍 ×${n}`;
+  const setLabel = self => { const buff = self.buffs?.find(b => b.id === markerId); if (buff) buff.name = label(stateOf(self).count); };
+  const fill = (line, self, extra = {}) => line.replaceAll('{caster}', self.name).replaceAll('{n}', String(extra.n ?? ''));
+  const sides = (self, engine) => self.team === 'A' ? [engine.teamA, engine.teamB] : [engine.teamB, engine.teamA];
+  const randomFoe = (self, engine) => {
+    const foes = sides(self, engine)[1].filter(e => e.isAlive);
+    return foes.length ? foes[Math.floor((engine.rng ?? Math.random)() * foes.length)] : null;
+  };
+  // 一把飛劍出手一次；group＝這次一起出手的把數，反擊率 × 1 / group（2026-11-23 使用者：照出手的把數算）
+  const strike = (self, skill, target, logger, engine, group = 1) => {
+    if (!engine || engine.result || !self.isAlive || !target?.isAlive) return;
+    const variant = Object.create(skill);
+    variant.counterChanceMultiplier = 1 / Math.max(1, group);
+    const [allies, enemies] = sides(self, engine);
+    withSlotCleanup(variant, skill.gemSlotBuffIds).execute(self, allies, enemies, logger, engine, { targets: [target], ignoreSp: true });
+  };
+  // limit：這次最多幾把出手（cfg.chase／cfg.volley；沒寫＝全部）。結束時一定是全部。
+  const allStrike = (self, skill, pick, logger, engine, limit = Infinity) => {
+    const n = Math.min(limit, stateOf(self)?.count ?? 0);
+    for (let i = 0; i < n; i++) strike(self, skill, pick(self, engine), logger, engine, n);
+  };
+
+  const shellAction = {
+    type: 'BUFF', targetType: 'SELF', spCost,
+    text: { action: expandPart(texts.summon ?? '{caster} 召喚了飛劍！'), buff: '' },
+    buffs: [{ id: markerId, name: label(cfg.initial), type: 'STAT', polarity: 'positive', duration: 1e6, stackPolicy: 'refresh', dispellable: false }]
+  };
+  const shell = makeSkill({ id, name: active.name, tags: [...tags], actions: [shellAction] }, conditions);
+  const shellCanCast = shell.canCast.bind(shell);
+  shell.canCast = (entity, ...rest) => !isOn(entity) && shellCanCast(entity, ...rest);
+  const shellExecute = shell.execute;
+  shell.execute = function execute(caster, ...rest) {
+    const result = shellExecute.call(this, caster, ...rest);
+    if (caster.buffs?.some(b => b.id === markerId)) { caster[key] = { count: cfg.initial, left: cfg.rounds, fresh: true }; setLabel(caster); }
+    return result;
+  };
+  shell.gemSlotBuffIds = [];
+  const dispatch = Object.create(shell);
+  dispatch.canCast = (entity, ...rest) => isOn(entity) || shellCanCast(entity, ...rest);
+  dispatch.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+    if (!isOn(caster)) return shell.execute.call(this, caster, allies, enemies, logger, context, options);
+    const first = options.targets?.find(t => t.isAlive) ?? context?.selectTargets?.(caster, 'ENEMY_SINGLE')?.[0];
+    let target = first;
+    const pick = (self, engine) => (target?.isAlive ? target : (target = randomFoe(self, engine)));
+    allStrike(caster, volley, pick, logger, context, cfg.volley ?? Infinity);
+    return { success: true };
+  };
+
+  const passives = [
+    {
+      // 插隊的行動槽不加飛劍：記錄 engine 是否正在跑插隊（同一場只包一次）
+      id: `gem_swords_track:${id}`,
+      trigger: 'BATTLE_START',
+      action(self, ctx, logger, engine) {
+        if (!engine || engine.gemInsertTracked) return;
+        const run = engine.runInsertedActions;
+        engine.runInsertedActions = function runInsertedActions(...args) {
+          this.gemInsertDepth = (this.gemInsertDepth ?? 0) + 1;
+          try { return run.apply(this, args); } finally { this.gemInsertDepth -= 1; }
+        };
+        engine.gemInsertTracked = true;
+      }
+    },
+    {
+      id: `gem_swords_memo:${id}`,
+      trigger: 'AFTER_DAMAGE_DEALT',
+      enabled: (self, hit) => isOn(self) && hit?.isNormalAttack === true && !self[memoKey],
+      action(self, hit) { self[memoKey] = hit.target; }
+    },
+    {
+      id: `gem_swords_action:${id}`,
+      trigger: 'AFTER_ACTION',
+      enabled: (self, ctx) => ctx?.actor === self && isOn(self),
+      action(self, ctx, logger, engine) {
+        const st = stateOf(self);
+        const memo = self[memoKey];
+        self[memoKey] = null;
+        if (ctx.skill === self.normalAttack) {
+          let target = memo;
+          allStrike(self, chase, (me, eng) => (target?.isAlive ? target : (target = randomFoe(me, eng))), logger, engine, cfg.chase ?? Infinity);
+        }
+        if (st.fresh) { st.fresh = false; return; }
+        if (engine?.gemInsertDepth > 0 || st.count >= cfg.max || !isOn(self)) return;
+        st.count += 1;
+        setLabel(self);
+        if (texts.grow) logger.addLog({ type: 'TEXT', actorId: self.id, skillId: id, message: fill(texts.grow, self, { n: st.count }) });
+      }
+    },
+    {
+      id: `gem_swords_round:${id}`,
+      trigger: 'ROUND_START',
+      enabled: self => self.isAlive && isOn(self),
+      action(self, round, logger, engine) {
+        const st = stateOf(self);
+        st.left -= 1;
+        if (st.left > 0) return;
+        const n = st.count;
+        if (n > 0 && !engine.result && sides(self, engine)[1].some(e => e.isAlive)) {
+          if (texts.finalIntro) logger.addLog({ type: 'SKILL_TEXT', actorId: self.id, skillId: id, isNormalAttack: false, message: fill(texts.finalIntro, self) });
+          for (let i = 0; i < n; i++) strike(self, finals[i], randomFoe(self, engine), logger, engine, n);
+        }
+        self[key] = null;
+        self.buffs = self.buffs.filter(b => b.id !== markerId);
+        if (texts.end) logger.addLog({ type: 'TEXT', actorId: self.id, skillId: id, message: fill(texts.end, self) });
+      }
+    },
+    ...draft.reactions.map(reaction => buildPassive(releaseId, reaction)),
+    ...draft.procs.map(proc => buildProcPassive(releaseId, proc)),
+    ...(actions.some(action => action.gemAilments) ? [buildAilmentPassive(releaseId)] : [])
+  ];
+  return { skill: shell, release: null, charge: null, grantSkill: dispatch, swords: { markerId, release: chase }, passives, grants: draft.grants, conditions, spCost, damageFactor: round4(factor), links: ids };
 }
 
 /**
@@ -1591,6 +1858,80 @@ function buildWeightGuardPassive() {
  *   compiled  每組的完整編譯結果（含 spCost、damageFactor、links），給 UI 顯示用
  * @throws {GemLinkError} 任何一組連結不合法。同一組（主動＋輔助完全相同）重複出現時，第 n 組的技能 id 加上 #n，不再報錯
  */
+// ── 連續光環（chainaura，2026-11-24 使用者設計）────────────────────────
+// 連了連續光環的光環主動寶石，輔助槽可以放其他光環主動寶石（佔輔助槽名額）。
+//   ・被連結的光環共用主光環的輔助寶石（觸發型與不合法的除外，見 inheritedSupports；2026-11-25 使用者）。
+//   ・被連結的光環不會自己開啟（不進技能清單、不會被選）；主光環開啟時（自己施放、佈局、撒手鐧…）一起開啟：
+//     照它自己的開啟文本印一行，不多給行動；每回合的 SP 各自扣、各自判斷（被動照常掛在角色身上）。
+//   ・連續光環連到不是光環的主動寶石：沒有效果、不報錯（使用者）。只有「輔助槽放了主動寶石」不合規時才報錯。
+//   ・穿戴中同一顆光環只能開一個：照裝備順序第一個保留；之後重複的（直接裝的整組、或被連結的那一顆）沒有效果（不報錯）。
+function checkChainedAuras(activeId, supports, chained, activeGems) {
+  const host = activeGems[activeId];
+  const isAura = gem => gem?.tags?.includes('aura');
+  for (const gemId of chained) {
+    if (!isAura(activeGems[gemId])) throw new GemLinkError(gemId, `「${activeGems[gemId].name}」不是光環，不能放進輔助槽`);
+    if (!isAura(host) || !supports.includes('chainaura')) throw new GemLinkError(gemId, '只有連結「連續光環」的光環主動寶石，輔助槽才能放光環主動寶石');
+    if (gemId === activeId) throw new GemLinkError(gemId, '不能連結主光環自己');
+  }
+  const sorted = [...chained].sort();
+  for (let i = 1; i < sorted.length; i++) if (sorted[i] === sorted[i - 1]) throw new GemLinkError(sorted[i], '同一個技能不能連結兩次');
+}
+
+/**
+ * 被連結的光環共用主光環的輔助寶石（2026-11-25 使用者）：主光環連的輔助寶石，扣掉連續光環本身、觸發型（grant：佈局、撒手鐧、追擊…，
+ * 開啟時機只跟主光環走）、以及對這顆光環不合法的（逐顆試編譯，不合法就跳過、不報錯），其餘照套。介面也用這個列出「也吃哪些」。
+ */
+function inheritedSupports(chainedId, hostSupports, options = {}) {
+  const supportGems = options.supportGems ?? SUPPORT_GEMS;
+  const candidates = hostSupports.filter(gemId => gemId !== 'chainaura' && Object.hasOwn(supportGems, gemId)
+    && !(supportGems[gemId].effects ?? []).some(effect => effect.op === 'grant'));
+  return candidates.filter(gemId => {
+    try { compileSkill(chainedId, [gemId], { ...options, copy: 1, sameActiveOthers: 0 }); return true; }
+    catch (error) { if (error instanceof GemLinkError) return false; throw error; }
+  });
+}
+
+function linkChainedAuras(compiled, options) {
+  const taken = new Set(compiled.map(result => result.activeId));
+  const linked = [];
+  for (const host of compiled) {
+    if (!host.chainedAuras || !host.aura) continue;
+    const subs = [];
+    for (const gemId of host.chainedAuras) {
+      if (taken.has(gemId)) continue;   // 重複：沒有效果
+      taken.add(gemId);
+      const inherited = inheritedSupports(gemId, host.hostSupports ?? [], options);
+      const sub = compileSkill(gemId, inherited, { ...options, maxSupports: MAX_SUPPORTS, copy: 1, sameActiveOthers: 0 });
+      sub.inheritedSupports = inherited;
+      subs.push(sub);
+    }
+    if (!subs.length) continue;
+    host.linkedAuras = subs;
+    linked.push(...subs);
+    const isOpen = (entity, markerId) => entity.buffs?.some(buff => buff.id === markerId);
+    const shell = host.skill;
+    const hostExecute = shell.execute;
+    shell.execute = function execute(caster, allies, enemies, logger, context, options = {}) {
+      const result = hostExecute.call(this, caster, allies, enemies, logger, context, options);
+      if (!isOpen(caster, host.aura.markerId)) return result;
+      // 被連結的光環照它自己的外殼開啟（開啟文本、荊棘的開啟回合免費…），但不多給行動
+      // context 通常就是 engine（insertAction 在原型上）：暫時用自己的屬性蓋掉，結束後刪掉還原
+      const own = context && Object.prototype.hasOwnProperty.call(context, 'insertAction');
+      const insert = context?.insertAction;
+      if (context) context.insertAction = undefined;
+      try {
+        for (const sub of subs) {
+          if (!isOpen(caster, sub.aura.markerId)) sub.skill.execute(caster, allies, enemies, logger, context, { ...options, ignoreSp: true });
+        }
+      } finally {
+        if (context) { if (own) context.insertAction = insert; else delete context.insertAction; }
+      }
+      return result;
+    };
+  }
+  return linked;
+}
+
 function compileLoadout(gems, options = {}) {
   const compiled = [];
   // 反覆（sameActiveInc）用：每顆主動寶石在這份配置裡出現幾組
@@ -1600,16 +1941,25 @@ function compileLoadout(gems, options = {}) {
   const deathCasts = [];
   const critCasts = [];
   const chasers = [];
-  for (const { active, supports = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null, castOnCrit = null, phantomChase = false } of gems) {
+  const activeGems = options.activeGems ?? ACTIVE_GEMS;
+  const maxSlots = options.maxSupports ?? MAX_SUPPORTS;
+  for (const { active, supports: slotted = [], weight = DEFAULT_WEIGHT, grantedSupports = [], castOnEnemyDeath = null, castOnCrit = null, phantomChase = false } of gems) {
     if (!Number.isInteger(weight) || weight < MIN_WEIGHT || weight > MAX_WEIGHT) {
       throw new GemLinkError(active, `施放權重必須是 ${MIN_WEIGHT}～${MAX_WEIGHT} 的整數（收到 ${weight}）`);
+    }
+    // 連續光環：輔助槽裡的主動寶石＝被連結的光環（佔輔助槽名額），其餘照常是輔助寶石
+    const chained = slotted.filter(gemId => Object.hasOwn(activeGems, gemId));
+    const supports = slotted.filter(gemId => !Object.hasOwn(activeGems, gemId));
+    if (chained.length) {
+      if (slotted.length > maxSlots) throw new GemLinkError(slotted[maxSlots], `每顆主動寶石最多連結 ${maxSlots} 顆輔助寶石（這組有 ${slotted.length} 顆）`);
+      checkChainedAuras(active, supports, chained, activeGems);
     }
     if (!Array.isArray(grantedSupports)) throw new GemLinkError(active, 'grantedSupports 必須是陣列');
     for (const gemId of grantedSupports) {
       if (!Object.hasOwn(options.supportGems ?? SUPPORT_GEMS, gemId)) throw new GemLinkError(gemId, '裝備給的輔助寶石不存在');
     }
     const compileAs = copyOptions => grantedSupports.length ? compileWithGranted(active, supports, grantedSupports, copyOptions) : compileSkill(active, supports, copyOptions);
-    const linkOptions = { ...options, sameActiveOthers: activeCounts.get(active) - 1 };
+    const linkOptions = { ...options, sameActiveOthers: activeCounts.get(active) - 1, ...(chained.length ? { maxSupports: maxSlots - chained.length } : {}) };
     let result = compileAs(linkOptions);
     // 同一組重複裝：第 n 次出現的那組重新編譯成 #n（各自獨立的技能，權重、蓄力、迴響都分開算）
     for (let copy = 2; seen.has(result.skill.id); copy++) result = compileAs({ ...linkOptions, copy });
@@ -1618,25 +1968,36 @@ function compileLoadout(gems, options = {}) {
     if (castOnEnemyDeath) deathCasts.push([result, castOnEnemyDeath.text]);
     if (castOnCrit) critCasts.push([result, castOnCrit]);
     if (phantomChase) chasers.push(result);
+    if (chained.length) { result.chainedAuras = chained; result.hostSupports = supports; }
     seen.add(result.skill.id);
     compiled.push(result);
   }
+  // 穿戴中同一顆光環只能開一個（2026-11-24 使用者）：照裝備順序，第一個保留，之後重複的那組沒有效果（不報錯）
+  const auraSeen = new Set();
+  for (const result of compiled) {
+    if (!result.aura) continue;
+    if (auraSeen.has(result.activeId)) result.inert = true;
+    else auraSeen.add(result.activeId);
+  }
+  const live = compiled.filter(result => !result.inert);
+  const linkedAuras = linkChainedAuras(live, options);
   const equip = checkEquipment(options.equipment);
   const mechanics = options.mechanics ?? [];
   const spShield = mechanics.find(m => m.type === 'spShield');
-  if (spShield) for (const result of compiled) withSpShield(result.skill, spShield);   // 外殼（蓄力、迴響）付 SP，本體免費，不用包
+  if (spShield) for (const result of live) withSpShield(result.skill, spShield);   // 外殼（蓄力、迴響）付 SP，本體免費，不用包
   const breakSp = mechanics.filter(m => m.type === 'shieldBreakSp').reduce((sum, m) => sum + m.sp, 0);
   const phantom = mechanics.find(m => m.type === 'phantom');
-  if (phantom) for (const result of chasers) for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withPhantomChase(skill, phantom);
-  const hasCharge = compiled.some(result => result.charge);
-  const hasUnequalWeights = new Set(compiled.map(result => result.weight)).size > 1;
+  if (phantom) for (const result of chasers.filter(result => !result.inert)) for (const skill of [result.skill, result.release, result.echo?.release]) if (skill) withPhantomChase(skill, phantom);
+  const hasCharge = live.some(result => result.charge);
+  const hasUnequalWeights = new Set(live.map(result => result.weight)).size > 1;
   return {
-    skills: compiled.map(result => result.skill),
+    skills: live.map(result => result.skill),
     passives: [
-      ...compiled.flatMap(result => result.passives),
-      ...buildGrantPassives(compiled),
-      ...deathCasts.flatMap(([result, text]) => buildEnemyDeathCastPassives(result, text)),
-      ...buildCritCastPassives(critCasts),
+      ...live.flatMap(result => result.passives),
+      ...linkedAuras.flatMap(result => result.passives),
+      ...buildGrantPassives(live),
+      ...deathCasts.filter(([result]) => !result.inert).flatMap(([result, text]) => buildEnemyDeathCastPassives(result, text)),
+      ...buildCritCastPassives(critCasts.filter(([result]) => !result.inert)),
       ...(breakSp > 0 ? [buildShieldBreakSpPassive(breakSp)] : []),
       ...(phantom ? [buildPhantomPassive(phantom, equip.summonHp)] : []),
       ...(equip.reduction > 0 ? [buildReductionPassive(equip.reduction)] : []),
@@ -1644,11 +2005,11 @@ function compileLoadout(gems, options = {}) {
       ...(hasCharge ? [buildChargeGuardPassive()] : []),
       ...(hasUnequalWeights ? [buildWeightGuardPassive()] : [])
     ],
-    resolver: combineResolvers(buildChargeResolver(compiled), buildWeightResolver(compiled)),
-    weights: Object.fromEntries(compiled.map(result => [result.skill.id, result.weight])),
-    releaseSkills: compiled.filter(result => result.release).map(result => result.release),
+    resolver: combineResolvers(buildChargeResolver(live), buildWeightResolver(live)),
+    weights: Object.fromEntries(live.map(result => [result.skill.id, result.weight])),
+    releaseSkills: live.filter(result => result.release).map(result => result.release),
     compiled
   };
 }
 
-module.exports = { compileSkill, compileLoadout, buildGrantPassives, buildChargeResolver, buildWeightResolver, combineResolvers, describeSupport, describePlayer, validateGemData, GemLinkError };
+module.exports = { compileSkill, compileLoadout, buildGrantPassives, buildChargeResolver, buildWeightResolver, combineResolvers, describeSupport, describePlayer, validateGemData, inheritedSupports, GemLinkError };

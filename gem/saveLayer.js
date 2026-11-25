@@ -149,7 +149,12 @@ const SLOT_RULES = {
   /** 這組連結有幾個輔助槽。 */
   supportSlotCount(link, item) { return MAX_SUPPORTS; },
   /** 這顆寶石能不能放進輔助槽。 */
-  canFillSupportSlot(gemId, link, item) { return Object.hasOwn(SUPPORT_GEMS, gemId); }
+  canFillSupportSlot(gemId, link, item) {
+    if (Object.hasOwn(SUPPORT_GEMS, gemId)) return true;
+    // 連續光環（2026-11-24）：連了它的光環主動寶石，輔助槽可以放其他光環主動寶石（主動寶石擁有制，不從背包扣）
+    const isAura = id => ACTIVE_GEMS[id]?.tags?.includes('aura');
+    return isAura(gemId) && isAura(link?.active) && gemId !== link.active && (link?.supports ?? []).includes('chainaura');
+  }
 };
 
 // 編譯結果只取決於連結內容（寶石資料是固定的），所以同一組連結只編譯一次，之後直接用結果。
@@ -315,6 +320,7 @@ function validateSave(save) {
     for (const item of Array.isArray(save.equipment) ? save.equipment : []) {
       for (const link of Array.isArray(item?.links) ? item.links : []) {
         if (isActiveGem(link?.active) && !(save.gems[link.active] > 0)) problems.push(`裝備 ${item.id} 鑲著還沒擁有的主動寶石「${link.active}」`);
+        for (const gemId of Array.isArray(link?.supports) ? link.supports : []) if (isActiveGem(gemId) && !(save.gems[gemId] > 0)) problems.push(`裝備 ${item.id} 鑲著還沒擁有的主動寶石「${gemId}」`);
       }
     }
   }
@@ -988,7 +994,7 @@ function findItem(draft, id) {
 function linkGemCounts(links) {
   const counts = {};
   for (const link of links) {
-    for (const support of link.supports ?? []) addToStack(counts, support, 1);
+    for (const support of link.supports ?? []) if (!isActiveGem(support)) addToStack(counts, support, 1);   // 輔助槽裡的主動寶石（連續光環）是擁有制，不計數
   }
   return counts;
 }
@@ -1014,6 +1020,7 @@ function setLinks(save, id, links) {
   if (shapeProblems.length) throw new SaveError('連結不合法', shapeProblems);
   for (const link of links) {
     if (isActiveGem(link?.active) && !(save.gems[link.active] > 0)) throw new SaveError(`還沒有主動寶石「${link.active}」`);
+    for (const gemId of link?.supports ?? []) if (isActiveGem(gemId) && !(save.gems[gemId] > 0)) throw new SaveError(`還沒有主動寶石「${gemId}」`);
   }
   return mutate(save, draft => {
     const item = findItem(draft, id);

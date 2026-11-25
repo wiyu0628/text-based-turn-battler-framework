@@ -161,9 +161,11 @@ const AIL = G.AILMENTS;
 function activeRow(id, gem) {
   const dmg = gem.actions.filter(a => a.type === 'DAMAGE');
   const source = G.STARTING_ACTIVE_GEMS.includes(id) ? '開局' : G.BOSS_REWARD_GEMS.includes(id) ? 'Boss 首次擊敗' : G.UNOBTAINABLE_ACTIVE_GEMS.includes(id) ? '暫不可取得' : '';
-  const source2 = G.BOSS_REWARD_GEMS.includes(id) && !B.BOSSES.some(b => b.rewards.gems?.includes(id)) ? 'Boss 首次擊敗（第二區王，還沒做）' : source;
+  const source2 = G.BOSS_REWARD_GEMS.includes(id) && !B.BOSSES.some(b => b.rewards.gems?.includes(id)) ? 'Boss 首次擊敗（王還沒做）' : source;
   if (gem.aura) return [id, gem.name, '光環', `每回合開始 ${gem.spCost}`, '自己', '', '',
-    `使用後開啟（之後不會再選到）並立刻多行動一次；開啟後每回合開始扣 SP，回復上一回合受到傷害的 ${Math.round(gem.aura.ratio * 100)}%（SP 不夠就不扣、不發動）；只能連結${gem.supportWhitelist.map(g => G.SUPPORT_GEMS[g]?.name ?? g).join('、')}`,
+    `使用後開啟（之後不會再選到）並立刻多行動一次；${gem.aura.kind === 'thorns'
+      ? `開啟的那一回合免費生效，之後每回合開始扣 SP；被攻擊擊中而扣血時，反彈 扣血量 ×（防禦＋300）× 1/${Math.round(1 / gem.aura.ratio)} 給攻擊者（再吃攻擊者防禦；直接傷害、不暴擊）`
+      : `開啟後每回合開始扣 SP，回復上一回合受到傷害的 ${Math.round(gem.aura.ratio * 100)}%`}（SP 不夠就不扣、不發動）；只能連結${gem.supportWhitelist.map(g => G.SUPPORT_GEMS[g]?.name ?? g).join('、')}`,
     gem.tags.join('、'), source2];
   return [id, gem.name, gem.tags.includes('spell') ? '法術（智力，不可暴擊、不可反擊）' : '物理（攻擊）', gem.spCost,
     dmg.map(a => a.targetType === 'ENEMY_ALL' ? '敵方全體' : '敵方單體').join('、') || (gem.actions.some(a => a.type === 'HEAL') ? '治療' : ''),
